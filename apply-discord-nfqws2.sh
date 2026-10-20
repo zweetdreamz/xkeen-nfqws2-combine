@@ -33,6 +33,9 @@ root_path() {
 STATE_ROOT="$(root_path /opt/etc/keenetic-discord-nfqws2)"
 SNAPSHOT_ROOT="$STATE_ROOT/snapshots"
 BASELINE_POINTER="$STATE_ROOT/baseline.ptr"
+# Integrated (XKeen) baseline, recorded only when the first baseline was taken
+# by a standalone install and therefore covers nfqws2 paths only.
+XKEEN_BASELINE_POINTER="$STATE_ROOT/baseline-xkeen.ptr"
 LATEST_POINTER="$STATE_ROOT/latest-preapply.ptr"
 LOCK_DIR="$(root_path /opt/tmp/keenetic-discord-nfqws2.lock)"
 
@@ -2156,6 +2159,9 @@ show_snapshots() {
   else
     echo "Baseline: not created"
   fi
+  if xkeen_baseline_snapshot="$(read_pointer "$XKEEN_BASELINE_POINTER" 2>/dev/null)"; then
+    echo "XKeen baseline: $xkeen_baseline_snapshot"
+  fi
   if latest_snapshot="$(read_pointer "$LATEST_POINTER" 2>/dev/null)"; then
     echo "Latest pre-apply: $latest_snapshot"
   else
@@ -3334,9 +3340,15 @@ apply_transaction() {
   umask 077
   mkdir -p "$STATE_ROOT"
 
-  if read_pointer "$BASELINE_POINTER" >/dev/null 2>&1; then
+  if existing_baseline="$(read_pointer "$BASELINE_POINTER" 2>/dev/null)"; then
     create_snapshot pre-apply
     PREAPPLY_SNAPSHOT="$CREATED_SNAPSHOT"
+    if [ "$STANDALONE_ZAPRET" -eq 0 ] &&
+       [ "$(snapshot_scope "$existing_baseline" 2>/dev/null || true)" = "standalone" ] &&
+       ! read_pointer "$XKEEN_BASELINE_POINTER" >/dev/null 2>&1; then
+      atomic_pointer "$XKEEN_BASELINE_POINTER" "$PREAPPLY_SNAPSHOT"
+      echo "XKeen baseline recorded (the first baseline covers nfqws2 only): $PREAPPLY_SNAPSHOT"
+    fi
   else
     create_snapshot baseline
     PREAPPLY_SNAPSHOT="$CREATED_SNAPSHOT"
@@ -3535,6 +3547,43 @@ manual_restore() {
   manual_restore_target "$target_snapshot" "$restore_label"
 }
 
+# --rollback: return to the state before this project was installed. When the
+# baseline came from a standalone install, the XKeen baseline (taken before the
+# first integrated apply) is restored first, then the nfqws2-only baseline.
+rollback_to_baseline() {
+  xkeen_baseline="$(read_pointer "$XKEEN_BASELINE_POINTER" 2>/dev/null)" || {
+    manual_restore "$BASELINE_POINTER" "Baseline"
+    return
+  }
+  nfqws_baseline="$(read_pointer "$BASELINE_POINTER")" || {
+    echo "ERROR: Baseline snapshot was not found." >&2
+    return 1
+  }
+  if [ "$STANDALONE_ZAPRET" -eq 1 ]; then
+    echo "ERROR: standalone mode refuses to restore the integrated XKeen baseline." >&2
+    return 1
+  fi
+  require_confirmation
+  acquire_lock
+  restore_preflight
+  verify_snapshot "$xkeen_baseline"
+  verify_snapshot "$nfqws_baseline"
+  [ "$(snapshot_scope "$xkeen_baseline")" = "integrated" ] || {
+    echo "ERROR: XKeen baseline is not an integrated snapshot: $xkeen_baseline" >&2
+    return 1
+  }
+
+  create_snapshot pre-rollback-rescue
+  rescue_snapshot="$CREATED_SNAPSHOT"
+  echo "Rescue snapshot of current state: $rescue_snapshot"
+  PREAPPLY_SNAPSHOT="$rescue_snapshot"
+  TRANSACTION_ACTIVE=1
+  restore_snapshot_internal "$xkeen_baseline"
+  restore_snapshot_internal "$nfqws_baseline"
+  TRANSACTION_ACTIVE=0
+  echo "Baseline rollback complete (XKeen baseline, then nfqws2 baseline)."
+}
+
 manual_restore_path() {
   target_snapshot="$1"
   safe_snapshot_path "$target_snapshot" || {
@@ -3580,7 +3629,7 @@ case "$MODE" in
     rollback_import_transaction
     ;;
   rollback-baseline)
-    manual_restore "$BASELINE_POINTER" "Baseline"
+    rollback_to_baseline
     ;;
   rollback-latest)
     manual_restore "$LATEST_POINTER" "Latest pre-apply"

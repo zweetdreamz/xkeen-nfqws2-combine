@@ -491,6 +491,14 @@ apply_split_mode() {
   assert_mode "$tcp_mode" "$voice_mode" "$youtube_mode"
 }
 
+# Install standalone first: the baseline then covers nfqws2 only. The first
+# integrated apply must add an XKeen baseline so that --rollback can still
+# return Xray to its original files (checked at the end of this test).
+original_routing_hash="$(sha256sum "$routing_file" | awk '{print $1}')"
+original_nfqws_hash="$(sha256sum "$nfqws_file" | awk '{print $1}')"
+run_tool --apply --yes-router --standalone-zapret --youtube-route direct >/dev/null
+[ "$(sha256sum "$routing_file" | awk '{print $1}')" = "$original_routing_hash" ]
+
 apply_mode zapret vless
 discord_hash="$(sha256sum "$routing_file" | awk '{print $1}')"
 
@@ -662,5 +670,13 @@ if run_tool --apply-import-profile "$bad_stage" --yes-router >/dev/null 2>&1; th
 fi
 [ ! -s "$ROOT/xkeen-init.log" ]
 [ "$(sha256sum "$nfqws_file" | awk '{print $1}')" = "$before_bad_import" ]
+
+# Full baseline rollback after standalone + integrated applies.
+run_tool --show-snapshots | grep -Fq 'XKeen baseline: '
+run_tool --rollback --yes-router >/dev/null
+[ "$(sha256sum "$routing_file" | awk '{print $1}')" = "$original_routing_hash" ]
+[ "$(sha256sum "$nfqws_file" | awk '{print $1}')" = "$original_nfqws_hash" ]
+[ ! -e "$ROOT/opt/etc/xray/configs/04_discord_nfqws2_outbound.json" ]
+[ ! -e "$ROOT/opt/etc/xray/configs/04_youtube_nfqws2_outbound.json" ]
 
 echo "routing-mode-tests-ok"
