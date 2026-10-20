@@ -108,7 +108,10 @@ sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-ro
 `discord-direct` существует, если хотя бы один маршрут Discord не `vpn`.
 
 Wrapper сначала читает `--status` и сохраняет режимы остальных сервисов. Если
-состояние определить нельзя, он завершится без изменений.
+состояние определить нельзя, он завершится без изменений. Оба wrapper
+(`set-service-route.sh` и `set-zapret-mode.sh`) также передают в apply
+записанные `udp_range` и `udp_strategy` (`--wide-udp`/`--narrow-udp`,
+`--udp-strategy`) перед опциями вызова, поэтому явные опции побеждают.
 
 Низкоуровневый эквивалент:
 
@@ -123,11 +126,14 @@ Wrapper сначала читает `--status` и сохраняет режим�
 `--status` печатает `discord_tcp_route=`, `discord_voice_route=` и
 `youtube_route=`. Поле `discord_route=` оставлено для старых читателей: оно
 равно общему значению или `mixed`, если маршруты TCP и Voice различаются.
+`udp_strategy=flowseal|legacy` и `udp_range=narrow|wide` показывают
+записанные настройки Discord UDP (`unknown`, если `nfqws2.conf` нет).
 
 Применённые маршруты записываются в `nfqws2.conf`:
 
 ```text
 # Active routes: DiscordTCP=X, DiscordVoice=Y, YouTube=Z.
+# Discord UDP: strategy=flowseal|legacy, range=narrow|wide.
 ```
 
 Прежняя строка `Discord=X, YouTube=Y.` по-прежнему читается: X относится к
@@ -144,7 +150,7 @@ Wrapper сначала читает `--status` и сохраняет режим�
 | `--print-plan` | Печатает план | Нет |
 | `--preflight` | Проверяет core, WAN, зависимости и конфликты | Нет |
 | `--status` | Показывает проект и runtime | Нет |
-| `--show-snapshots` | Показывает baseline/latest | Нет |
+| `--show-snapshots` | Показывает baseline, XKeen baseline (если есть) и latest | Нет |
 | `--snapshot-baseline --yes-router` | Создаёт первый baseline | Только snapshot |
 | `--apply --yes-router` | Транзакционно применяет | Да |
 | `--apply-import-profile FILE --yes-router` | Устанавливает профиль тюнера | Только nfqws2 |
@@ -152,7 +158,7 @@ Wrapper сначала читает `--status` и сохраняет режим�
 | `--rollback-import --yes-router` | Откатывает последнюю операцию профиля | Только nfqws2 |
 | `--rollback-snapshot PATH --yes-router` | Возвращает выбранный проверенный snapshot | Да |
 | `--rollback-latest --yes-router` | Возвращает pre-apply | Да |
-| `--rollback --yes-router` | Возвращает baseline | Да |
+| `--rollback --yes-router` | Возвращает XKeen baseline (если есть), затем baseline | Да |
 
 Короткий откат:
 
@@ -163,6 +169,19 @@ sh rollback-to-baseline.sh
 
 Перед каждым `apply` создаётся `latest-preapply`; ошибка вызывает
 автоматический rollback. Перед ручным rollback создаётся rescue snapshot.
+
+Baseline после standalone-установки: если первый baseline создан с
+`--standalone-zapret`, он содержит только пути nfqws2. Первый
+интегрированный apply над ним сохраняет свой pre-apply snapshot как XKeen
+baseline в `/opt/etc/keenetic-discord-nfqws2/baseline-xkeen.ptr` и печатает
+`XKeen baseline recorded`. `--rollback` тогда создаёт один rescue snapshot,
+восстанавливает XKeen baseline, затем nfqws2-baseline. С
+`--standalone-zapret` такой откат отклоняется.
+
+Восстановление пакетов: если отслеживаемый пакет после snapshot обновлён
+через `opkg upgrade`, откат печатает `WARNING ... opkg cannot downgrade it` и
+продолжается — понизить версию opkg не может. Ошибкой остаются только
+неудачные `opkg install`/`opkg remove`.
 
 Три режима импорта используют отдельные снимки
 `/opt/etc/keenetic-discord-nfqws2/nfqws-import-snapshots`. Они не вызывают
@@ -194,7 +213,8 @@ sh rollback-to-baseline.sh
 
 ```text
 --udp-strategy flowseal|legacy
---wide-udp
+--wide-udp      Voice-порты 50000-65535
+--narrow-udp    обратно 50000-50100 (по умолчанию)
 ```
 
 Штатно:
@@ -216,6 +236,12 @@ Blob `config/blobs/ACTIVE_DISCORD_UDP.bin` закреплён SHA-256:
 
 `legacy` оставлен для A/B. `--wide-udp` заменяет `50000-50100` на
 `50000-65535` сразу во всех слоях и без диагностики не рекомендуется.
+
+Выбор записывается в управляемый блок `nfqws2.conf` строкой
+`# Discord UDP:` и сохраняется wrapper-скриптами.
+Прямой вызов `apply-discord-nfqws2.sh --apply` без этих флагов берёт
+значения по умолчанию (`flowseal`, узкий диапазон). Для конфига без этой
+строки настройки выводятся из `UDP_PORTS` и blob `discord_udp`.
 
 ### WAN и mark
 
@@ -357,6 +383,21 @@ xkeen -dscp
 вариации параметров файла для TCP-сервисов; для Voice остаётся прямой
 перевод. Отчёт записывает `source_file`.
 
+Автоматическая проверка Discord Voice (`--voice-auto` у
+`zapret_autotune_job.py`, флажок **Проверять Voice автоматически** в панели)
+требует сохранённого голосового сервера
+`/opt/etc/xkeen-web/discord-voice-endpoint.json`. Его записывает задание после
+ручной Voice-проверки с ответом **Да** (из `EVENT|VOICE_ENDPOINT`
+`diagnose-discord-voice.sh`). Runner калибрует пробу
+(`tools/router/discord_voice_probe.py`) с активным профилем и при
+остановленном nfqws2: ответ без обхода переводит все кандидаты на ручную
+проверку. Иначе кандидат без ответа отбрасывается, с ответом — ждёт
+подтверждения звука; если ответа пользователя нет за
+`TUNER_VERDICT_TIMEOUT` (300 с), профиль остаётся найденным, но
+неподтверждённым. Windows-тюнер проверяет Voice только
+вручную. Подробности —
+[`../tools/router/README.md`](../tools/router/README.md#автоматическая-проверка-discord-voice).
+
 Router-панель допускает максимум 64 кандидата. Повышать предел стоит только
 после неудачи короткой проверки: длительность растёт почти линейно.
 
@@ -373,12 +414,15 @@ scripts/diagnose-*.sh         read-only диагностика
 config/*.list                 локальные hostlist
 config/blobs/                 закреплённые blobs
 tools/windows/                временный подбор стратегий
+tools/router/discord_voice_probe.py  проба Discord IP Discovery для Voice
 ```
 
 ## Остаточные ограничения
 
 - Маршрут Discord Voice по-прежнему выбирается по UDP-портам и может
   захватить другой UDP.
+- Автоматическая проверка Voice на роутере в поле не проверена: неизвестно,
+  отвечают ли реальные голосовые серверы Discord на IP Discovery вне сессии.
 - YouTube IP-категории намеренно не выводятся из VLESS.
 - WinDivert/winws и NFQUEUE/nfqws2 имеют разные модели; перенос стратегий
   требует адаптации.

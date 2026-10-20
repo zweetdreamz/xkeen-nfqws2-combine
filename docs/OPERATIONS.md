@@ -26,6 +26,8 @@ OpenAI и другой трафик Cloudflare/Google.
 `--status` показывает маршруты по отдельности: `discord_tcp_route=`,
 `discord_voice_route=`, `youtube_route=`. `discord_route=` сохранён для
 совместимости и равен `mixed`, если маршруты TCP и Voice различаются.
+`udp_strategy=flowseal|legacy` и `udp_range=narrow|wide` — записанные
+настройки Discord UDP (`unknown`, если `nfqws2.conf` нет).
 
 Проверенное 15.08.2026 состояние:
 
@@ -95,6 +97,26 @@ proxy-маршрутизации XKeen.
 TCP и Voice. Новый apply записывает
 `# Active routes: DiscordTCP=X, DiscordVoice=Y, YouTube=Z.`
 
+Настройки Discord UDP тоже запоминаются в управляемом блоке:
+
+```text
+# Discord UDP: strategy=flowseal|legacy, range=narrow|wide.
+```
+
+`set-zapret-mode.sh` и `set-service-route.sh` передают их в apply, поэтому
+импортированный широкий Voice-профиль или `legacy` не сбрасываются при
+переключении, в том числе только YouTube или при Voice = `direct`. Явные
+опции вызова побеждают:
+
+```sh
+sh set-zapret-mode.sh both --wide-udp   --core auto --wan-interface eth3 --yes-router
+sh set-zapret-mode.sh both --narrow-udp --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh youtube zapret --udp-strategy flowseal --core auto --wan-interface eth3 --yes-router
+```
+
+Конфиг без этой строки (до обновления) определяется по `UDP_PORTS` и наличию
+blob `discord_udp`; это надёжно, пока Voice использует `zapret`.
+
 ## 3. Откат
 
 Перед последним `apply`:
@@ -116,6 +138,27 @@ sh apply-discord-nfqws2.sh --show-snapshots
 ```
 
 Ручной rollback сначала создаёт rescue snapshot текущего состояния.
+
+Если проект впервые ставился как `--standalone-zapret`, baseline покрывает
+только пути nfqws2. Первый интегрированный apply после этого записывает
+XKeen baseline (`baseline-xkeen.ptr`); `--show-snapshots` показывает его
+строкой `XKeen baseline:`. `rollback-to-baseline.sh` (`--rollback`) тогда
+создаёт один rescue snapshot, восстанавливает XKeen baseline и затем
+nfqws2-baseline — патчи Xray/Mihomo тоже убираются. Без XKeen baseline откат
+работает как раньше. В standalone-режиме (`--standalone-zapret`) такой откат
+отказывается восстанавливать интегрированный снимок.
+
+После `opkg upgrade` отслеживаемых пакетов (`ca-certificates`, `jq`,
+`wget-ssl`, `wget-nossl`, `nfqws2-keenetic`) откат завершается: opkg не
+умеет понижать версию, поэтому выводится предупреждение
+
+```text
+WARNING: PKG version is NEW; snapshot has OLD.
+         opkg cannot downgrade it; the package stays at NEW.
+```
+
+и пакет остаётся новым. Ошибкой остаются только неудачные `opkg install` /
+`opkg remove`.
 
 Web-панель дополнительно хранит историю применений по дате. Из неё можно
 вернуть состояние до любой завершённой операции, если соответствующий
@@ -184,6 +227,17 @@ sh scripts/diagnose-discord-voice.sh CLIENT_IP 30
 
 `--wide-udp` расширяет последнюю часть до `50000-65535` сразу в XKeen, core
 и nfqws2. Используйте его только если диагностика увидела порт выше `50100`.
+`--narrow-udp` возвращает `50000-50100`. Выбранный диапазон запоминается и
+сохраняется wrapper-скриптами.
+
+Диагностика также печатает самый активный публичный голосовой сервер, который
+ответил клиенту:
+
+```text
+EVENT|VOICE_ENDPOINT|IP|PORT|OUT_PACKETS|IN_PACKETS
+```
+
+Его запоминает автоподбор для автоматической проверки Voice (раздел 7).
 
 ### YouTube
 
@@ -246,6 +300,17 @@ http://192.168.2.1:8088
 компьютера, переподключайтесь к voice-каналу по подсказке и отвечайте
 **Да/Нет**.
 
+Флажок **Проверять Voice автоматически** включает проверку кандидатов
+пакетом с роутера (`zapret_autotune_job.py --voice-auto`). Он становится
+доступен после одной ручной проверки Voice с ответом **Да**: сервер из этой
+сессии хранится в `/opt/etc/xkeen-web/discord-voice-endpoint.json`.
+Кандидаты без ответа сервера отбрасываются автоматически, звук подтверждается
+только для найденного профиля. Если сервер отвечает и без nfqws2, все
+кандидаты проверяются вручную. Если на финальный вопрос о звуке никто не
+ответил за 300 секунд, профиль остаётся найденным, но помечается как
+неподтверждённый — проверьте голос перед применением. Подробности и ограничения —
+[`tools/router/README.md`](../tools/router/README.md#автоматическая-проверка-discord-voice).
+
 Перебор не записывает постоянные конфиги и не вызывает Xkeen. Он временно
 заменяет только запущенный процесс `nfqws2`, а отмена и `EXIT` trap
 восстанавливают штатную службу. Победитель применяется только отдельной
@@ -294,7 +359,8 @@ tools\windows\tune-discord-voice.bat
 исходную службу при завершении, ошибке, потере SSH или `Ctrl+C`.
 
 YouTube и Discord TCP проверяются автоматически. Discord Voice требует
-реального reconnect и ответа пользователя; QUIC требует HTTP3-клиента.
+реального reconnect и ответа пользователя (автоматическая проверка Voice есть
+только в панели); QUIC требует HTTP3-клиента.
 
 BAT-файлы сохраняют последние отчёты в `tools\windows\reports`. Их можно
 загрузить во вкладку **Импорт профиля** панели на порту `8088`. Соответствующий
@@ -320,6 +386,10 @@ sh apply-discord-nfqws2.sh --rollback-import --yes-router
 
 Проверка после apply в панели и **Проверить роутер** во вкладке
 «Диагностика» сверяют маршруты Discord TCP и Discord Voice по отдельности.
+
+Пока идёт переключение, вкладки панели остаются доступными. Переключение,
+подбор и проверка роутера запускаются по одному: второй запуск, пока первый
+ещё стартует, получает HTTP 409 — повторите через несколько секунд.
 
 ## 8. WAN, mark и IPv6
 
@@ -371,7 +441,12 @@ sh /opt/etc/nfqws2-update-backups/20261020-220034-1.2.4/rollback.sh
 sh tests/run-all.sh
 sh tests/run-all.sh --coverage
 TEST_SHELL="busybox sh" sh tests/run-all.sh
+TEST_SHELL="busybox sh" TEST_BUSYBOX_APPLETS=1 sh tests/run-all.sh
 ```
+
+Последняя команда добавляет busybox `awk`/`sed`/`grep` и другие утилиты, как
+на роутере. UI-тест панели (`tests/test-panel-ui.cjs`) пропускается без
+Playwright.
 
 Подробности и зависимости — в разделе «Разработка и тесты»
 [`README.md`](../README.md#разработка-и-тесты).

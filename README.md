@@ -58,6 +58,8 @@ sh apply-discord-nfqws2.sh --show-snapshots
 В `--status` маршруты видны по отдельности: `discord_tcp_route=`,
 `discord_voice_route=` и `youtube_route=`. Прежний `discord_route=` сохранён:
 он равен общему значению или `mixed`, если TCP и Voice различаются.
+Настройки Discord UDP видны как `udp_strategy=flowseal|legacy` и
+`udp_range=narrow|wide`.
 
 Выбрать один из четырёх preset (Discord в них — сразу TCP и Voice):
 
@@ -99,6 +101,14 @@ Discord сразу:
 sh set-service-route.sh discord zapret --core auto --wan-interface eth3 --yes-router
 ```
 
+Оба wrapper сохраняют текущие настройки Discord UDP (`--wide-udp`,
+`--udp-strategy`), в том числе при переключении только YouTube. Явно
+переданные `--wide-udp`, `--narrow-udp` или `--udp-strategy` имеют приоритет:
+
+```sh
+sh set-service-route.sh discord-voice zapret --narrow-udp --core auto --wan-interface eth3 --yes-router
+```
+
 После обновления скриптов повторный apply не нужен: старая запись
 `Discord=X` в `nfqws2.conf` читается как одинаковый X для TCP и Voice.
 
@@ -127,6 +137,16 @@ sh rollback-to-baseline.sh
 конкретные имена снимков: актуальные указатели показывает
 `--show-snapshots`.
 
+Если первая установка была `--standalone-zapret`, baseline содержит только
+пути nfqws2. Тогда первый интегрированный apply дополнительно записывает
+**XKeen baseline** (`XKeen baseline:` в `--show-snapshots`), а
+`rollback-to-baseline.sh` восстанавливает сначала его, затем nfqws2-baseline.
+
+Откат работает и после `opkg upgrade` отслеживаемых пакетов
+(`ca-certificates`, `jq`, `wget-ssl`, `wget-nossl`, `nfqws2-keenetic`): opkg
+не умеет ставить старую версию, поэтому расхождение версий выводится как
+`WARNING`, а пакет остаётся новым.
+
 Обновление nfqws2 от 20.10.2026 имеет отдельный rollback-пакет 1.2.4 и копию
 профилей в `/opt/etc/nfqws2-update-backups`. Путь последней копии записан в
 `latest.path` этого каталога; внутри неё есть `rollback.sh`. Этот откат касается
@@ -137,8 +157,9 @@ sh rollback-to-baseline.sh
 В Git сохраняются исходники, документация и справочные конфиги. Локальные
 `.dat`, резервные копии роутера, отчёты и временные файлы исключены через
 `.gitignore`; они остаются на компьютере. Зависимость Python — стандартная
-библиотека. Проверки: `python -m unittest discover -s tests -p "test*.py"` и
-`node tests/test-browser-diagnostics.cjs`.
+библиотека. Все проверки запускает `sh tests/run-all.sh` (см. «Разработка и тесты»);
+тест списков Telegram против `.dat` выполняется, только если локальный
+каталог `dat/` есть.
 
 ## После перезагрузки
 
@@ -198,6 +219,14 @@ rank 200+ остаются во второй очереди. Seed сохраня
 для Discord Voice нужно переподключиться к голосовому каналу и ответить
 **Да/Нет**.
 
+Флажок **Проверять Voice автоматически** избавляет от ответа на каждого
+Voice-кандидата. Он доступен, когда сохранён голосовой сервер: один раз
+пройдите ручную проверку с ответом **Да**. Затем роутер сам отправляет этому
+серверу Discord IP Discovery и отсеивает кандидатов без ответа, а звук нужно
+подтвердить только для найденного профиля. Работа этой проверки на реальных
+голосовых серверах Discord ещё не подтверждена; подробности —
+[`tools/router/README.md`](tools/router/README.md#автоматическая-проверка-discord-voice).
+
 Найденный профиль только показывается. Его постоянное применение — отдельная
 кнопка с focused snapshot и перезапуском только `nfqws2`.
 
@@ -229,7 +258,10 @@ Windows-тюнера. Смена маршрута выполняется фон�
 LAN-соединения при перезапуске Xray не теряет результат, а после повторного
 открытия панель продолжает показывать состояние операции.
 Импорт, удаление и откат профиля перезапускают только `nfqws2`; Xkeen при
-этих операциях не останавливается и не перезапускается.
+этих операциях не останавливается и не перезапускается. Пока идёт
+переключение, вкладки остаются доступными. Фоновые задания (маршрут, подбор,
+проверка роутера) запускаются по одному: второй запуск во время старта
+первого отклоняется с HTTP 409.
 
 Для полного apply панель показывает этапы, сохраняет постоянную историю по
 дате и позволяет откатиться к snapshot до выбранной операции. История и
@@ -257,7 +289,8 @@ LAN-устройства. Проверка состояния служб ост�
 - отдельные правила Xray/Mihomo для Discord TCP, Discord Voice и YouTube;
 - разные hostlist и nfqws2-профили сервисов;
 - TCP/TLS, QUIC и Discord Voice/STUN;
-- узкий UDP-диапазон по умолчанию и явный `--wide-udp`;
+- узкий UDP-диапазон по умолчанию, явный `--wide-udp` и возврат
+  `--narrow-udp`; выбор запоминается в `nfqws2.conf`;
 - WAN, core и при необходимости direct mark;
 - снимки, автооткат и восстановление служб.
 
@@ -329,12 +362,37 @@ sh tests/fetch-nfqws2-blobs.sh /tmp/nfqws2-blobs
 NFQWS_TEST_BLOB_SOURCE=/tmp/nfqws2-blobs sh tests/test-routing-modes.sh
 ```
 
+С `TEST_BUSYBOX_APPLETS=1` shell-тесты используют ещё и busybox `awk`,
+`sed`, `grep` и другие базовые утилиты, как на роутере (`jq` и `python3`
+остаются системными):
+
+```sh
+TEST_SHELL="busybox sh" TEST_BUSYBOX_APPLETS=1 sh tests/run-all.sh
+```
+
+Отдельные наборы:
+
+- `tests/test-jsonc.sh` — удаление комментариев JSONC в конфигах Xray
+  (строчные, встроенные, многострочные, `//` внутри строк);
+- `tests/test-voice-diagnostic.sh` — `diagnose-discord-voice.sh` с mock
+  `tcpdump`: счётчики и `EVENT|VOICE_ENDPOINT`;
+- `tests/test-panel-ui.cjs` — UI панели в Chromium через Playwright против
+  `tests/panel_mock_server.py`. Без Playwright набор пропускается, с
+  `REQUIRE_PANEL_UI_TESTS=1` — падает.
+
 Нужны `jq`, `sha256sum`, `curl` (для загрузки blobs), `python3` с `pytest`
-(и `coverage` для `--coverage`) и `node`.
+(и `coverage` для `--coverage`), `node` и для UI-теста — Playwright с
+Chromium:
+
+```sh
+npm install --no-save playwright@1.56.1
+npx playwright install chromium
+```
 
 CI [`.github/workflows/tests.yml`](.github/workflows/tests.yml) прогоняет
-`run-all.sh --coverage` под `dash` и `busybox sh`, а также `shellcheck`
-(уровень warning) и `ruff`.
+`run-all.sh --coverage` под `dash` и `busybox sh` (для busybox — с
+`TEST_BUSYBOX_APPLETS=1`), устанавливает Playwright и требует UI-тест панели.
+Отдельный job запускает `shellcheck -S warning` и `ruff check --select F,B,E9`.
 
 ## Ограничения
 
@@ -342,6 +400,10 @@ CI [`.github/workflows/tests.yml`](.github/workflows/tests.yml) прогоняе
   тех же портах может оказаться другой трафик.
 - `--wide-udp` расширяет прямой маршрут до `50000-65535`; без результатов
   диагностики его включать не следует.
+- Автоматическая проверка Voice в поле не испытана: неизвестно, отвечают ли
+  реальные голосовые серверы Discord на IP Discovery вне сессии. Если сервер
+  отвечает и без обхода, подбор переходит на ручную проверку. Windows-тюнер
+  проверяет Voice только вручную.
 - Стратегии Flowseal работают через WinDivert/winws, а роутер — через
   Netfilter/NFQUEUE и nfqws2. Это контролируемая адаптация, не побайтовая
   копия BAT-профилей.
