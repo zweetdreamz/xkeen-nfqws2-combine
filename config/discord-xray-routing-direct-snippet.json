@@ -1,0 +1,17 @@
+[
+  {
+    "type": "field",
+    "inboundTag": ["redirect", "tproxy"],
+    "outboundTag": "discord-direct",
+    "domain": [
+      "ext:geosite_v2fly.dat:discord"
+    ]
+  },
+  {
+    "type": "field",
+    "inboundTag": ["redirect", "tproxy"],
+    "outboundTag": "discord-direct",
+    "network": "udp",
+    "port": "3478-3481,5349,19294-19344,50000-50100"
+  }
+]

@@ -1,0 +1,36 @@
+# Add these rules at the very beginning of Mihomo's rules list.
+rules:
+  - DOMAIN-SUFFIX,dis.gd,DIRECT
+  - DOMAIN-SUFFIX,discord-attachments-uploads-prd.storage.googleapis.com,DIRECT
+  - DOMAIN-SUFFIX,discord.app,DIRECT
+  - DOMAIN-SUFFIX,discord.co,DIRECT
+  - DOMAIN-SUFFIX,discord.com,DIRECT
+  - DOMAIN-SUFFIX,discord.design,DIRECT
+  - DOMAIN-SUFFIX,discord.dev,DIRECT
+  - DOMAIN-SUFFIX,discord.gift,DIRECT
+  - DOMAIN-SUFFIX,discord.gifts,DIRECT
+  - DOMAIN-SUFFIX,discord.gg,DIRECT
+  - DOMAIN-SUFFIX,discord.media,DIRECT
+  - DOMAIN-SUFFIX,discord.new,DIRECT
+  - DOMAIN-SUFFIX,discord.status,DIRECT
+  - DOMAIN-SUFFIX,discord.store,DIRECT
+  - DOMAIN-SUFFIX,discord.tools,DIRECT
+  - DOMAIN-SUFFIX,discord-activities.com,DIRECT
+  - DOMAIN-SUFFIX,discordactivities.com,DIRECT
+  - DOMAIN-SUFFIX,discordapp.com,DIRECT
+  - DOMAIN-SUFFIX,discordapp.net,DIRECT
+  - DOMAIN-SUFFIX,discordcdn.com,DIRECT
+  - DOMAIN-SUFFIX,discordmerch.com,DIRECT
+  - DOMAIN-SUFFIX,discordpartygames.com,DIRECT
+  - DOMAIN-SUFFIX,discordsays.com,DIRECT
+  - DOMAIN-SUFFIX,discordsez.com,DIRECT
+  - DOMAIN-SUFFIX,discordstatus.com,DIRECT
+  - DOMAIN-SUFFIX,cdn.discordapp.com,DIRECT
+  - DOMAIN-SUFFIX,media.discordapp.net,DIRECT
+  - DOMAIN-SUFFIX,gateway.discord.gg,DIRECT
+  - DOMAIN-SUFFIX,updates.discord.com,DIRECT
+  - DOMAIN-SUFFIX,stable.dl2.discordapp.net,DIRECT
+  - AND,((NETWORK,UDP),(DST-PORT,3478-3481)),DIRECT
+  - AND,((NETWORK,UDP),(DST-PORT,5349)),DIRECT
+  - AND,((NETWORK,UDP),(DST-PORT,19294-19344)),DIRECT
+  - AND,((NETWORK,UDP),(DST-PORT,50000-50100)),DIRECT

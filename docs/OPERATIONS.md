@@ -1,0 +1,311 @@
+# Эксплуатация и восстановление
+
+Это практическая памятка для уже установленного проекта. Все команды ниже
+выполняются на роутере:
+
+```sh
+cd /opt/root/keenetic-discord-nfqws2
+```
+
+## 1. Проверить состояние
+
+Без записи файлов и изменения сети:
+
+```sh
+sh apply-discord-nfqws2.sh --status
+sh apply-discord-nfqws2.sh --show-snapshots
+sh apply-discord-nfqws2.sh --preflight --core auto --wan-interface eth3
+sh scripts/diagnose-xkeen-router.sh
+```
+
+В выводе диагностики безопасное состояние подписано
+`discord_ip_scope=domain-only`. Значение `broad-selector-present` означает,
+что общая CDN/IP-категория снова попала в Xray и может затронуть ChatGPT,
+OpenAI и другой трафик Cloudflare/Google.
+
+Проверенное 15.08.2026 состояние:
+
+- активен режим `both`;
+- Discord → `discord-direct`, YouTube → `youtube-direct`;
+- Xray работает в Hybrid, nfqws2 — на WAN `eth3`;
+- Discord выбирается только доменной категорией; широкая
+  `ext:zkeenip.dat:discord` на диске отсутствует;
+- используются два списка:
+  `/opt/etc/nfqws2/lists/user.list` и
+  `/opt/etc/nfqws2/lists/youtube.list`;
+- IPv6 nfqws2 выключен, поскольку usable IPv6 WAN route отсутствует.
+
+`xkeen -dns`, `xkeen -pr`, `xkeen -ipv6` и `xkeen -dscp` без аргумента здесь
+не используются: в установленной версии это переключатели, а не просмотр
+состояния.
+
+## 2. Переключить маршрут сервиса
+
+```sh
+sh set-zapret-mode.sh discord --core auto --wan-interface eth3 --yes-router
+sh set-zapret-mode.sh youtube --core auto --wan-interface eth3 --yes-router
+sh set-zapret-mode.sh both    --core auto --wan-interface eth3 --yes-router
+sh set-zapret-mode.sh vless   --core auto --wan-interface eth3 --yes-router
+```
+
+Значение режимов:
+
+| Режим | Discord | YouTube |
+|---|---|---|
+| `discord` | zapret | VLESS |
+| `youtube` | VLESS | zapret |
+| `both` | zapret | zapret |
+| `vless` | VLESS | VLESS |
+
+Любой `apply` создаёт `latest-preapply` и автоматически возвращает его при
+ошибке.
+
+Для точечного переключения одного сервиса доступны три режима:
+
+```sh
+sh set-service-route.sh discord direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord vpn    --core auto --wan-interface eth3 --yes-router
+
+sh set-service-route.sh youtube direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh youtube zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-router
+```
+
+`direct` и `zapret` используют один service-direct маршрут, но в `direct`
+nfqws2-профиль сервиса выключен. `vpn` — понятный alias внутреннего режима
+`vless`. Wrapper читает и сохраняет режим второго сервиса.
+
+## 3. Откат
+
+Перед последним `apply`:
+
+```sh
+sh rollback-last-change.sh
+```
+
+До первого применения проекта:
+
+```sh
+sh rollback-to-baseline.sh
+```
+
+Посмотреть актуальные точки:
+
+```sh
+sh apply-discord-nfqws2.sh --show-snapshots
+```
+
+Ручной rollback сначала создаёт rescue snapshot текущего состояния.
+
+Web-панель дополнительно хранит историю применений по дате. Из неё можно
+вернуть состояние до любой завершённой операции, если соответствующий
+snapshot не удалён. Эквивалентная низкоуровневая команда принимает только
+один проверенный каталог непосредственно внутри управляемого `snapshots`:
+
+```sh
+sh apply-discord-nfqws2.sh \
+  --rollback-snapshot /opt/etc/keenetic-discord-nfqws2/snapshots/NAME \
+  --yes-router
+```
+
+Не подставляйте путь вручную без `--show-snapshots`; безопаснее использовать
+кнопку в истории панели.
+
+## 4. После перезагрузки роутера
+
+Повторный `apply` не нужен. На постоянном Entware-накопителе остаются
+конфиги, списки и снимки.
+
+Порядок запуска:
+
+1. Keenetic монтирует Entware как `/opt`.
+2. `S05xkeen` запускает Xray (`start_auto=on`).
+3. `S51nfqws2` запускает nfqws2.
+4. `100-nfqws2.sh` возвращает NFQUEUE rules после пересборки firewall.
+
+Проверка через одну-две минуты:
+
+```sh
+xkeen -status
+/opt/etc/init.d/S51nfqws2 status
+iptables-save -t mangle | grep NFQUEUE
+```
+
+Если `/opt` доступен, но служба не поднялась:
+
+```sh
+/opt/etc/init.d/S05xkeen restart on
+(cd / && /opt/etc/init.d/S51nfqws2 restart)
+```
+
+Если `/opt` отсутствует, исправьте подключение Entware/USB до перезапуска
+служб.
+
+## 5. Проверка сервисов
+
+### Discord
+
+Сайт и gateway проверяются обычным клиентом. Для Desktop Voice:
+
+```sh
+sh scripts/diagnose-discord-voice.sh CLIENT_IP 30
+```
+
+В течение 30 секунд отключитесь и снова войдите в голосовой канал. Скрипт
+показывает LAN/WAN endpoints, conntrack и изменение счётчиков NFQUEUE.
+Заголовки пакетов не подтверждают качество звука, поэтому результат нужно
+проверить в приложении.
+
+По умолчанию обрабатываются UDP:
+
+```text
+443, 3478-3481, 5349, 19294-19344, 50000-50100
+```
+
+`--wide-udp` расширяет последнюю часть до `50000-65535` сразу в XKeen, core
+и nfqws2. Используйте его только если диагностика увидела порт выше `50100`.
+
+### YouTube
+
+Проверьте отдельно:
+
+- открытие страницы и старт видео;
+- перемотку и длительное воспроизведение;
+- компьютер и телевизор;
+- QUIC/HTTP3, если клиент его использует.
+
+TCP/TLS и HTTP-проверка подтверждены. Наличие QUIC-профиля не доказывает, что
+конкретный телевизор выбрал HTTP3.
+
+## 6. Настройка nfqws2
+
+Основной файл:
+
+```text
+/opt/etc/nfqws2/nfqws2.conf
+```
+
+Важные переменные:
+
+| Переменная | Назначение |
+|---|---|
+| `NFQWS_ARGS` | базовые TCP/HTTP/TLS-профили |
+| `NFQWS_ARGS_QUIC` | базовый QUIC |
+| `NFQWS_ARGS_UDP` | Discord Voice/STUN |
+| `NFQWS_ARGS_CUSTOM` | отдельные профили, включая YouTube |
+| `NFQWS_EXTRA_ARGS` | `MODE_LIST`, `MODE_AUTO` или `MODE_ALL` |
+| `TCP_PORTS`, `UDP_PORTS` | порты Netfilter |
+| `ISP_INTERFACE` | WAN |
+| `IPV6_ENABLED` | обработка IPv6 |
+
+Управляемый блок расположен между:
+
+```text
+# BEGIN keenetic-discord-nfqws2
+# END keenetic-discord-nfqws2
+```
+
+Следующий `apply` генерирует его заново. Постоянный рабочий профиль нужно
+переносить в `apply-discord-nfqws2.sh`, а не оставлять ручной правкой.
+
+`MODE_LIST` — безопасный штатный режим. `MODE_AUTO` расширяет список
+автоматически, а `MODE_ALL` обрабатывает почти весь подходящий трафик; два
+последних режима не включены проектом по умолчанию.
+
+## 7. Подбор стратегий
+
+Проще всего открыть вкладку **Автоподбор** панели:
+
+```text
+http://192.168.2.1:8088
+```
+
+Сервис заранее должен находиться в `Zapret`. YouTube и Discord TCP
+проверяются HTTP-пробами автоматически. Для Discord Voice укажите LAN IPv4
+компьютера, переподключайтесь к voice-каналу по подсказке и отвечайте
+**Да/Нет**.
+
+Перебор не записывает постоянные конфиги и не вызывает Xkeen. Он временно
+заменяет только запущенный процесс `nfqws2`, а отмена и `EXIT` trap
+восстанавливают штатную службу. Победитель применяется только отдельной
+кнопкой; перед этим создаётся focused snapshot.
+
+Каждый применённый, заменённый или удаляемый профиль архивируется с UTC-датой
+в `/opt/etc/nfqws2/profile-versions/<service>`. Вкладка **Импорт профиля**
+показывает эти версии и позволяет снова применить выбранную. Текущий профиль,
+созданный до появления функции версий, впервые попадёт в архив при следующей
+замене или удалении.
+
+Кнопка **Проверить обновление** сравнивает скачанный набор стратегий с GitHub.
+Новый commit скачивается автоматически и используется следующим подбором
+из панели; если версия последняя, выводится **Актуально**. Рабочий профиль
+сохраняется. Затем отдельно запустите подбор и примените найденный результат.
+
+Для обычной проверки выберите `Safe`: он по очереди меняет `repeats`,
+`out-range`, TCP `pos`/`seq` и QUIC repeats. `Extended` добавляет
+ограниченные сочетания и имеет смысл после неудачи `Safe`. Значение
+`Максимум кандидатов` ограничено 64; его увеличение линейно удлиняет тест.
+Полного перебора всех параметров нет.
+
+Для запуска с Windows по-прежнему доступны:
+
+Запускайте один файл:
+
+```text
+tools\windows\tune-youtube.bat
+tools\windows\tune-discord-tcp.bat
+tools\windows\tune-discord-voice.bat
+```
+
+Тюнер не исполняет скачанные BAT-файлы и не записывает постоянные конфиги.
+На время кандидата он заменяет только процесс nfqws2 и восстанавливает
+исходную службу при завершении, ошибке, потере SSH или `Ctrl+C`.
+
+YouTube и Discord TCP проверяются автоматически. Discord Voice требует
+реального reconnect и ответа пользователя; QUIC требует HTTP3-клиента.
+
+BAT-файлы сохраняют последние отчёты в `tools\windows\reports`. Их можно
+загрузить во вкладку **Импорт профиля** панели на порту `8088`. Соответствующий
+сервис должен уже иметь маршрут `Zapret`.
+
+Точечные команды на роутере:
+
+```sh
+sh apply-discord-nfqws2.sh --apply-import-profile /opt/tmp/profile.json --yes-router
+sh apply-discord-nfqws2.sh --clear-imported-profile youtube --yes-router
+sh apply-discord-nfqws2.sh --rollback-import --yes-router
+```
+
+Допустимые имена для удаления: `youtube`, `discord-tcp`, `discord-voice`.
+Эти три операции создают focused snapshot, меняют только `/opt/etc/nfqws2` и
+перезапускают только `nfqws2`. Они не перезапускают Xkeen. Обычное
+переключение маршрута остаётся полным apply и может перезапустить обе службы.
+В web-панели этот apply запускается как фоновое задание и отслеживается через
+`/api/route/status`, поэтому очистка conntrack не обрывает саму операцию.
+В интерфейсе видны текущий этап и история. После успеха панель проверяет
+процессы и согласованность конфигов. HTTP/TLS-пробы с LAN-устройства доступны
+отдельно во вкладке «Диагностика». QUIC и Discord Voice проверяются вручную.
+
+## 8. WAN, mark и IPv6
+
+- `--wan-interface eth3` фиксирует текущий WAN.
+- `--direct-mark` нужен только для осознанной multi-WAN/PBR-схемы.
+- При `proxy_router=off` текущим direct-outbound явный mark не нужен.
+- Переключатель IPv6 XKeen не меняется. nfqws2 включает IPv6 только при
+  рабочем IPv6 default route.
+
+Неверный mark или WAN способен оставить правила без рабочего маршрута.
+
+## 9. Типовые проблемы
+
+| Симптом | Что проверить |
+|---|---|
+| После reboot ничего не работает | Смонтирован ли `/opt`, затем статусы двух служб |
+| Сайт Discord есть, voice нет | Hybrid/TProxy, voice-порты, reconnect-диагностику |
+| YouTube открывается, видео нет | TLS/QUIC отдельно, hostlist, NFQUEUE counters |
+| nfqws2 запущен, эффекта нет | `ISP_INTERFACE`, mangle rules, hardware offload |
+| После эксперимента стало хуже | `sh rollback-last-change.sh` |
+
+Предупреждение о неподдерживаемом `seccomp` допустимо, если nfqws2 после него
+остаётся в состоянии `running`.

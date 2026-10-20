@@ -1,0 +1,46 @@
+[
+  {
+    "inboundTag": ["redirect", "tproxy"],
+    "outboundTag": "YOUR_PROXY_OUTBOUND_TAG",
+    "type": "field",
+    "domain": [
+      "domain:dis.gd",
+      "domain:discord-attachments-uploads-prd.storage.googleapis.com",
+      "domain:discord.app",
+      "domain:discord.co",
+      "domain:discord.com",
+      "domain:discord.design",
+      "domain:discord.dev",
+      "domain:discord.gift",
+      "domain:discord.gifts",
+      "domain:discord.gg",
+      "domain:discord.media",
+      "domain:discord.new",
+      "domain:discord.status",
+      "domain:discord.store",
+      "domain:discord.tools",
+      "domain:discord-activities.com",
+      "domain:discordactivities.com",
+      "domain:discordapp.com",
+      "domain:discordapp.net",
+      "domain:discordcdn.com",
+      "domain:discordmerch.com",
+      "domain:discordpartygames.com",
+      "domain:discordsays.com",
+      "domain:discordsez.com",
+      "domain:discordstatus.com",
+      "domain:cdn.discordapp.com",
+      "domain:media.discordapp.net",
+      "domain:gateway.discord.gg",
+      "domain:updates.discord.com",
+      "domain:stable.dl2.discordapp.net"
+    ]
+  },
+  {
+    "inboundTag": ["redirect", "tproxy"],
+    "outboundTag": "YOUR_PROXY_OUTBOUND_TAG",
+    "type": "field",
+    "network": "udp",
+    "port": "3478-3481,5349,19294-19344,50000-50100"
+  }
+]

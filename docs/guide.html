@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XKeen + nfqws2: Discord и YouTube</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f4f6fa;
+      --panel: #fff;
+      --text: #172033;
+      --muted: #64718a;
+      --line: #d8deea;
+      --accent: #2868d8;
+      --good: #18794e;
+      --warn: #8b5e00;
+      --code: #101827;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { width: min(1040px, calc(100% - 28px)); margin: 30px auto 60px; }
+    header { margin-bottom: 22px; }
+    h1 { margin: 0 0 8px; font-size: clamp(32px, 6vw, 52px); line-height: 1.08; }
+    h2 { margin: 0 0 12px; font-size: 24px; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 12px; }
+    a { color: var(--accent); }
+    .lead { color: var(--muted); font-size: 18px; max-width: 850px; }
+    .card {
+      margin-top: 16px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+      box-shadow: 0 8px 28px #1720330d;
+    }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+    .mini { padding: 16px; border: 1px solid var(--line); border-radius: 11px; }
+    .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .mode { padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+    .mode strong { display: block; margin-bottom: 4px; }
+    .mode span { color: var(--muted); font-size: 14px; }
+    .good { border-left: 4px solid var(--good); }
+    .warn { border-left: 4px solid var(--warn); }
+    pre {
+      overflow-x: auto;
+      margin: 10px 0 15px;
+      padding: 14px 16px;
+      border-radius: 10px;
+      background: var(--code);
+      color: #f1f5ff;
+      font: 14px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #8da2c426;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+    pre code { padding: 0; background: transparent; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #8da2c414; }
+    ul, ol { margin: 8px 0 0; padding-left: 22px; }
+    li { margin: 5px 0; }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    nav a {
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      text-decoration: none;
+      background: var(--panel);
+    }
+    .copy {
+      float: right;
+      margin: -2px 0 4px 10px;
+      padding: 5px 8px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #070c16;
+        --panel: #0e1626;
+        --text: #e8eefc;
+        --muted: #9aa8c1;
+        --line: #26334a;
+        --accent: #79a7ff;
+      }
+    }
+    @media (max-width: 720px) {
+      .grid, .modes { grid-template-columns: 1fr; }
+      .card { padding: 17px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>XKeen + nfqws2</h1>
+    <p class="lead">Короткая инструкция по независимому управлению Discord и
+      YouTube: напрямую, через zapret или через VPN.</p>
+    <nav aria-label="Разделы">
+      <a href="#state">Состояние</a>
+      <a href="#modes">Режимы</a>
+      <a href="#rollback">Откат</a>
+      <a href="#reboot">Перезагрузка</a>
+      <a href="#checks">Проверка</a>
+      <a href="#panel">Web-панель</a>
+    </nav>
+  </header>
+
+  <section class="card" id="state">
+    <h2>Что работает сейчас</h2>
+    <div class="grid">
+      <div class="mini">
+        <h3>Маршрут</h3>
+        <p>Активен режим <code>both</code>: Discord и YouTube идут через
+          отдельные Xray DIRECT outbounds, затем через nfqws2.</p>
+      </div>
+      <div class="mini">
+        <h3>Роутер</h3>
+        <p>KN-1011, XKeen/Xray Hybrid, WAN <code>eth3</code>,
+          <code>nfqws2-keenetic 1.2.4</code>.</p>
+      </div>
+      <div class="mini">
+        <h3>Discord</h3>
+        <p>Web/TCP и сетевой путь Desktop Voice подтверждены. Xray выбирает
+          Discord только по доменам, без широкой IP-категории Cloudflare/Google.
+          Качество звука проверяется самим приложением.</p>
+      </div>
+      <div class="mini">
+        <h3>YouTube</h3>
+        <p>TCP/TLS и HTTP работают. QUIC/HTTP3 нужно проверять реальным
+          компьютером или телевизором.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="modes">
+    <h2>Три режима каждого сервиса</h2>
+    <div class="modes">
+      <div class="mode"><strong>Direct</strong><span>Обычный WAN, профиль nfqws2 для сервиса выключен.</span></div>
+      <div class="mode"><strong>Zapret</strong><span>Обычный WAN, профиль nfqws2 включён.</span></div>
+      <div class="mode"><strong>VPN</strong><span>Исходный VLESS outbound Xray, nfqws2 не видит сервисный TLS/QUIC.</span></div>
+    </div>
+
+    <h3>Переключить один сервис</h3>
+    <pre><code>cd /opt/root/keenetic-discord-nfqws2
+
+sh set-service-route.sh discord direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord vpn    --core auto --wan-interface eth3 --yes-router
+
+sh set-service-route.sh youtube direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh youtube zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-router</code></pre>
+    <p>Режим второго сервиса читается из текущего состояния и сохраняется.</p>
+
+    <h3>Быстрые preset Zapret/VPN</h3>
+    <table>
+      <thead><tr><th>Команда</th><th>Discord</th><th>YouTube</th></tr></thead>
+      <tbody>
+        <tr><td><code>set-zapret-mode.sh discord</code></td><td>Zapret</td><td>VPN</td></tr>
+        <tr><td><code>set-zapret-mode.sh youtube</code></td><td>VPN</td><td>Zapret</td></tr>
+        <tr><td><code>set-zapret-mode.sh both</code></td><td>Zapret</td><td>Zapret</td></tr>
+        <tr><td><code>set-zapret-mode.sh vless</code></td><td>VPN</td><td>VPN</td></tr>
+      </tbody>
+    </table>
+    <p class="good mini">Каждый apply создаёт pre-apply snapshot, проверяет
+      core и автоматически откатывается при ошибке.</p>
+  </section>
+
+  <section class="card" id="rollback">
+    <h2>Откат</h2>
+    <p>Вернуть состояние перед последним применением:</p>
+    <pre><code>cd /opt/root/keenetic-discord-nfqws2
+sh rollback-last-change.sh</code></pre>
+    <p>Вернуть исходный baseline:</p>
+    <pre><code>sh rollback-to-baseline.sh</code></pre>
+    <p>Показать актуальные указатели:</p>
+    <pre><code>sh apply-discord-nfqws2.sh --show-snapshots</code></pre>
+    <p>Перед ручным rollback создаётся rescue snapshot текущего состояния.</p>
+  </section>
+
+  <section class="card" id="reboot">
+    <h2>После перезагрузки</h2>
+    <p>Повторный apply не нужен. Через одну-две минуты:</p>
+    <pre><code>xkeen -status
+/opt/etc/init.d/S51nfqws2 status
+iptables-save -t mangle | grep NFQUEUE</code></pre>
+    <p>Если `/opt` не смонтирован, сначала восстановите Entware/USB. Если
+      `/opt` доступен:</p>
+    <pre><code>/opt/etc/init.d/S05xkeen restart on
+(cd / &amp;&amp; /opt/etc/init.d/S51nfqws2 restart)</code></pre>
+  </section>
+
+  <section class="card" id="checks">
+    <h2>Диагностика</h2>
+    <p>Общий read-only статус:</p>
+    <pre><code>sh apply-discord-nfqws2.sh --status
+sh apply-discord-nfqws2.sh --preflight --core auto --wan-interface eth3
+sh scripts/diagnose-xkeen-router.sh</code></pre>
+    <p>Discord Desktop Voice:</p>
+    <pre><code>sh scripts/diagnose-discord-voice.sh CLIENT_IP 30</code></pre>
+    <p>Во время окна переподключитесь к voice-каналу. Для YouTube проверяйте
+      старт, перемотку, длительное воспроизведение и отдельно телевизор.</p>
+  </section>
+
+  <section class="card" id="panel">
+    <h2>Локальная web-панель</h2>
+    <pre><code>cd /opt/root/keenetic-discord-nfqws2
+sh tools/router/xkeen_control_script.sh
+/opt/bin/python3 /opt/xkeen-web/app.py</code></pre>
+    <p>Откройте <code>http://192.168.2.1:8088</code>. Панель управляет XKeen и
+      тремя режимами обоих сервисов. Установщик только создаёт приложение и
+      не добавляет автозапуск.</p>
+    <p>Полный apply показывает этапы и сохраняется в истории по дате. Из
+      истории можно вернуть snapshot до выбранной операции. После успеха
+      выполняются проверки служб и конфигов. HTTP/TLS с LAN-устройства
+      запускаются во вкладке «Диагностика»; QUIC и
+      Discord Voice проверяются вручную.</p>
+    <p>Во вкладках подбора и импорта доступны скачивание новых стратегий
+      Flowseal и версии профилей по UTC-дате. Проверка обновления, запуск
+      подбора и применение профиля остаются тремя отдельными действиями.</p>
+    <p class="warn mini">Панель не имеет пароля. Она привязана к LAN-адресу;
+      не пробрасывайте порт 8088 в интернет.</p>
+  </section>
+
+  <section class="card">
+    <h2>Подробнее</h2>
+    <ul>
+      <li><a href="../README.md">Главный README</a></li>
+      <li><a href="OPERATIONS.md">Эксплуатация и восстановление</a></li>
+      <li><a href="MODES-AND-FLAGS.md">Режимы, флаги и handoff</a></li>
+      <li><a href="STRATEGY.md">TCP, QUIC и UDP-стратегии</a></li>
+      <li><a href="../tools/windows/README.md">Подбор стратегий с Windows</a></li>
+      <li><a href="../tools/router/README.md">Локальная панель</a></li>
+    </ul>
+  </section>
+</main>
+<script>
+  document.querySelectorAll("pre").forEach((pre) => {
+    const button = document.createElement("button");
+    button.className = "copy";
+    button.type = "button";
+    button.textContent = "Копировать";
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(pre.innerText);
+        button.textContent = "Скопировано";
+      } catch (_) {
+        button.textContent = "Не удалось";
+      }
+      setTimeout(() => { button.textContent = "Копировать"; }, 1200);
+    });
+    pre.before(button);
+  });
+</script>
+</body>
+</html>

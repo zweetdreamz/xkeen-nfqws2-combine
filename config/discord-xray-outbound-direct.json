@@ -1,0 +1,9 @@
+{
+  "outbounds": [
+    {
+      "tag": "discord-direct",
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
+}
