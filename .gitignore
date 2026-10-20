@@ -1,0 +1,30 @@
+# Local router data and backups
+/dat/
+/backups/*
+!/backups/README.md
+*.ipk
+*.tar.gz
+*.dpapi
+*.log
+/tools/windows/reports/
+
+# Python and test runtime
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.test-tmp/
+.venv/
+venv/
+
+# Local credentials and application metadata
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.agents/
+.codex/
+.aws/
+.idea/
+.DS_Store
+Thumbs.db
