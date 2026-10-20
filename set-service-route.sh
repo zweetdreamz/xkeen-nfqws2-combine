@@ -15,8 +15,10 @@ Usage:
 discord-tcp covers Discord domains (TCP/TLS and QUIC), discord-voice covers
 Discord Voice/STUN UDP ports, and discord switches both at once.
 
-The routes of the other services are read from the current managed state and
-preserved. "vpn" is a user-facing alias for the engine route "vless".
+The routes of the other services and the Discord UDP settings (--wide-udp,
+--udp-strategy) are read from the current managed state and preserved; pass
+--narrow-udp, --wide-udp or --udp-strategy to change them. "vpn" is a
+user-facing alias for the engine route "vless".
 
 Examples:
   sh set-service-route.sh discord-voice zapret --core auto --wan-interface eth3 --yes-router
@@ -88,6 +90,17 @@ case "$service" in
   discord-tcp) next_discord_tcp="$route_mode" ;;
   discord-voice) next_discord_voice="$route_mode" ;;
   youtube) next_youtube="$route_mode" ;;
+esac
+
+# Keep the current Discord UDP settings unless the caller overrides them:
+# the engine applies options in order, so "$@" (after these) wins.
+case "$(status_value udp_range)" in
+  wide) set -- --wide-udp "$@" ;;
+  narrow) set -- --narrow-udp "$@" ;;
+esac
+current_udp_strategy="$(status_value udp_strategy)"
+case "$current_udp_strategy" in
+  flowseal|legacy) set -- --udp-strategy "$current_udp_strategy" "$@" ;;
 esac
 
 echo "Service routes: Discord TCP=$next_discord_tcp, Discord Voice=$next_discord_voice, YouTube=$next_youtube"

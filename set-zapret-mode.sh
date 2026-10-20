@@ -20,7 +20,8 @@ Presets (Discord means both Discord TCP and Discord Voice):
 
 Use set-service-route.sh to route Discord TCP and Discord Voice separately.
 
-Additional apply options are passed to apply-discord-nfqws2.sh.
+Additional apply options are passed to apply-discord-nfqws2.sh. The current
+Discord UDP settings (--wide-udp, --udp-strategy) are kept unless overridden.
 Every switch creates latest-preapply and uses automatic rollback on failure.
 EOF
 }
@@ -58,6 +59,19 @@ case "$preset" in
     usage >&2
     exit 2
     ;;
+esac
+
+# Keep the current Discord UDP settings (if a managed state exists) unless the
+# caller overrides them: the engine applies options in order, so "$@" wins.
+status_output="$(sh "$ENGINE" --status 2>/dev/null || true)"
+current_udp_range="$(printf '%s\n' "$status_output" | awk -F= '$1 == "udp_range" { print $2; exit }')"
+current_udp_strategy="$(printf '%s\n' "$status_output" | awk -F= '$1 == "udp_strategy" { print $2; exit }')"
+case "$current_udp_range" in
+  wide) set -- --wide-udp "$@" ;;
+  narrow) set -- --narrow-udp "$@" ;;
+esac
+case "$current_udp_strategy" in
+  flowseal|legacy) set -- --udp-strategy "$current_udp_strategy" "$@" ;;
 esac
 
 exec sh "$ENGINE" \

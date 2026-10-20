@@ -546,6 +546,28 @@ if printf '%s\n' "$rollback_output" | grep -Fq 'automatic rollback'; then
 fi
 assert_mode zapret zapret vless
 
+# The wrappers change routes only: wide Voice ports and the legacy UDP
+# strategy must survive a switch of any service, and --narrow-udp resets the
+# range explicitly.
+run_tool --apply --yes-router --core xray --discord-route zapret --youtube-route vless \
+  --wide-udp --udp-strategy legacy >/dev/null
+run_service_tool youtube direct --yes-router --core xray >/dev/null
+grep -Fqx 'UDP_PORTS=443,3478:3481,5349,19294:19344,50000:65535' "$nfqws_file"
+grep -Fq -- '--lua-desync=circular:fails=2:time=300:retrans=3:nld=2' "$nfqws_file"
+jq -e 'any(.routing.rules[]?; .port == "3478-3481,5349,19294-19344,50000-65535")' "$routing_file" >/dev/null
+udp_status="$(run_tool --status)"
+printf '%s\n' "$udp_status" | grep -Fqx 'udp_strategy=legacy'
+printf '%s\n' "$udp_status" | grep -Fqx 'udp_range=wide'
+# Voice off and on again: the settings are kept while Voice is not zapret.
+run_service_tool discord-voice direct --yes-router --core xray >/dev/null
+run_service_tool discord-voice zapret --yes-router --core xray >/dev/null
+grep -Fqx 'UDP_PORTS=443,3478:3481,5349,19294:19344,50000:65535' "$nfqws_file"
+grep -Fq -- '--lua-desync=circular:fails=2:time=300:retrans=3:nld=2' "$nfqws_file"
+run_service_tool youtube vpn --yes-router --core xray --narrow-udp --udp-strategy flowseal >/dev/null
+grep -Fqx 'UDP_PORTS=443,3478:3481,5349,19294:19344,50000:50100' "$nfqws_file"
+grep -Fq -- '--lua-desync=fake:blob=discord_udp:repeats=6' "$nfqws_file"
+assert_mode zapret zapret vless
+
 # A config written before the TCP/Voice split still reports both routes.
 sed -i 's/^# Active routes: .*/# Active routes: Discord=zapret, YouTube=vless./' "$nfqws_file"
 legacy_status="$(run_tool --status)"
