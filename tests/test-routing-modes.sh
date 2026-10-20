@@ -165,6 +165,22 @@ cat > "$ROOT/opt/etc/xray/configs/05_routing.json" <<'EOF'
       {
         "type":"field",
         "inboundTag":["redirect","tproxy"],
+        "outboundTag":"block",
+        "domain":[
+          "ext:geosite_v2fly.dat:youtube",
+          "ext:geosite_v2fly.dat:discord"
+        ]
+      },
+      {
+        "type":"field",
+        "inboundTag":["redirect","tproxy"],
+        "outboundTag":"block",
+        "domain":["ext:geosite_v2fly.dat:youtube"],
+        "ip":["ext:geoip.dat:private"]
+      },
+      {
+        "type":"field",
+        "inboundTag":["redirect","tproxy"],
         "outboundTag":"direct",
         "domain":["example.org"]
       }
@@ -416,6 +432,16 @@ assert_mode() {
         .outboundTag == "youtube-direct"
         and any(.ip[]?; . == "ext:zkeenip.dat:youtube")
       ) | not
+    )
+  ' "$routing_file" >/dev/null
+
+  # The two "block" fixture rules match only managed Discord/YouTube domains.
+  # Stripping those selectors must drop the rules, never leave a rule with a
+  # wider match (no domain at all, or only the unrelated IP condition).
+  jq -e '
+    (any(.routing.rules[]?; .outboundTag == "block") | not)
+    and any(.routing.rules[]?;
+      .outboundTag == "direct" and .domain == ["example.org"]
     )
   ' "$routing_file" >/dev/null
 

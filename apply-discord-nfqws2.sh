@@ -2787,6 +2787,8 @@ patch_xray() {
       ] | unique) as $youtube_domains
     | ($original_rules | map(
         select((managed_discord_rule or managed_youtube_rule) | not)
+        | ((.domain | type) == "array" and (.domain | length) > 0) as $had_domain
+        | ((.ip | type) == "array" and (.ip | length) > 0) as $had_ip
         | if (.domain | type) == "array" then
             .domain |= map(
               select((is_discord_ext_selector or is_youtube_ext_selector) | not)
@@ -2799,6 +2801,16 @@ patch_xray() {
             | if (.ip | length) == 0 then del(.ip) else . end
           else .
           end
+        # A matcher list emptied by the cleanup means the rule only selected
+        # managed Discord/YouTube traffic. Keeping it without that condition
+        # would widen it (to all traffic, or to its remaining conditions), so
+        # drop it; the managed rules placed first now handle that traffic.
+        | select(
+            ($had_domain | not) or has("domain")
+          )
+        | select(
+            ($had_ip | not) or has("ip")
+          )
       )) as $remaining_rules
     | ([
         {
