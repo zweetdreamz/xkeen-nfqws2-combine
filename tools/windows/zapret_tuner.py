@@ -108,6 +108,9 @@ class Candidate:
     rank: int = 100
     # Other BAT files whose translation gave exactly the same args.
     also_from: tuple[str, ...] = ()
+    # Tested first, in order, before the seeded shuffle (the profiles of a
+    # selected BAT file come before their parameter variations).
+    pinned: bool = False
 
     def command_line(self) -> str:
         return " ".join(self.args)
@@ -733,12 +736,17 @@ def parameter_sweep_candidates(
     exact: Sequence[Candidate],
     sources: Sequence[SourceFile],
     level: str,
+    base: Candidate | None = None,
 ) -> list[Candidate]:
-    """Build a bounded sweep without an uncontrolled Cartesian product."""
+    """Build a bounded sweep without an uncontrolled Cartesian product.
+
+    The sweep varies the built-in profile, or ``base`` (a translated profile
+    of a selected BAT file) when given.
+    """
     if level == "off":
         return []
 
-    native = known_candidate(service, sources)
+    native = base or known_candidate(service, sources)
     result: list[Candidate] = []
     rank = 20
 
@@ -890,7 +898,8 @@ def parameter_sweep_candidates(
         )
         rank += 1
 
-    result.extend(source_sweep_candidates(exact))
+    if base is None:
+        result.extend(source_sweep_candidates(exact))
     return result
 
 
@@ -1084,16 +1093,20 @@ def build_candidates(
         candidates.extend(exact)
         candidates.extend(mixed_candidates(service, exact, sources, mix_level))
     else:
-        # Only what the selected BAT file defines: its translated profiles and,
-        # unless mixing is off, the per-source parameter sweep (TCP services).
-        candidates = list(exact)
-        if mix_level != "off" and service != "discord-voice":
-            candidates.extend(source_sweep_candidates(exact))
+        # Only what the selected BAT file defines: its translated profiles
+        # first, then (Safe/Extended) the same parameter sweep that otherwise
+        # varies the built-in profile, applied to each profile of this file.
+        candidates = [dataclasses.replace(candidate, pinned=True) for candidate in exact]
+        for base in exact:
+            candidates.extend(
+                parameter_sweep_candidates(service, exact, sources, mix_level, base=base)
+            )
     # Identical args behave identically: test them once, but remember which
     # other BAT files share the profile so the log can name them.
     unique: dict[tuple[str, ...], Candidate] = {}
     shared: dict[tuple[str, ...], list[str]] = {}
-    for candidate in sorted(candidates, key=lambda item: (item.rank, item.source_name)):
+    ordered = sorted(candidates, key=lambda item: (not item.pinned, item.rank, item.source_name))
+    for candidate in ordered:
         first = unique.setdefault(candidate.args, candidate)
         names = shared.setdefault(candidate.args, [])
         if candidate.source_name not in {first.source_name, *names}:
@@ -1135,11 +1148,13 @@ def select_candidates(
     if maximum < 1:
         raise ValueError("maximum must be positive")
     rng = random.Random(search_seed)
-    primary = [candidate for candidate in candidates if candidate.rank < DEFERRED_RANK]
-    extended = [candidate for candidate in candidates if candidate.rank >= DEFERRED_RANK]
+    pinned = [candidate for candidate in candidates if candidate.pinned]
+    rest = [candidate for candidate in candidates if not candidate.pinned]
+    primary = [candidate for candidate in rest if candidate.rank < DEFERRED_RANK]
+    extended = [candidate for candidate in rest if candidate.rank >= DEFERRED_RANK]
     rng.shuffle(primary)
     rng.shuffle(extended)
-    return (primary + extended)[:maximum]
+    return (pinned + primary + extended)[:maximum]
 
 
 def github_json(url: str) -> object:

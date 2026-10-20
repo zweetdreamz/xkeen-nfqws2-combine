@@ -1246,6 +1246,25 @@ class SourceSelectionTests(unittest.TestCase):
         self.assertTrue(without)
         self.assertTrue(all(candidate.source_name == SOURCE.name for candidate in without))
 
+    def test_selected_file_is_the_base_of_the_sweep(self):
+        exact = TUNER.build_candidates("discord-voice", [SOURCE], "off", include_builtin=False)
+        self.assertEqual(len(exact), 1)
+        builtin = TUNER.known_candidate("discord-voice", [SOURCE])
+        for level, minimum in (("safe", 3), ("extended", 6)):
+            with self.subTest(level=level):
+                swept = TUNER.build_candidates(
+                    "discord-voice", [SOURCE], level, include_builtin=False
+                )
+                self.assertGreaterEqual(len(swept), minimum)
+                # The file's own profile first, then variations of it only.
+                self.assertEqual(swept[0].args, exact[0].args)
+                self.assertTrue(swept[0].pinned)
+                self.assertTrue(all(c.source_name == SOURCE.name for c in swept))
+                self.assertTrue(all(c.family.startswith(exact[0].family) for c in swept))
+                self.assertNotIn(builtin.args, [c.args for c in swept])
+                for seed in (1, 2, 3):
+                    self.assertEqual(TUNER.select_candidates(swept, 64, seed)[0].args, exact[0].args)
+
     def test_identical_profiles_are_tested_once_and_named(self):
         # Flowseal BATs often share a profile: one candidate, all names kept.
         copies = [
