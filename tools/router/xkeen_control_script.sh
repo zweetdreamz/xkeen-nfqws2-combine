@@ -75,6 +75,9 @@ FLOWSEAL_UPDATE_STATE = Path("/opt/etc/xkeen-web/flowseal-update.json")
 VOICE_ENDPOINT_FILE = Path("/opt/etc/xkeen-web/discord-voice-endpoint.json")
 FLOWSEAL_SOURCE_CACHE = Path("/opt/etc/xkeen-web/flowseal-sources.json")
 FLOWSEAL_UPDATE_LOCK = threading.Lock()
+# Request threads load zapret_tuner.py once; the module is in sys.modules
+# before it has finished executing, so other threads wait for the loader.
+FLOWSEAL_MODULE_LOCK = threading.Lock()
 FLOWSEAL_REPOSITORY = "Flowseal/zapret-discord-youtube"
 FLOWSEAL_REF = "main"
 MAX_REPORT_BYTES = 512 * 1024
@@ -1000,16 +1003,17 @@ def profile_version_path(service, version_id):
 
 def flowseal_source_module():
     name = "xkeen_flowseal_sources"
-    if name not in sys.modules:
-        spec = importlib.util.spec_from_file_location(name, PROJECT_DIR / "tools/windows/zapret_tuner.py")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        try:
-            spec.loader.exec_module(module)
-        except Exception:
-            sys.modules.pop(name, None)
-            raise
-    return sys.modules[name]
+    with FLOWSEAL_MODULE_LOCK:
+        if name not in sys.modules:
+            spec = importlib.util.spec_from_file_location(name, PROJECT_DIR / "tools/windows/zapret_tuner.py")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            try:
+                spec.loader.exec_module(module)
+            except Exception:
+                sys.modules.pop(name, None)
+                raise
+        return sys.modules[name]
 
 
 def cached_flowseal_update():

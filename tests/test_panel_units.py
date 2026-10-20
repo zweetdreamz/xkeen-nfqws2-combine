@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -1487,6 +1488,51 @@ class TunerSourceTests(PanelTestCase):
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["sources"], [])
         self.assertIn("invalid Flowseal cache", payload["error"])
+
+    def test_concurrent_first_load_returns_the_complete_module(self):
+        # Page load requests /api/updates and /api/tuner/sources at once. The
+        # module sits in sys.modules while it still executes; a second request
+        # thread must wait for it instead of using the half-loaded module.
+        name = "xkeen_flowseal_sources"
+        tuner = self.root / "tools" / "windows" / "zapret_tuner.py"
+        tuner.parent.mkdir(parents=True)
+        tuner.write_text(
+            "import sys\n"
+            "sys.kdn_flowseal_gate.wait(5)\n"
+            "def read_source_cache(path):\n"
+            "    return [], 'c' * 40\n",
+            encoding="utf-8",
+        )
+        gate = threading.Event()
+        sys.kdn_flowseal_gate = gate
+        self.addCleanup(delattr, sys, "kdn_flowseal_gate")
+        saved = sys.modules.pop(name, None)
+
+        def restore():
+            sys.modules.pop(name, None)
+            if saved is not None:
+                sys.modules[name] = saved
+
+        self.addCleanup(restore)
+        self.patch(PROJECT_DIR=self.root)
+        complete = {}
+
+        def load(key):
+            complete[key] = hasattr(self.ns["flowseal_source_module"](), "read_source_cache")
+
+        first = threading.Thread(target=load, args=("first",))
+        first.start()
+        deadline = time.monotonic() + 5
+        while name not in sys.modules and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIn(name, sys.modules)
+        second = threading.Thread(target=load, args=("second",))
+        second.start()
+        second.join(0.2)
+        gate.set()
+        first.join(5)
+        second.join(5)
+        self.assertEqual(complete, {"first": True, "second": True})
 
     def test_learned_voice_endpoint(self):
         path = self.root / "discord-voice-endpoint.json"
