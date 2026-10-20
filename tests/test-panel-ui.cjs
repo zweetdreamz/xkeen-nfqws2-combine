@@ -132,6 +132,18 @@ async function main() {
     assert.match(await page.textContent("#voiceAutoHint"), /162\.159\.130\.234:50007/);
     await setResponse("/api/tuner/voice-endpoint", { ok: true, endpoint: null });
 
+    // Success is stated first; known harmless lines are explained before the raw output.
+    const text = await page.evaluate(() => resultText(
+      "Discord Voice: профиль f3de2c222df9 применён",
+      "WARNING: XKeen IPv6 support is on, but no usable IPv6 WAN route exists.\nseccomp: Invalid argument\nStarted NFQWS2 service"
+    ));
+    const lines = text.split("\n");
+    assert.equal(lines[0], "Готово: Discord Voice: профиль f3de2c222df9 применён");
+    assert.match(lines[1], /IPv6 безвредно/);
+    assert.match(lines[2], /seccomp безвредна/);
+    assert.ok(text.endsWith("Полный вывод:\nWARNING: XKeen IPv6 support is on, but no usable IPv6 WAN route exists.\nseccomp: Invalid argument\nStarted NFQWS2 service"));
+    assert.equal(await page.evaluate(() => resultText("xkeen -restart", "")), "Готово: xkeen -restart");
+
     // busy() must not disable navigation.
     await page.evaluate(() => busy(true));
     assert.equal(await page.$eval('.tab[data-tab="control"]', (tab) => tab.disabled), false);
