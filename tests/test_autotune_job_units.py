@@ -829,6 +829,36 @@ class MainTests(TempRootTestCase):
         self.assertTrue(runner.terminated)
         self.assertFalse(self.lock_dir.exists())
 
+    def test_repeated_cancel_during_drain_still_records_cancelled(self):
+        """A second Stop (SIGTERM) while the runner restores nfqws2 is ignored."""
+        self.write_conf()
+        handlers = {}
+
+        class SecondSignalRunner(FakeRunner):
+            def communicate(self, timeout=None):
+                handler = handlers.get(JOB.signal.SIGTERM)
+                if callable(handler):
+                    handler(JOB.signal.SIGTERM, None)
+                return super().communicate(timeout)
+
+        runner = SecondSignalRunner(
+            ["EVENT|CANDIDATE|1|x\n", JOB.JobCancelled()],
+            remaining="EVENT|RESTORED|ok\n",
+        )
+        argv = ["zapret_autotune_job.py", "--service", "youtube", "--job-id", self.JOB_ID,
+                "--search-seed", "123", "--max-candidates", "3", "--source-dir", str(self.sources)]
+        with mock.patch.object(sys, "argv", argv), \
+                mock.patch.object(JOB.signal, "signal", side_effect=handlers.__setitem__), \
+                mock.patch.object(JOB.subprocess, "Popen", return_value=runner), \
+                mock.patch.object(JOB, "core_pids", mock.Mock(side_effect=[{}, {}])):
+            code = JOB.main()
+        self.assertEqual(code, 130)
+        self.assertEqual(self.state()["status"], "cancelled")
+        self.assertEqual(self.state()["nfqws_restored"], "ok")
+        self.assertIs(handlers[JOB.signal.SIGTERM], JOB.signal.SIG_IGN)
+        self.assertIs(handlers[JOB.signal.SIGINT], JOB.signal.SIG_IGN)
+        self.assertFalse(self.lock_dir.exists())
+
     def test_cancellation_with_core_pid_change_is_error(self):
         self.write_conf()
         runner = FakeRunner([JOB.JobCancelled()])

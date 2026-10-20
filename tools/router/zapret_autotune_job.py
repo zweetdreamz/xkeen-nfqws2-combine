@@ -372,6 +372,16 @@ def parse_event(
     return None
 
 
+def ignore_cancel_signals() -> None:
+    """Cleanup must finish: a repeated Stop (SIGTERM) or Ctrl-C is ignored.
+
+    Otherwise a second signal raises JobCancelled inside the handler that is
+    restoring nfqws2, and the job's final state is never written.
+    """
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
 def stop_and_drain_runner(
     writer: StateWriter,
     process: subprocess.Popen[str],
@@ -552,6 +562,7 @@ def main() -> int:
         )
         return 0
     except JobCancelled:
+        ignore_cancel_signals()
         if runner_process is not None:
             stop_and_drain_runner(writer, runner_process, candidates)
         xkeen_after = core_pids()
@@ -575,6 +586,7 @@ def main() -> int:
         )
         return 130
     except Exception as error:
+        ignore_cancel_signals()
         if runner_process is not None:
             stop_and_drain_runner(writer, runner_process, candidates)
         xkeen_after = core_pids()
