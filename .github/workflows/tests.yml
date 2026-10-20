@@ -38,6 +38,7 @@ jobs:
       - name: Run all test suites
         env:
           TEST_SHELL: ${{ matrix.shell }}
+          TEST_BUSYBOX_APPLETS: ${{ matrix.shell == 'busybox sh' && '1' || '0' }}
           REQUIRE_PANEL_UI_TESTS: "1"
         run: sh tests/run-all.sh --coverage
 

@@ -2429,26 +2429,47 @@ strict_json_copy() {
   jq -e . "$json_output" >/dev/null
 }
 
+# Prints a JSONC file as plain JSON: removes // and /* */ comments while
+# leaving comment-like text inside strings untouched.
 strict_json_stream() {
   stream_json_input="$1"
   awk '
-    BEGIN { block=0 }
+    BEGIN { block = 0 }
     {
-      line=$0
-      if (block) {
-        if (line ~ /\*\//) block=0
-        next
+      line = $0
+      out = ""
+      in_string = 0
+      escaped = 0
+      i = 1
+      n = length(line)
+      while (i <= n) {
+        c = substr(line, i, 1)
+        pair = substr(line, i, 2)
+        if (block) {
+          if (pair == "*/") { block = 0; i += 2 } else { i++ }
+          continue
+        }
+        if (in_string) {
+          out = out c
+          if (escaped) {
+            escaped = 0
+          } else if (c == "\\") {
+            escaped = 1
+          } else if (c == "\"") {
+            in_string = 0
+          }
+          i++
+          continue
+        }
+        if (pair == "//") break
+        if (pair == "/*") { block = 1; i += 2; continue }
+        if (c == "\"") in_string = 1
+        out = out c
+        i++
       }
-      if (line ~ /^[[:space:]]*\/\*/) {
-        if (line !~ /\*\//) block=1
-        next
-      }
-      if (line ~ /^[[:space:]]*\/\//) next
-      print line
+      if (out !~ /^[[:space:]]*$/ || line ~ /^[[:space:]]*$/) print out
     }
-  ' "$stream_json_input" |
-    sed -e ':a; s:/\*[^*]*\*[^/]*\*/::g; ta' \
-        -e 's/[[:space:]]\{1,\}\/\/.*$//'
+  ' "$stream_json_input"
 }
 
 file_mode() {
