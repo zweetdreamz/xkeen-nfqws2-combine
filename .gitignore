@@ -36,5 +36,4 @@ tests/.generated/
 .coverage
 .coverage.*
 htmlcov/
-.pytest_cache/
 node_modules/

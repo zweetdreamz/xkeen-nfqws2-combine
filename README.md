@@ -154,7 +154,12 @@ sh rollback-to-baseline.sh
 Откат работает и после `opkg upgrade` отслеживаемых пакетов
 (`ca-certificates`, `jq`, `wget-ssl`, `wget-nossl`, `nfqws2-keenetic`): opkg
 не умеет ставить старую версию, поэтому расхождение версий выводится как
-`WARNING`, а пакет остаётся новым.
+`WARNING`, а пакет остаётся новым. Если обновлён `nfqws2-keenetic`, из снимка
+возвращаются только `nfqws2.conf`, `lists`, `blobs`, `imported-profiles` и
+`profile-versions`; Lua-скрипты, `S51nfqws2` и `100-nfqws2.sh` остаются от
+установленного пакета: Lua должен совпадать с бинарником
+(`NFQWS2_COMPAT_VER`), иначе nfqws2 не запустится. Откат импорта профилей
+всегда возвращает только эти данные.
 
 Обновление nfqws2 от 20.10.2026 имеет отдельный rollback-пакет 1.2.4 и копию
 профилей в `/opt/etc/nfqws2-update-backups`. Путь последней копии записан в

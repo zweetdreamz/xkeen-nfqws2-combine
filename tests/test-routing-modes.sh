@@ -626,18 +626,36 @@ assert_mode zapret zapret vless
 # opkg cannot downgrade, so a package upgraded after the snapshot must only
 # produce a warning. It used to fail the restore, and the automatic rollback
 # then restored the rescue snapshot, silently undoing the requested rollback.
+# The upgrade also replaces package files: Lua scripts must match the new
+# binary (NFQWS2_COMPAT_VER), so the restore keeps them and the new init and
+# netfilter scripts, and brings back only nfqws2 configuration and lists.
 apply_mode zapret vless
 apply_mode vless zapret
 printf '%s\n' '2.0-upgraded' > "$ROOT/opkg-version"
+mkdir -p "$ROOT/opt/etc/nfqws2/lua"
+printf '%s\n' 'NFQWS2_COMPAT_VER_REQUIRED=6' > "$ROOT/opt/etc/nfqws2/lua/zapret-lib.lua"
+printf '%s\n' 'package default' > "$ROOT/opt/etc/nfqws2/nfqws2.conf-opkg"
+printf '%s\n' '# upgraded init' >> "$ROOT/opt/etc/init.d/S51nfqws2"
+init_hash="$(sha256sum "$ROOT/opt/etc/init.d/S51nfqws2" | awk '{print $1}')"
 rollback_output="$(run_tool --rollback-latest --yes-router 2>&1)"
-rm -f "$ROOT/opkg-version"
 printf '%s\n' "$rollback_output" |
   grep -Fq 'WARNING: nfqws2-keenetic version is 2.0-upgraded; snapshot has 1.0-test.'
+printf '%s\n' "$rollback_output" |
+  grep -Fq 'Restoring nfqws2 configuration, lists and blobs only; package files are kept.'
 if printf '%s\n' "$rollback_output" | grep -Fq 'automatic rollback'; then
   echo "ERROR: package drift triggered an automatic rollback" >&2
   exit 1
 fi
 assert_mode zapret zapret vless
+grep -Fqx 'NFQWS2_COMPAT_VER_REQUIRED=6' "$ROOT/opt/etc/nfqws2/lua/zapret-lib.lua"
+[ -f "$ROOT/opt/etc/nfqws2/nfqws2.conf-opkg" ]
+[ "$(sha256sum "$ROOT/opt/etc/init.d/S51nfqws2" | awk '{print $1}')" = "$init_hash" ]
+# Without drift the snapshot is restored as a whole, as before.
+rm -f "$ROOT/opkg-version"
+apply_mode vless zapret
+run_tool --rollback-latest --yes-router >/dev/null
+assert_mode zapret zapret vless
+grep -Fqx 'NFQWS2_COMPAT_VER_REQUIRED=6' "$ROOT/opt/etc/nfqws2/lua/zapret-lib.lua"
 
 # The wrappers change routes only: wide Voice ports and the legacy UDP
 # strategy must survive a switch of any service, and --narrow-udp resets the
@@ -758,9 +776,12 @@ grep -Fqx 'nfqws-init:restart' "$ROOT/nfqws-init.log"
 grep -Fq -- '--lua-desync=fake:blob=youtube_quic:repeats=11' "$nfqws_file"
 [ "$(find "$ROOT/opt/etc/nfqws2/profile-versions/youtube" -type f | wc -l | tr -d '[:space:]')" = "2" ]
 
+# A package upgrade after the import snapshot: its Lua scripts stay.
+printf '%s\n' 'NFQWS2_COMPAT_VER_REQUIRED=7' > "$ROOT/opt/etc/nfqws2/lua/zapret-lib.lua"
 : > "$ROOT/xkeen-init.log"
 : > "$ROOT/nfqws-init.log"
 run_tool --rollback-import --yes-router >/dev/null
+grep -Fqx 'NFQWS2_COMPAT_VER_REQUIRED=7' "$ROOT/opt/etc/nfqws2/lua/zapret-lib.lua"
 [ ! -s "$ROOT/xkeen-init.log" ]
 grep -Fq 'nfqws-init:stop' "$ROOT/nfqws-init.log"
 grep -Fq 'nfqws-init:start' "$ROOT/nfqws-init.log"

@@ -423,6 +423,15 @@ sh /opt/etc/nfqws2-update-backups/20261020-220034-1.2.4/rollback.sh
 ожидается краткий перерыв обработки трафика. При обновлении opkg может
 оставить рядом штатный `nfqws2.conf-opkg`; активным остаётся прежний конфиг.
 
+Снимки управляющего скрипта, сделанные до обновления (в том числе baseline),
+остаются рабочими: `--rollback-latest`, `--rollback-snapshot` и
+`rollback-to-baseline.sh` видят, что версия `nfqws2-keenetic` изменилась, и
+возвращают только данные (`nfqws2.conf`, `lists`, `blobs`,
+`imported-profiles`, `profile-versions`). Lua-скрипты, `S51nfqws2` и
+`100-nfqws2.sh` остаются от 1.3.1: Lua 1.2.4 с ядром 1.3.1 не запускается
+(`Incompatible NFQWS2_COMPAT_VER`). Версию пакета возвращает только
+`rollback.sh` из `/opt/etc/nfqws2-update-backups`.
+
 ## 9. Типовые проблемы
 
 | Симптом | Что проверить |

@@ -1927,10 +1927,48 @@ restore_packages() {
   return "$restore_package_errors"
 }
 
+# nfqws2 data that profiles and routes change. Everything else under
+# /opt/etc/nfqws2 (lua/, nfqws2.conf-opkg...) belongs to the package.
+NFQWS_DATA_ITEMS="nfqws2.conf lists blobs imported-profiles profile-versions"
+
+# restore_nfqws_data SOURCE_DIR TARGET_DIR: replace only the data items, so
+# the installed package's Lua scripts stay matched to its binary.
+restore_nfqws_data() {
+  for nfqws_item in $NFQWS_DATA_ITEMS; do
+    if path_exists "$2/$nfqws_item"; then
+      rm -rf "${2:?}/$nfqws_item" || return 1
+    fi
+    if path_exists "$1/$nfqws_item"; then
+      cp -a "$1/$nfqws_item" "$2/$nfqws_item" || return 1
+    fi
+  done
+}
+
+# Prints the nfqws2-keenetic version a snapshot recorded when the installed
+# package differs from it (opkg upgraded after the snapshot), else nothing.
+nfqws_package_drift() {
+  drift_snapshot_version="$(
+    awk -F '\t' '$1 == "nfqws2-keenetic" && $2 == "PRESENT" { print $3 }' "$1/PACKAGES.tsv"
+  )"
+  drift_current_version="$(package_version nfqws2-keenetic || true)"
+  if [ -n "$drift_snapshot_version" ] && [ -n "$drift_current_version" ] &&
+     [ "$drift_snapshot_version" != "$drift_current_version" ]; then
+    printf '%s\n' "$drift_snapshot_version"
+  fi
+}
+
 restore_files() {
   restore_dir="$1"
   restore_scope="$(snapshot_scope "$restore_dir")" || return 1
   restore_file_errors=0
+  # The Lua scripts must match the nfqws2 binary (NFQWS2_COMPAT_VER), and the
+  # binary is not part of a snapshot. After a package upgrade only the data is
+  # restored; the package's own files stay at the installed version.
+  restore_nfqws_drift="$(nfqws_package_drift "$restore_dir")"
+  if [ -n "$restore_nfqws_drift" ]; then
+    echo "nfqws2-keenetic $(package_version nfqws2-keenetic) is installed; snapshot has $restore_nfqws_drift."
+    echo "Restoring nfqws2 configuration, lists and blobs only; package files are kept."
+  fi
   managed_paths "$restore_scope" | while IFS= read -r restore_logical; do
     restore_record="$(grep -F "${restore_logical}|" "$restore_dir/MANIFEST" | sed -n '1p')"
     if [ -z "$restore_record" ]; then
@@ -1940,6 +1978,23 @@ restore_files() {
     restore_presence="${restore_record#*|}"
     restore_actual="$(root_path "$restore_logical")"
     restore_source="$restore_dir/files$restore_logical"
+
+    if [ -n "$restore_nfqws_drift" ]; then
+      case "$restore_logical" in
+        /opt/etc/init.d/S51nfqws2|/opt/etc/ndm/netfilter.d/100-nfqws2.sh)
+          continue
+          ;;
+        /opt/etc/nfqws2)
+          if [ "$restore_presence" = "PRESENT" ] && [ -d "$restore_actual" ]; then
+            restore_nfqws_data "$restore_source" "$restore_actual" || {
+              echo "ERROR: cannot restore nfqws2 data: $restore_actual" >&2
+              exit 1
+            }
+            continue
+          fi
+          ;;
+      esac
+    fi
 
     if path_exists "$restore_actual"; then
       rm -rf "$restore_actual" || {
@@ -2183,10 +2238,19 @@ restore_nfqws_import_snapshot() {
       return 1
       ;;
   esac
-  [ ! -e "$restore_nfqws_dir" ] || rm -rf "$restore_nfqws_dir"
-  if [ "$restore_import_present" = "1" ]; then
-    mkdir -p "$(dirname "$restore_nfqws_dir")"
-    cp -a "$restore_import_dir/nfqws2" "$restore_nfqws_dir"
+  # Profile operations change only nfqws2 data. Package files (lua/) are
+  # kept: the package may have been upgraded since this snapshot.
+  if [ "$restore_import_present" = "1" ] && [ -d "$restore_nfqws_dir" ]; then
+    restore_nfqws_data "$restore_import_dir/nfqws2" "$restore_nfqws_dir" || {
+      echo "ERROR: cannot restore nfqws2 data: $restore_nfqws_dir" >&2
+      return 1
+    }
+  else
+    [ ! -e "$restore_nfqws_dir" ] || rm -rf "$restore_nfqws_dir"
+    if [ "$restore_import_present" = "1" ]; then
+      mkdir -p "$(dirname "$restore_nfqws_dir")"
+      cp -a "$restore_import_dir/nfqws2" "$restore_nfqws_dir"
+    fi
   fi
 
   if [ "$restore_import_running" = "1" ]; then

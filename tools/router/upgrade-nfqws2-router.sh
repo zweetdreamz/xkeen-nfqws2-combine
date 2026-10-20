@@ -48,6 +48,7 @@ case "${1:-}" in
     "$STAGE/root/opt/tmp/nfqws2_binary/nfqws2-mipsel" --version
     (
       set -- noop
+      # shellcheck source=/dev/null
       . "$INIT"
       args="$(_startup_args | sed "s#/opt/etc/nfqws2/lua/#$STAGE/root/opt/etc/nfqws2/lua/#g")"
       "$STAGE/root/opt/tmp/nfqws2_binary/nfqws2-mipsel" --dry-run --fastpath-workaround=auto $args

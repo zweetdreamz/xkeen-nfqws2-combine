@@ -42,8 +42,10 @@ sh set-service-route.sh telegram unmanaged --core auto --wan-interface eth3 --ye
 - Порты MTProto: TCP 80, 443, 5222. Если `port_proxying.lst` XKeen
   ограничен, проект добавляет в свой блок `5222`, пока Telegram управляется.
 
-`tests/test_telegram_lists.py` сверяет списки в `config/` с `.dat` из
-каталога `dat/`; после обновления `.dat` списки нужно обновить вместе с ним.
+`tests/test_telegram_lists.py` сверяет списки в `config/` с `.dat`. Файлы
+`.dat` в Git не хранятся: тест ищет их в `$KD_DAT_DIR`, в локальном `dat/`
+или в `/opt/etc/xray/dat` на роутере и без них пропускает сверку. После
+обновления `.dat` списки нужно обновить вместе с ним.
 
 ## Xray
 
