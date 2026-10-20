@@ -9,6 +9,7 @@ mkdir -p "$APP_DIR"
 
 cat > "$APP_DIR/app.py" <<'PYEOF'
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import contextlib
 import hashlib
 import importlib.util
 import ipaddress
@@ -64,7 +65,9 @@ ROUTE_STATE = ROUTE_JOB_DIR / "state.json"
 ROUTE_PID = ROUTE_JOB_DIR / "worker.pid"
 ROUTE_LOG = ROUTE_JOB_DIR / "process.log"
 ROUTE_APPLY_LOG = ROUTE_JOB_DIR / "apply.log"
-ROUTE_START_LOCK = threading.Lock()
+# Held while any background job (route, tuner, diagnostics) is being started,
+# from its "nothing else is running" checks until its PID file is written.
+JOB_START_LOCK = threading.Lock()
 ROUTE_HISTORY_DIR = Path("/opt/etc/xkeen-web/history")
 SNAPSHOT_DIR = Path("/opt/etc/keenetic-discord-nfqws2/snapshots")
 FLOWSEAL_UPDATE_STATE = Path("/opt/etc/xkeen-web/flowseal-update.json")
@@ -1285,6 +1288,17 @@ def launch_route_worker(state, worker_args):
     return state
 
 
+@contextlib.contextmanager
+def job_start_guard():
+    """Serialize job starts; a second start fails fast instead of waiting."""
+    if not JOB_START_LOCK.acquire(blocking=False):
+        raise RuntimeError("другое задание уже запускается; повторите через несколько секунд")
+    try:
+        yield
+    finally:
+        JOB_START_LOCK.release()
+
+
 def ensure_route_job_available():
     if tuner_active():
         raise RuntimeError("маршруты нельзя менять во время подбора")
@@ -1296,7 +1310,7 @@ def ensure_route_job_available():
 
 def start_route_job(service, mode):
     service, mode = validate_route(service, mode)
-    with ROUTE_START_LOCK:
+    with job_start_guard():
         ensure_route_job_available()
         before = current_routes_fast()
         requested = dict(before)
@@ -1325,7 +1339,7 @@ def start_route_job(service, mode):
 
 
 def start_history_rollback(history_id):
-    with ROUTE_START_LOCK:
+    with job_start_guard():
         ensure_route_job_available()
         source = read_history_item(history_id)
         if source.get("status") != "completed":
@@ -1684,8 +1698,17 @@ def clear_previous_tuner_job():
 
 
 def start_tuner_job(settings):
+    with job_start_guard():
+        return launch_tuner_job(settings)
+
+
+def launch_tuner_job(settings):
     if tuner_active():
         raise RuntimeError("подбор уже выполняется")
+    if route_active():
+        raise RuntimeError("сначала завершите переключение маршрута")
+    if diagnostic_active():
+        raise RuntimeError("сначала завершите диагностику")
     status_payload = run_command(
         ["/bin/sh", str(ENGINE), "--status"],
         timeout=40,
@@ -1813,6 +1836,11 @@ def clear_previous_diagnostic_job():
 def start_diagnostic_job(kind):
     if kind != "health":
         raise ValueError("Standard/DPI tests выполняются только в браузере")
+    with job_start_guard():
+        return launch_diagnostic_job(kind)
+
+
+def launch_diagnostic_job(kind):
     if diagnostic_active():
         raise RuntimeError("диагностика уже выполняется")
     if tuner_active():

@@ -1480,6 +1480,73 @@ class TunerSourceTests(PanelTestCase):
         self.assertNotIn("--source-file", popen.call_args.args[0])
 
 
+class JobStartRaceTests(PanelTestCase):
+    """A job start must not overlap with another start still in progress."""
+
+    def setUp(self):
+        super().setUp()
+        tuner = self.root / "tuner"
+        diagnostics = self.root / "diagnostics"
+        self.patch(
+            TUNER_JOB_DIR=tuner,
+            TUNER_PID=tuner / "panel-launch.pid",
+            TUNER_STATE=tuner / "state.json",
+            DIAGNOSTIC_JOB_DIR=diagnostics,
+            DIAGNOSTIC_PID=diagnostics / "panel-launch.pid",
+            DIAGNOSTIC_STATE=diagnostics / "state.json",
+            DIAGNOSTIC_LOG=diagnostics / "process.log",
+            tuner_active=lambda: False,
+            diagnostic_active=lambda: False,
+            route_active=lambda: False,
+        )
+
+    def test_starts_are_refused_while_a_tuner_start_waits_for_status(self):
+        status_requested = threading.Event()
+        release_status = threading.Event()
+
+        def slow_status(*_args, **_kwargs):
+            status_requested.set()
+            release_status.wait(5)
+            return {"ok": True, "code": 0, "output": "youtube_route=zapret\n"}
+
+        settings = {
+            "service": "youtube",
+            "mix_level": "safe",
+            "max_candidates": 4,
+            "client_ip": "",
+            "search_seed": 1,
+            "source_file": None,
+        }
+        process = mock.Mock(pid=4321)
+        errors = []
+        real_thread = threading.Thread  # the panel's reaper thread is mocked below
+
+        def first_start():
+            try:
+                self.ns["start_tuner_job"](settings)
+            except Exception as exc:  # surfaced through the assertion below
+                errors.append(exc)
+
+        with mock.patch.dict(self.ns, {"run_command": slow_status}), \
+                mock.patch.object(self.ns["subprocess"], "Popen", return_value=process) as popen, \
+                mock.patch.object(self.ns["threading"], "Thread"):
+            worker = real_thread(target=first_start)
+            worker.start()
+            self.assertTrue(status_requested.wait(5))
+            try:
+                with self.assertRaisesRegex(RuntimeError, "уже запускается"):
+                    self.ns["start_tuner_job"](settings)
+                with self.assertRaisesRegex(RuntimeError, "уже запускается"):
+                    self.ns["start_diagnostic_job"]("health")
+                with self.assertRaisesRegex(RuntimeError, "уже запускается"):
+                    self.ns["start_route_job"]("youtube", "vpn")
+            finally:
+                release_status.set()
+                worker.join(5)
+        self.assertEqual(errors, [])
+        self.assertEqual(popen.call_count, 1)
+
+
 class ProfileStoreTests(PanelTestCase):
     def setUp(self):
         super().setUp()
