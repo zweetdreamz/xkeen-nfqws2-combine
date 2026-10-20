@@ -10,7 +10,8 @@ XKeen/Xray/Mihomo. Путь пакета отдельно разобран в
 Discord, TCP/TLS и QUIC), Discord Voice (Voice/STUN UDP-порты), YouTube и
 Telegram. Telegram дополнительно может быть `unmanaged`: тогда проект не
 добавляет для него правил. Правила Telegram помечены
-`"ruleTag": "kdn-telegram"`, проект меняет только их; outbound —
+`ruleTag` `kdn-telegram-domain` и `kdn-telegram-ip` (уникальные: Xray не
+принимает повторяющиеся теги), проект меняет только их; outbound —
 `04_telegram_nfqws2_outbound.json` (`telegram-direct`), порт 5222 добавляется
 в ограниченный `port_proxying.lst`. Подробно — [TELEGRAM.md](TELEGRAM.md).
 

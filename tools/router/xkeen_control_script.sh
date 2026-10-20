@@ -1146,7 +1146,7 @@ def config_health():
     telegram_profile = "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list" in nfqws_text
     telegram_rules = [
         rule for rule in rules
-        if isinstance(rule, dict) and rule.get("ruleTag") == "kdn-telegram"
+        if isinstance(rule, dict) and str(rule.get("ruleTag", "")).startswith("kdn-telegram")
     ]
     if telegram == "unmanaged":
         telegram_ok = not telegram_rules and not telegram_profile

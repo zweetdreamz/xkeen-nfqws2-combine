@@ -49,17 +49,20 @@ sh set-service-route.sh telegram unmanaged --core auto --wan-interface eth3 --ye
 
 ## Xray
 
-Оба правила проекта помечены `"ruleTag": "kdn-telegram"` и ставятся сразу
-после правил Discord и YouTube:
+Правила проекта помечены `ruleTag` `kdn-telegram-domain` и `kdn-telegram-ip`
+и ставятся сразу после правил Discord и YouTube. Теги разные: Xray не
+запускается, если два правила имеют одинаковый `ruleTag`
+(`duplicate ruleTag`).
 
 ```json
-{"type":"field","ruleTag":"kdn-telegram","inboundTag":["redirect","tproxy"],
+{"type":"field","ruleTag":"kdn-telegram-domain","inboundTag":["redirect","tproxy"],
  "outboundTag":"telegram-direct","domain":["ext:geosite_v2fly.dat:telegram"]}
-{"type":"field","ruleTag":"kdn-telegram","inboundTag":["redirect","tproxy"],
+{"type":"field","ruleTag":"kdn-telegram-ip","inboundTag":["redirect","tproxy"],
  "outboundTag":"telegram-direct","ip":["ext:geoip_v2fly.dat:telegram"]}
 ```
 
-Каждый apply удаляет только правила с этим `ruleTag` и строит их заново.
+Каждый apply удаляет только правила, чей `ruleTag` начинается с
+`kdn-telegram`, и строит их заново.
 Собственные правила пользователя для Telegram (например,
 `domain:web.telegram.org` в proxy) не меняются; так как правила проекта
 стоят выше, при `direct`/`zapret`/`vpn` выигрывают они. Outbound

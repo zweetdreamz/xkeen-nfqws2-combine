@@ -464,6 +464,11 @@ assert_mode() {
 
   assert_telegram "$expected_telegram"
 
+  # Xray refuses to start when two rules share a ruleTag.
+  jq -e '[.routing.rules[]? | .ruleTag? // empty] | length == (unique | length)' \
+    "$routing_file" >/dev/null
+  xray_config_test
+
   sh -n "$nfqws_file"
   grep -Fqx "# Active routes: DiscordTCP=$expected_tcp, DiscordVoice=$expected_voice, YouTube=$expected_youtube, Telegram=$expected_telegram." "$nfqws_file"
 
@@ -487,6 +492,36 @@ assert_mode() {
 
 telegram_outbound_file="$ROOT/opt/etc/xray/configs/04_telegram_nfqws2_outbound.json"
 
+# Optional check with a real Xray binary: KD_TEST_XRAY_BIN=/path/to/xray and
+# KD_TEST_XRAY_ASSETS=dir with geosite_v2fly.dat, geoip_v2fly.dat, zkeen.dat
+# and zkeenip.dat. The fixture inbounds/outbounds are placeholders, so valid
+# ones replace them in a copy; the generated routing and outbounds are tested.
+xray_config_test() {
+  [ -n "${KD_TEST_XRAY_BIN:-}" ] || return 0
+  xray_test_dir="$FIXTURE/xray-test"
+  rm -rf "$xray_test_dir"
+  cp -a "$ROOT/opt/etc/xray/configs" "$xray_test_dir"
+  cat > "$xray_test_dir/03_inbounds.json" <<'EOF'
+{"inbounds":[
+ {"tag":"redirect","port":61219,"protocol":"dokodemo-door","settings":{"network":"tcp","followRedirect":true},"sniffing":{"enabled":true,"routeOnly":true,"destOverride":["http","tls"]}},
+ {"tag":"tproxy","port":61219,"protocol":"dokodemo-door","settings":{"network":"udp","followRedirect":true},"streamSettings":{"sockopt":{"tproxy":"tproxy"}},"sniffing":{"enabled":true,"routeOnly":true,"destOverride":["quic"]}}
+]}
+EOF
+  cat > "$xray_test_dir/04_outbounds.json" <<'EOF'
+{"outbounds":[
+ {"tag":"vless-reality","protocol":"vless","settings":{"vnext":[{"address":"203.0.113.10","port":443,"users":[{"id":"6f1c7e0a-6b1a-4c35-9a52-7a3f2b8e9c10","encryption":"none"}]}]}},
+ {"tag":"direct","protocol":"freedom"},
+ {"tag":"block","protocol":"blackhole"}
+]}
+EOF
+  XRAY_LOCATION_ASSET="$KD_TEST_XRAY_ASSETS" \
+    "$KD_TEST_XRAY_BIN" run -test -confdir "$xray_test_dir" > "$FIXTURE/xray-test.log" 2>&1 || {
+    echo "ERROR: real Xray rejects the generated configuration:" >&2
+    cat "$FIXTURE/xray-test.log" >&2
+    exit 1
+  }
+}
+
 assert_telegram() {
   # Lists are always installed; they are inert without the profile.
   [ "$(ls -l "$ROOT/opt/etc/nfqws2/lists/kdn-telegram.list" | awk '{print $1}')" = "-rw-r--r--" ]
@@ -501,19 +536,19 @@ assert_telegram() {
 
   case "$1" in
     unmanaged)
-      jq -e 'any(.routing.rules[]?; .ruleTag? == "kdn-telegram") | not' "$routing_file" >/dev/null
+      jq -e 'any(.routing.rules[]?; ((.ruleTag? // "") | tostring | startswith("kdn-telegram"))) | not' "$routing_file" >/dev/null
       [ ! -e "$telegram_outbound_file" ]
       ;;
     vless)
       jq -e '
-        ([.routing.rules[]? | select(.ruleTag? == "kdn-telegram") | .outboundTag]
+        ([.routing.rules[]? | select(((.ruleTag? // "") | tostring | startswith("kdn-telegram"))) | .outboundTag]
           == ["vless-reality", "vless-reality"])
       ' "$routing_file" >/dev/null
       [ ! -e "$telegram_outbound_file" ]
       ;;
     direct|zapret)
       jq -e '
-        [.routing.rules[]? | select(.ruleTag? == "kdn-telegram")] as $rules
+        [.routing.rules[]? | select(((.ruleTag? // "") | tostring | startswith("kdn-telegram")))] as $rules
         | ($rules | map(.outboundTag)) == ["telegram-direct", "telegram-direct"]
         and ($rules[0].domain == ["ext:geosite_v2fly.dat:telegram"])
         and ($rules[1].ip == ["ext:geoip_v2fly.dat:telegram"])
@@ -685,6 +720,13 @@ assert_mode zapret zapret vless
 # Telegram: opt-in, kept across other services' switches, and removable.
 # A restrictive port list exercises the XKeen 5222 handling.
 printf '%s\n' '# restricted fixture' 443 > "$ROOT/opt/etc/xkeen/port_proxying.lst"
+# Rules with the old shared ruleTag "kdn-telegram" (Xray refuses duplicate
+# tags) are recognised by the prefix and replaced by uniquely tagged ones.
+jq '.routing.rules = [
+      {"type":"field","ruleTag":"kdn-telegram","outboundTag":"direct","domain":["ext:geosite_v2fly.dat:telegram"]},
+      {"type":"field","ruleTag":"kdn-telegram","outboundTag":"direct","ip":["ext:geoip_v2fly.dat:telegram"]}
+    ] + .routing.rules' "$routing_file" > "$routing_file.tmp"
+mv "$routing_file.tmp" "$routing_file"
 run_service_tool telegram zapret --yes-router --core xray >/dev/null
 assert_mode zapret zapret vless zapret
 run_service_tool youtube direct --yes-router --core xray >/dev/null

@@ -1935,8 +1935,8 @@ class ConfigHealthTests(PanelTestCase):
 
     def test_telegram_route_is_checked(self):
         managed = lambda outbound: [  # noqa: E731
-            {"ruleTag": "kdn-telegram", "outboundTag": outbound, "domain": ["ext:geosite_v2fly.dat:telegram"]},
-            {"ruleTag": "kdn-telegram", "outboundTag": outbound, "ip": ["ext:geoip_v2fly.dat:telegram"]},
+            {"ruleTag": "kdn-telegram-domain", "outboundTag": outbound, "domain": ["ext:geosite_v2fly.dat:telegram"]},
+            {"ruleTag": "kdn-telegram-ip", "outboundTag": outbound, "ip": ["ext:geoip_v2fly.dat:telegram"]},
         ]
         user_rule = {"outboundTag": "direct", "domain": ["domain:t.me"]}
         cases = (

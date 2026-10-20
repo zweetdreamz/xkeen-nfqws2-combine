@@ -2589,7 +2589,7 @@ status_report() {
      telegram_routing="$(find_xray_routing_file 2>/dev/null)"; then
     telegram_outbound="$(
       strict_json_stream "$telegram_routing" |
-        jq -r '[.routing.rules[]? | select(.ruleTag? == "kdn-telegram") | .outboundTag]
+        jq -r '[.routing.rules[]? | select(((.ruleTag? // "") | tostring | startswith("kdn-telegram"))) | .outboundTag]
                | if length > 0 then .[0] else "" end' 2>/dev/null || true
     )"
     case "$telegram_outbound" in
@@ -3089,7 +3089,7 @@ patch_xray() {
         "ext:geosite_v2fly.dat:youtube"
       ] | unique) as $youtube_domains
     | ($original_rules | map(
-        select(.ruleTag? != "kdn-telegram")
+        select(((.ruleTag? // "") | tostring | startswith("kdn-telegram")) | not)
         | select((managed_discord_rule or managed_youtube_rule) | not)
         | ((.domain | type) == "array" and (.domain | length) > 0) as $had_domain
         | ((.ip | type) == "array" and (.ip | length) > 0) as $had_ip
@@ -3140,7 +3140,8 @@ patch_xray() {
     | (if $youtube_mode != "vless" then "youtube-direct"
        else $proxy_outbound
        end) as $youtube_outbound
-    # Telegram rules carry ruleTag "kdn-telegram": only they are replaced or
+    # Telegram rules carry ruleTags starting with "kdn-telegram" (Xray needs
+    # each ruleTag to be unique): only they are replaced or
     # removed, other Telegram rules of the user stay (ours come first).
     | (if $telegram_mode == "unmanaged" then []
        else
@@ -3149,14 +3150,14 @@ patch_xray() {
          | [
              {
                "type": "field",
-               "ruleTag": "kdn-telegram",
+               "ruleTag": "kdn-telegram-domain",
                "inboundTag": ["redirect", "tproxy"],
                "outboundTag": $telegram_outbound,
                "domain": ["ext:geosite_v2fly.dat:telegram"]
              },
              {
                "type": "field",
-               "ruleTag": "kdn-telegram",
+               "ruleTag": "kdn-telegram-ip",
                "inboundTag": ["redirect", "tproxy"],
                "outboundTag": $telegram_outbound,
                "ip": ["ext:geoip_v2fly.dat:telegram"]

@@ -303,7 +303,8 @@ LAN-устройства. Проверка состояния служб ост�
 ## Что именно настраивается
 
 - отдельные правила Xray/Mihomo для Discord TCP, Discord Voice, YouTube и
-  Telegram (правила Telegram помечены `ruleTag: kdn-telegram`);
+  Telegram (правила Telegram помечены `ruleTag` `kdn-telegram-domain` и
+  `kdn-telegram-ip`);
 - разные hostlist и nfqws2-профили сервисов;
 - TCP/TLS, QUIC и Discord Voice/STUN;
 - узкий UDP-диапазон по умолчанию, явный `--wide-udp` и возврат
@@ -375,7 +376,10 @@ TEST_SHELL="busybox sh" sh tests/run-all.sh
 `test-routing-modes.sh` нужны штатные blobs nfqws2. На роутере они берутся из
 `/opt`, в остальных случаях — из `NFQWS_TEST_BLOB_SOURCE`, иначе `run-all.sh`
 скачивает их через `tests/fetch-nfqws2-blobs.sh`: закреплённый commit
-zapret2 и проверка SHA-256. Отдельно:
+zapret2 и проверка SHA-256. Если задать `KD_TEST_XRAY_BIN` (бинарник
+Xray) и `KD_TEST_XRAY_ASSETS` (каталог с `geosite_v2fly.dat`,
+`geoip_v2fly.dat`, `zkeen.dat`, `zkeenip.dat`), тест проверяет каждую
+сгенерированную конфигурацию настоящим `xray run -test`. Отдельно:
 
 ```sh
 sh tests/fetch-nfqws2-blobs.sh /tmp/nfqws2-blobs
