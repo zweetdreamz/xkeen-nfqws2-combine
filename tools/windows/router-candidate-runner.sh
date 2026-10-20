@@ -75,16 +75,12 @@ trap 'restore_service; exit 130' HUP INT TERM
 
 case "$SERVICE" in
   youtube)
-    BLOB_ARGS="--blob=tls_clienthello:@$(root_path /opt/etc/nfqws2/blobs/tls_clienthello.bin)
---blob=youtube_quic:@$(root_path /opt/etc/nfqws2/blobs/quic_initial.bin)"
     TUNER_TCP_PORTS="443"
     ;;
   discord-tcp)
-    BLOB_ARGS="--blob=tls_clienthello:@$(root_path /opt/etc/nfqws2/blobs/tls_clienthello.bin)"
     TUNER_TCP_PORTS="80,443,2053,2083,2087,2096,8443"
     ;;
   discord-voice)
-    BLOB_ARGS="--blob=discord_udp:@$(root_path /opt/etc/nfqws2/blobs/discord_udp.bin)"
     TUNER_UDP_PORTS="443,3478:3481,5349,19294:19344,50000:50100"
     ;;
   *)
@@ -127,6 +123,7 @@ if [ "$SERVICE" = "discord-tcp" ] || [ "$SERVICE" = "discord-voice" ]; then
 fi
 
 set -- noop
+# shellcheck source=/dev/null # the router's nfqws2 init script
 . "$NFQWS_INIT" >/dev/null 2>&1
 command -v _startup_args >/dev/null 2>&1 || {
   emit "FATAL|init-does-not-expose-startup-args"
@@ -171,6 +168,8 @@ start_candidate() {
 
 candidate_runtime_args() (
   # Subshell prevents one candidate from becoming the base for the next.
+  # The NFQWS_ARGS* variables are read by the sourced _startup_args.
+  # shellcheck disable=SC2034
   case "$SERVICE" in
     discord-voice) NFQWS_ARGS_UDP="$candidate_args" ;;
     discord-tcp) NFQWS_ARGS="$candidate_args" ;;

@@ -1374,7 +1374,7 @@ class TunerAndDiagnosticJobTests(PanelTestCase):
         settings = {"service": "youtube", "mix_level": "safe", "max_candidates": 8, "client_ip": "", "search_seed": 1}
         for payload, message in cases:
             with self.subTest(payload=payload):
-                with mock.patch.dict(self.ns, {"run_command": lambda *_a, **_k: payload}):
+                with mock.patch.dict(self.ns, {"run_command": lambda *_a, payload=payload, **_k: payload}):
                     with self.assertRaisesRegex(RuntimeError, message):
                         self.ns["start_tuner_job"](settings)
         self.assertFalse(self.tuner.exists())

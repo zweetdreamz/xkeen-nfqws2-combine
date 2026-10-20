@@ -930,7 +930,6 @@ def mixed_candidates(
 
     for candidate in exact:
         base, source_fake, source_split = split_components(candidate)
-        suffix = tuple(token for token in candidate.args if token == "--new")
         if service == "youtube":
             quic_start = candidate.args.index("--new") if "--new" in candidate.args else -1
             suffix = candidate.args[quic_start:] if quic_start >= 0 else ("--new", *NATIVE_QUIC)
@@ -1226,8 +1225,6 @@ def read_source_cache(path: Path) -> tuple[list[SourceFile], str]:
 
 
 def save_source_cache(path: Path, sources: Sequence[SourceFile], commit: str) -> None:
-    import os
-    import tempfile
     data = {"format": 1, "repository": DEFAULT_REPOSITORY, "commit": commit,
             "sources": [{"name": s.name, "text": s.text, "sha": s.sha, "url": s.url,
                          "sha256": hashlib.sha256(s.text.encode("utf-8")).hexdigest()} for s in sources]}

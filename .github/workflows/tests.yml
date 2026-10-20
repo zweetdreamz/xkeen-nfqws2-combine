@@ -38,11 +38,15 @@ jobs:
           TEST_SHELL: ${{ matrix.shell }}
         run: sh tests/run-all.sh --coverage
 
-  shellcheck:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: shellcheck (errors only)
+      - name: shellcheck
         run: |
           find . -name '*.sh' -not -path './.git/*' -print0 |
-            xargs -0 shellcheck -s sh -S error
+            xargs -0 shellcheck -S warning
+      - name: ruff (pyflakes and bugbear)
+        run: |
+          python3 -m pip install ruff
+          ruff check --select F,B,E9 tools tests

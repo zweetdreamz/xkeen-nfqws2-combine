@@ -387,7 +387,6 @@ async function applyVersion(service,id){if(!confirm("Применить верс
 function renderUpdate(d){const root=document.getElementById("updateInfo");root.textContent="";const title=document.createElement("b");title.className=d.status==="error"?"bad":"good";title.textContent=d.status==="up_to_date"?"Актуально":d.status==="downloaded"?"Новые стратегии скачаны":d.status==="error"?"Не удалось обновить":"Нажмите «Проверить обновление»";root.append(title);const detail=document.createElement("div");detail.className="version-meta";detail.textContent=d.error||((d.downloaded_commit?"Версия "+d.downloaded_commit.slice(0,12)+" · файлов: "+d.source_count:"")+(d.checked_utc?" · проверено "+fmtDate(d.checked_utc):""));root.append(detail)}
 async function refreshUpdates(){try{renderUpdate(await api("/api/updates"))}catch(e){document.getElementById("updateInfo").textContent="Ошибка: "+e}}
 async function checkUpdates(){const button=document.getElementById("checkUpdates");button.disabled=true;button.textContent="Проверяю и скачиваю…";try{const d=await api("/api/updates/check",{method:"POST",headers:controlHeaders,body:"{}"});renderUpdate(d);log(d.status==="up_to_date"?"Flowseal: актуально":"Flowseal: скачаны новые стратегии ("+d.source_count+" файлов)");await refreshTunerSources()}catch(e){renderUpdate({status:"error",error:String(e)});log("ошибка обновления Flowseal: "+e)}finally{button.disabled=false;button.textContent="Проверить обновление"}}
-function openTuner(service){document.querySelector('.tab[data-tab="autotune"]').click();document.getElementById("tunerService").value=service;tunerServiceChanged();document.getElementById("startTuner").focus();log("выбран подбор: "+serviceLabel[service]+"; запуск и применение остаются отдельными действиями",true)}
 let tunerSourceList=[];
 function renderTunerSources(){const select=document.getElementById("tunerSource"),service=document.getElementById("tunerService").value,previous=select.value;select.textContent="";const all=document.createElement("option");all.value="";all.textContent="Все файлы и встроенный профиль";select.append(all);tunerSourceList.forEach(item=>{const option=document.createElement("option"),supported=(item.services||[]).includes(service);option.value=item.name;option.textContent=item.name+(supported?"":" — нет профиля для "+serviceLabel[service]);option.disabled=!supported;select.append(option)});const keep=tunerSourceList.find(item=>item.name===previous&&(item.services||[]).includes(service));select.value=keep?previous:""}
 async function refreshTunerSources(){const hint=document.getElementById("tunerSourceHint");try{const d=await api("/api/tuner/sources");tunerSourceList=d.sources||[];renderTunerSources();hint.textContent=d.status==="ready"?"Только выбранный файл: его профили без встроенного; Safe/Extended добавляют вариации параметров этого файла. Commit "+d.commit.slice(0,12)+".":d.status==="error"?"Список файлов недоступен: "+d.error:"Список файлов появится после «Проверить обновление»."}catch(e){hint.textContent="Список файлов недоступен: "+e}}
@@ -423,7 +422,7 @@ document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{doc
 document.querySelectorAll("[data-action]").forEach(b=>b.addEventListener("click",()=>xkeenAction(b.dataset.action)));document.querySelectorAll(".service").forEach(box=>box.querySelectorAll(".mode").forEach(b=>b.addEventListener("click",()=>routeAction(box.dataset.service,b.dataset.mode))));
 document.getElementById("validate").addEventListener("click",validateReport);document.getElementById("applyImport").addEventListener("click",applyImport);document.getElementById("rollbackImport").addEventListener("click",rollbackImport);document.getElementById("clear").addEventListener("click",()=>log("журнал очищен",true));
 document.getElementById("tunerService").addEventListener("change",tunerServiceChanged);document.getElementById("startTuner").addEventListener("click",startTuner);document.getElementById("cancelTuner").addEventListener("click",cancelTuner);document.getElementById("voiceYes").addEventListener("click",()=>voiceVerdict(true));document.getElementById("voiceNo").addEventListener("click",()=>voiceVerdict(false));document.getElementById("applyTunerResult").addEventListener("click",applyTunerResult);
-document.getElementById("refreshHistory").addEventListener("click",refreshHistory);document.getElementById("refreshVersions").addEventListener("click",refreshVersions);document.getElementById("checkUpdates").addEventListener("click",checkUpdates);document.querySelectorAll(".open-tuner").forEach(b=>b.addEventListener("click",()=>openTuner(b.dataset.tunerService)));
+document.getElementById("refreshHistory").addEventListener("click",refreshHistory);document.getElementById("refreshVersions").addEventListener("click",refreshVersions);document.getElementById("checkUpdates").addEventListener("click",checkUpdates);
 document.getElementById("openDiagnostics").addEventListener("click",()=>document.querySelector('.tab[data-tab="diagnostics"]').click());
 document.querySelectorAll(".diag-start").forEach(b=>b.addEventListener("click",()=>startDiagnostic(b.dataset.diagKind)));document.getElementById("cancelDiagnostic").addEventListener("click",cancelDiagnostic);
 log("панель готова",true);tunerServiceChanged();refresh();refreshProfiles();refreshVersions();refreshHistory();refreshUpdates();refreshTunerSources();refreshTuner();refreshDiagnostic();resumeRouteJob();
@@ -938,30 +937,6 @@ def profile_version_path(service, version_id):
     return path, profile
 
 
-def known_flowseal_commits():
-    commits = {}
-    for item in imported_profiles():
-        if not item.get("installed"):
-            continue
-        path = IMPORTED_PROFILE_DIR / f"{item['service']}.json"
-        try:
-            data = safe_json_file(path)
-            commit = data.get("report", {}).get("commit", "")
-            if isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{7,64}", commit):
-                commits[item["service"]] = commit.lower()
-        except (OSError, ValueError, json.JSONDecodeError):
-            pass
-    try:
-        tuner = safe_json_file(TUNER_STATE)
-        commit = tuner.get("commit", "")
-        service = tuner.get("service", "")
-        if service in SERVICES and isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{7,64}", commit):
-            commits.setdefault(service, commit.lower())
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
-    return commits
-
-
 def flowseal_source_module():
     name = "xkeen_flowseal_sources"
     if name not in sys.modules:
@@ -1113,24 +1088,55 @@ def process_alive(pid):
         return True
 
 
-def route_process_alive(pid):
-    if not process_alive(pid):
-        return False
+def read_job_pid(path):
+    """PID recorded by a panel job launcher, or None if missing/invalid."""
     try:
-        command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-    except OSError:
-        return False
-    return b"--route-job" in command and os.fsencode(str(Path(__file__))) in command
-
-
-def route_pid():
-    try:
-        raw = ROUTE_PID.read_text(encoding="ascii").strip()
+        raw = path.read_text(encoding="ascii").strip()
     except (OSError, UnicodeError):
         return None
     if not raw.isdigit() or int(raw) <= 1:
         return None
     return int(raw)
+
+
+def job_command(pid):
+    """Argument list of a live (non-zombie) process, or None."""
+    if not process_alive(pid):
+        return None
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return None
+
+
+def clear_job_files(directory, paths, place="каталоге задания"):
+    """Create the private job directory and remove the previous job's files.
+
+    Only regular files and symlinks are removed; anything else is refused.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
+    for path in paths:
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.exists():
+                raise RuntimeError(f"необычный объект в {place}: {path}")
+        except FileNotFoundError:
+            pass
+
+
+def route_process_alive(pid):
+    command = job_command(pid)
+    return (
+        command is not None
+        and b"--route-job" in command
+        and os.fsencode(str(Path(__file__))) in command
+    )
+
+
+def route_pid():
+    return read_job_pid(ROUTE_PID)
 
 
 def route_active():
@@ -1184,16 +1190,7 @@ def route_status():
 
 
 def clear_previous_route_job():
-    ROUTE_JOB_DIR.mkdir(parents=True, exist_ok=True)
-    os.chmod(ROUTE_JOB_DIR, 0o700)
-    for path in (ROUTE_STATE, ROUTE_PID, ROUTE_LOG, ROUTE_APPLY_LOG):
-        try:
-            if path.is_symlink() or path.is_file():
-                path.unlink()
-            elif path.exists():
-                raise RuntimeError(f"необычный объект в каталоге задания: {path}")
-        except FileNotFoundError:
-            pass
+    clear_job_files(ROUTE_JOB_DIR, (ROUTE_STATE, ROUTE_PID, ROUTE_LOG, ROUTE_APPLY_LOG))
 
 
 def update_route_state(job_id, **changes):
@@ -1534,23 +1531,12 @@ def run_route_job(job_id, operation, subject, target):
 
 
 def tuner_process_alive(pid):
-    if not process_alive(pid):
-        return False
-    try:
-        command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-    except OSError:
-        return False
-    return os.fsencode(str(AUTOTUNER)) in command
+    command = job_command(pid)
+    return command is not None and os.fsencode(str(AUTOTUNER)) in command
 
 
 def tuner_pid():
-    try:
-        raw = TUNER_PID.read_text(encoding="ascii").strip()
-    except (OSError, UnicodeError):
-        return None
-    if not raw.isdigit() or int(raw) <= 1:
-        return None
-    return int(raw)
+    return read_job_pid(TUNER_PID)
 
 
 def tuner_active():
@@ -1673,25 +1659,21 @@ def validate_tuner_request(body):
 
 
 def clear_previous_tuner_job():
-    TUNER_JOB_DIR.mkdir(parents=True, exist_ok=True)
-    os.chmod(TUNER_JOB_DIR, 0o700)
-    for name in (
-        "state.json",
-        "events.log",
-        "result-report.json",
-        "runner.sh",
-        "verdict.txt",
-        "panel-launch.pid",
-        "process.log",
-    ):
-        path = TUNER_JOB_DIR / name
-        try:
-            if path.is_symlink() or path.is_file():
-                path.unlink()
-            elif path.exists():
-                raise RuntimeError(f"необычный объект в каталоге задания: {path}")
-        except FileNotFoundError:
-            pass
+    clear_job_files(
+        TUNER_JOB_DIR,
+        [
+            TUNER_JOB_DIR / name
+            for name in (
+                "state.json",
+                "events.log",
+                "result-report.json",
+                "runner.sh",
+                "verdict.txt",
+                "panel-launch.pid",
+                "process.log",
+            )
+        ],
+    )
 
 
 def start_tuner_job(settings):
@@ -1767,23 +1749,12 @@ def cancel_tuner_job():
 
 
 def diagnostic_process_alive(pid):
-    if not process_alive(pid):
-        return False
-    try:
-        command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-    except OSError:
-        return False
-    return os.fsencode(str(DIAGNOSTICS)) in command
+    command = job_command(pid)
+    return command is not None and os.fsencode(str(DIAGNOSTICS)) in command
 
 
 def diagnostic_pid():
-    try:
-        raw = DIAGNOSTIC_PID.read_text(encoding="ascii").strip()
-    except (OSError, UnicodeError):
-        return None
-    if not raw.isdigit() or int(raw) <= 1:
-        return None
-    return int(raw)
+    return read_job_pid(DIAGNOSTIC_PID)
 
 
 def diagnostic_active():
@@ -1822,16 +1793,11 @@ def diagnostic_status():
 
 
 def clear_previous_diagnostic_job():
-    DIAGNOSTIC_JOB_DIR.mkdir(parents=True, exist_ok=True)
-    os.chmod(DIAGNOSTIC_JOB_DIR, 0o700)
-    for path in (DIAGNOSTIC_STATE, DIAGNOSTIC_PID, DIAGNOSTIC_LOG):
-        try:
-            if path.is_symlink() or path.is_file():
-                path.unlink()
-            elif path.exists():
-                raise RuntimeError(f"необычный объект в каталоге диагностики: {path}")
-        except FileNotFoundError:
-            pass
+    clear_job_files(
+        DIAGNOSTIC_JOB_DIR,
+        (DIAGNOSTIC_STATE, DIAGNOSTIC_PID, DIAGNOSTIC_LOG),
+        place="каталоге диагностики",
+    )
     for path in DIAGNOSTIC_JOB_DIR.glob("payload-*.bin"):
         if re.fullmatch(r"payload-\d+\.bin", path.name) and path.is_file() and not path.is_symlink():
             path.unlink()

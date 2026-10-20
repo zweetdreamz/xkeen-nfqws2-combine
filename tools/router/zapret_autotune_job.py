@@ -35,7 +35,6 @@ LOCK_LOGICAL = "/opt/tmp/keenetic-discord-nfqws2.lock"
 JOB_LOGICAL = "/opt/tmp/xkeen-zapret-tuner"
 NFQWS_CONF_LOGICAL = "/opt/etc/nfqws2/nfqws2.conf"
 RUNNER_TEMPLATE = WINDOWS_DIR / "router-candidate-runner.sh"
-TERMINAL_STATES = {"found", "none", "cancelled", "error"}
 
 
 class JobCancelled(Exception):
@@ -99,7 +98,7 @@ def acquire_project_lock() -> Path:
         if existing_pid and process_alive(existing_pid):
             raise RuntimeError(
                 f"another project operation is active (PID {existing_pid})"
-            )
+            ) from None
         try:
             (lock / "pid").unlink()
         except FileNotFoundError:

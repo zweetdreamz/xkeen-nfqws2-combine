@@ -7,7 +7,6 @@ No network, no root, no real nfqws2 runner: subprocesses are faked.
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import importlib.util
 import io

@@ -2980,6 +2980,20 @@ install_missing_packages() {
   fi
 }
 
+# NFQWS_BASE_ARGS line that registers the Discord Voice fake blob.
+# shellcheck disable=SC2016 # $NFQWS_BASE_ARGS is expanded later by nfqws2.conf.
+DISCORD_UDP_BLOB_BASE_ARGS='NFQWS_BASE_ARGS="$NFQWS_BASE_ARGS
+                 --blob=discord_udp:@/opt/etc/nfqws2/blobs/discord_udp.bin"'
+
+# Copies the checksum-verified Flowseal Discord UDP fake into nfqws2 blobs.
+install_discord_udp_blob() {
+  verify_discord_udp_blob_source
+  mkdir -p "$(dirname "$NFQWS_DISCORD_UDP_BLOB")"
+  blob_tmp="$(make_tmp)"
+  cp "$SOURCE_DISCORD_UDP_BLOB" "$blob_tmp"
+  atomic_replace_file "$NFQWS_DISCORD_UDP_BLOB" "$blob_tmp" 600
+}
+
 patch_nfqws() {
   [ -f "$NFQWS_CONF" ] || {
     echo "ERROR: nfqws2 config not found after installation: $NFQWS_CONF" >&2
@@ -3071,22 +3085,12 @@ patch_nfqws() {
   udp_desync=""
   case "$DISCORD_VOICE_ROUTE_MODE:${discord_voice_import:+imported}:$UDP_STRATEGY" in
     zapret:imported:*)
-      verify_discord_udp_blob_source
-      mkdir -p "$(dirname "$NFQWS_DISCORD_UDP_BLOB")"
-      blob_tmp="$(make_tmp)"
-      cp "$SOURCE_DISCORD_UDP_BLOB" "$blob_tmp"
-      atomic_replace_file "$NFQWS_DISCORD_UDP_BLOB" "$blob_tmp" 600
-      udp_base_append='NFQWS_BASE_ARGS="$NFQWS_BASE_ARGS
-                 --blob=discord_udp:@/opt/etc/nfqws2/blobs/discord_udp.bin"'
+      install_discord_udp_blob
+      udp_base_append="$DISCORD_UDP_BLOB_BASE_ARGS"
       ;;
     zapret::flowseal)
-      verify_discord_udp_blob_source
-      mkdir -p "$(dirname "$NFQWS_DISCORD_UDP_BLOB")"
-      blob_tmp="$(make_tmp)"
-      cp "$SOURCE_DISCORD_UDP_BLOB" "$blob_tmp"
-      atomic_replace_file "$NFQWS_DISCORD_UDP_BLOB" "$blob_tmp" 600
-      udp_base_append='NFQWS_BASE_ARGS="$NFQWS_BASE_ARGS
-                 --blob=discord_udp:@/opt/etc/nfqws2/blobs/discord_udp.bin"'
+      install_discord_udp_blob
+      udp_base_append="$DISCORD_UDP_BLOB_BASE_ARGS"
       udp_desync='                --lua-desync=fake:blob=discord_udp:repeats=6'
       ;;
     zapret::legacy)
@@ -3275,7 +3279,7 @@ apply_transaction() {
   umask 077
   mkdir -p "$STATE_ROOT"
 
-  if baseline_existing="$(read_pointer "$BASELINE_POINTER" 2>/dev/null)"; then
+  if read_pointer "$BASELINE_POINTER" >/dev/null 2>&1; then
     create_snapshot pre-apply
     PREAPPLY_SNAPSHOT="$CREATED_SNAPSHOT"
   else

@@ -367,6 +367,8 @@ assert_mode() {
 
   if [ "$expected_voice" = "zapret" ]; then
     grep -Fq -- '--filter-l7=stun,discord' "$nfqws_file"
+    grep -Fq -- '--blob=discord_udp:@/opt/etc/nfqws2/blobs/discord_udp.bin' "$nfqws_file"
+    grep -Fq -- '--lua-desync=fake:blob=discord_udp:repeats=6' "$nfqws_file"
     grep -Fqx 'UDP_PORTS=443,3478:3481,5349,19294:19344,50000:50100' "$nfqws_file"
   else
     grep -Fq 'NFQWS_ARGS_UDP=""' "$nfqws_file"

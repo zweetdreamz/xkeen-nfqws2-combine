@@ -235,7 +235,7 @@ class PanelImportTests(unittest.TestCase):
             saved = {"kind": kind, "status": "completed", "progress": 100,
                      "results": [{"name": "old"}], "finished_utc": "2026-10-20T12:00:00Z"}
             with mock.patch.dict(self.panel, {
-                "safe_json_file": lambda _path: saved,
+                "safe_json_file": lambda _path, saved=saved: saved,
                 "diagnostic_active": lambda: False,
             }):
                 state = self.panel["diagnostic_status"]()

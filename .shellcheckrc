@@ -1,0 +1,4 @@
+# Scripts target POSIX sh (busybox ash on the router).
+shell=sh
+# "CDPATH= cd" deliberately clears CDPATH for a single cd.
+disable=SC1007

@@ -24,7 +24,6 @@ import stat
 import subprocess
 import tempfile
 import threading
-import time
 from typing import Any
 
 
