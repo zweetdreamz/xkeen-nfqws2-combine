@@ -1480,6 +1480,70 @@ class TunerSourceTests(PanelTestCase):
         self.assertNotIn("--source-file", popen.call_args.args[0])
 
 
+class MalformedStoredDataTests(PanelTestCase):
+    """Valid-JSON but wrongly shaped files must not crash the panel."""
+
+    def test_imported_profile_that_is_not_an_object(self):
+        imported = self.root / "imported"
+        imported.mkdir()
+        (imported / "youtube.json").write_text("[]", encoding="utf-8")
+        (imported / "discord-tcp.json").write_text('{"format": 1, "report": []}', encoding="utf-8")
+        self.patch(IMPORTED_PROFILE_DIR=imported)
+        items = {item["service"]: item for item in self.ns["imported_profiles"]()}
+        self.assertFalse(items["youtube"]["installed"])
+        self.assertIn("error", items["youtube"])
+        self.assertFalse(items["discord-tcp"]["installed"])
+        self.assertIn("error", items["discord-tcp"])
+
+    def test_report_metadata_must_be_an_object(self):
+        report = make_report("youtube")
+        report["found"]["candidate_id"] = report["found"]["candidate_id"]
+        with self.assertRaisesRegex(ValueError, "report"):
+            self.ns["validate_candidate"](report["found"], [])
+
+    def test_route_history_with_non_string_dates(self):
+        history = self.root / "history"
+        history.mkdir()
+        for job_id, created in (("aaaaaaaaaaaaaaaa", 5), ("bbbbbbbbbbbbbbbb", "2026-01-01T00:00:00Z"), ("cccccccccccccccc", None)):
+            (history / f"{job_id}.json").write_text(
+                json.dumps({"job_id": job_id, "created_utc": created}), encoding="utf-8"
+            )
+        self.patch(ROUTE_HISTORY_DIR=history, SNAPSHOT_DIR=self.root / "snapshots")
+        items = self.ns["route_history"]()
+        self.assertEqual(len(items), 3)
+        self.assertEqual(items[0]["job_id"], "bbbbbbbbbbbbbbbb")
+
+    def test_config_health_with_wrongly_shaped_routing(self):
+        self.patch(
+            NFQWS_CONFIG=self.root / "nfqws2.conf",
+            XRAY_ROUTING=self.root / "05_routing.json",
+            DISCORD_LIST=self.root / "user.list",
+        )
+        for routing in ({"routing": []}, {"routing": {"rules": "x"}}):
+            with self.subTest(routing=routing):
+                self.ns["XRAY_ROUTING"].write_text(json.dumps(routing), encoding="utf-8")
+                with mock.patch.dict(self.ns, {"run_command": lambda *_a, **_k: {"ok": True, "code": 0, "output": "1"}}):
+                    health = self.ns["config_health"]()
+                self.assertFalse(health["all_ok"])
+
+    def test_flowseal_update_with_wrongly_shaped_commit(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(
+            {"sha": "a" * 40, "commit": []}
+        ).encode("utf-8")
+        module = mock.Mock()
+        module.read_source_cache.return_value = ([], "a" * 40)
+        self.patch(
+            FLOWSEAL_SOURCE_CACHE=self.root / "flowseal-sources.json",
+            FLOWSEAL_UPDATE_STATE=self.root / "flowseal-update.json",
+            flowseal_source_module=lambda: module,
+        )
+        with mock.patch.object(self.ns["urllib"].request, "urlopen", return_value=response):
+            payload = self.ns["check_flowseal_update"]()
+        self.assertEqual(payload["status"], "up_to_date")
+        self.assertEqual(payload["latest_date"], "")
+
+
 class JobStartRaceTests(PanelTestCase):
     """A job start must not overlap with another start still in progress."""
 
@@ -1974,6 +2038,24 @@ class HttpLayerTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 response, data = self.post("/api/import/validate", raw=raw)
                 self.assertJsonError(response, data, 400, "некорректный JSON")
+
+    def test_unexpected_handler_errors_return_json_500(self):
+        def boom(*_args, **_kwargs):
+            raise AttributeError("unexpected")
+
+        with mock.patch.dict(self.ns, {"tuner_status": boom, "tuner_sources": boom}):
+            for path in ("/api/tuner/status", "/api/tuner/sources"):
+                with self.subTest(path=path):
+                    response, data = self.request("GET", path)
+                    self.assertJsonError(response, data, 500, "внутренняя ошибка панели")
+        # The server keeps serving after the failure.
+        response, _data = self.request("GET", "/")
+        self.assertEqual(response.status, 200)
+
+    def test_post_with_deeply_nested_json_is_400(self):
+        raw = (b"[" * 100000) + (b"]" * 100000)
+        response, data = self.post("/api/import/validate", raw=raw)
+        self.assertJsonError(response, data, 400, "некорректный JSON")
 
     def test_unknown_post_is_404(self):
         for path in ("/api/nope", "/", "/api/import/clear/telegram", "/api/route/discord"):

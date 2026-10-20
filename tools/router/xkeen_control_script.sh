@@ -541,6 +541,8 @@ def voice_ports_allowed(value):
 def validate_candidate(candidate, report):
     if not isinstance(candidate, dict):
         raise ValueError("в отчёте нет найденного кандидата")
+    if not isinstance(report, dict):
+        raise ValueError("report должен быть JSON-объектом")
     service = candidate.get("service")
     if service not in SERVICES:
         raise ValueError("неподдерживаемый сервис")
@@ -686,6 +688,8 @@ def imported_profiles():
             if info.st_size > MAX_REPORT_BYTES:
                 raise ValueError("файл слишком велик")
             data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("ожидается JSON-объект")
             profile = validate_candidate(data, data.get("report", {}))
             if profile["service"] != service or data.get("format") != 1:
                 raise ValueError("неверный сервис")
@@ -862,7 +866,11 @@ def route_history():
                     "rollback_available": False,
                 }
             )
-    items.sort(key=lambda item: item.get("created_utc", ""), reverse=True)
+    def created(item):
+        value = item.get("created_utc")
+        return value if isinstance(value, str) else ""
+
+    items.sort(key=created, reverse=True)
     return items[:MAX_HISTORY_ITEMS]
 
 
@@ -1002,7 +1010,11 @@ def download_flowseal_update():
     latest = data.get("sha", "") if isinstance(data, dict) else ""
     if not isinstance(latest, str) or not re.fullmatch(r"[0-9a-f]{40}", latest):
         raise RuntimeError("GitHub не вернул корректный commit")
-    authored = data.get("commit", {}).get("committer", {}).get("date", "")
+    commit_info = data.get("commit")
+    committer = commit_info.get("committer") if isinstance(commit_info, dict) else None
+    authored = committer.get("date", "") if isinstance(committer, dict) else ""
+    if not isinstance(authored, str):
+        authored = ""
     module = flowseal_source_module()
     sources, cached_commit = [], ""
     try:
@@ -1044,8 +1056,10 @@ def config_health():
         nfqws_text = ""
         add("nfqws2 config", False, str(exc))
     try:
-        routing = safe_json_file(XRAY_ROUTING)
-        rules = routing.get("routing", {}).get("rules", [])
+        routing = safe_json_file(XRAY_ROUTING).get("routing")
+        rules = routing.get("rules", []) if isinstance(routing, dict) else None
+        if not isinstance(rules, list):
+            raise ValueError(f"routing.rules не является списком: {XRAY_ROUTING}")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         rules = []
         add("Xray routing", False, str(exc))
@@ -1942,6 +1956,26 @@ def apply_profile(profile):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "XKeenControl/6.4"
+    # Socket timeout: a client that sends a short body cannot hold a thread.
+    timeout = 30
+    response_started = False
+
+    def send_response(self, code, message=None):
+        self.response_started = True
+        super().send_response(code, message)
+
+    def guarded(self, handler):
+        """Run a request handler; an unexpected error still gets a JSON reply."""
+        self.response_started = False
+        try:
+            handler()
+        except Exception as exc:  # last resort, specific errors are handled inside
+            self.log_message("unhandled %s: %s", type(exc).__name__, exc)
+            if not self.response_started:
+                self.send_json(
+                    500,
+                    {"ok": False, "error": f"внутренняя ошибка панели: {type(exc).__name__}: {exc}"[:500]},
+                )
 
     def log_message(self, format_string, *args):
         print(f"{self.client_address[0]} {self.log_date_time_string()} {format_string % args}")
@@ -2014,8 +2048,16 @@ class Handler(BaseHTTPRequestHandler):
             return json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError(f"некорректный JSON: {exc}") from exc
+        except RecursionError as exc:
+            raise ValueError("некорректный JSON: слишком глубокая вложенность") from exc
 
     def do_GET(self):
+        self.guarded(self.handle_get)
+
+    def do_POST(self):
+        self.guarded(self.handle_post)
+
+    def handle_get(self):
         if not self.allowed_client():
             return
         if self.path == "/":
@@ -2081,7 +2123,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_json(404, {"ok": False, "error": "unknown endpoint"})
 
-    def do_POST(self):
+    def handle_post(self):
         if not self.allowed_client() or not self.valid_same_origin_post():
             return
         try:
