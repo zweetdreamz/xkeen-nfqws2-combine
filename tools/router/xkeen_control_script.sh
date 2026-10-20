@@ -827,8 +827,15 @@ def update_history(job_id, **changes):
 
 def route_history():
     items = []
+    def modified(path):
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
     try:
-        paths = list(ROUTE_HISTORY_DIR.glob("*.json"))
+        # Newest files first, so the 200-file read limit drops old entries.
+        paths = sorted(ROUTE_HISTORY_DIR.glob("*.json"), key=modified, reverse=True)
     except OSError:
         paths = []
     for path in paths[:200]:

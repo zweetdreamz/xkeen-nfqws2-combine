@@ -885,6 +885,30 @@ class RouteJobTests(PanelTestCase):
             self.assertIn("история повреждена", items[job_id]["error"])
         self.assertIn("ID файла не совпадает", items["bbbbbbbbbbbbbbbb"]["error"])
 
+    def test_route_history_keeps_newest_entries_beyond_200_files(self):
+        history = self.root / "history"
+        history.mkdir()
+        for index in range(210):
+            job_id = f"{index:016x}"
+            path = history / f"{job_id}.json"
+            path.write_text(
+                json.dumps({"job_id": job_id, "created_utc": f"2026-01-01T00:{index // 60:02d}:{index % 60:02d}Z"}),
+                encoding="utf-8",
+            )
+            os.utime(path, (1_700_000_000 + index, 1_700_000_000 + index))
+
+        class OldestFirst:
+            """glob() order is arbitrary; return the oldest files first."""
+
+            def glob(self, pattern):
+                return sorted(history.glob(pattern))
+
+        self.patch(ROUTE_HISTORY_DIR=OldestFirst())
+        items = self.ns["route_history"]()
+        self.assertEqual(len(items), self.ns["MAX_HISTORY_ITEMS"])
+        self.assertEqual(items[0]["job_id"], f"{209:016x}")
+        self.assertEqual(items[-1]["job_id"], f"{210 - self.ns['MAX_HISTORY_ITEMS']:016x}")
+
     def test_route_history_missing_directory(self):
         self.assertEqual(self.ns["route_history"](), [])
 
