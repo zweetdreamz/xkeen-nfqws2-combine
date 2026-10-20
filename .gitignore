@@ -26,5 +26,7 @@ venv/
 .codex/
 .aws/
 .idea/
+.vscode/
+*.swp
 .DS_Store
 Thumbs.db
