@@ -36,6 +36,9 @@ class FakeWriter:
     def write(self, **changes):
         self.payload.update(changes)
 
+    def log(self, line):
+        self.payload.setdefault("logs", []).append(line)
+
 
 class RouterAutotuneTests(unittest.TestCase):
     @classmethod

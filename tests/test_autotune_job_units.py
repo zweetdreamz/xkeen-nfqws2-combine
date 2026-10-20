@@ -8,6 +8,7 @@ No network, no root, no real nfqws2 runner: subprocesses are faked.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import importlib.util
 import io
 import json
@@ -526,6 +527,28 @@ class ParseEventTests(unittest.TestCase):
                 self.assertIsNone(self.parse(line))
         self.assertEqual(self.writer.writes, [])
 
+    def test_candidate_names_its_bat_files_in_the_log(self):
+        self.candidates[1] = dataclasses.replace(
+            self.candidates[1],
+            args=(*self.candidates[1].args, "--lua-desync=fake:repeats=2"),
+            also_from=("general.bat", "general (ALT2).bat"),
+        )
+        self.parse("EVENT|CANDIDATE|2|abc123")
+        self.assertEqual(len(self.writer.logs), 1)
+        self.assertTrue(self.writer.logs[0].startswith(
+            f"Кандидат 2 из 2: {self.candidates[1].source_name} "
+            "(тот же профиль ещё в 2 файл(ах): general.bat, general (ALT2).bat)"
+        ), self.writer.logs[0])
+        self.parse("EVENT|CANDIDATE|9|abc123")  # unknown number: no extra line
+        self.assertEqual(len(self.writer.logs), 1)
+        # Candidate 1 is the built-in profile: named as such, not as a BAT.
+        self.parse("EVENT|CANDIDATE|1|abc123")
+        self.assertIn("встроенный профиль проекта", self.writer.logs[1])
+
+    def test_manual_voice_mode_is_explained(self):
+        self.parse("EVENT|VOICE_AUTO_MODE|manual|raw-reply")
+        self.assertIn("Автопроверка невозможна", self.writer.logs[0])
+
     def test_candidate(self):
         self.parse("EVENT|CANDIDATE|2|abc123")
         self.assertEqual(
@@ -641,6 +664,7 @@ class SummaryAndReportTests(unittest.TestCase):
                 "source_name": SOURCE.name,
                 "family": self.candidates[1].family,
                 "rank": 0,
+                "also_from": [],
             },
         )
         self.assertEqual([item["number"] for item in summary], [1, 2])

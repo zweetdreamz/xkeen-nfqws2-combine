@@ -106,6 +106,8 @@ class Candidate:
     args: tuple[str, ...]
     notes: tuple[str, ...] = ()
     rank: int = 100
+    # Other BAT files whose translation gave exactly the same args.
+    also_from: tuple[str, ...] = ()
 
     def command_line(self) -> str:
         return " ".join(self.args)
@@ -1087,10 +1089,20 @@ def build_candidates(
         candidates = list(exact)
         if mix_level != "off" and service != "discord-voice":
             candidates.extend(source_sweep_candidates(exact))
+    # Identical args behave identically: test them once, but remember which
+    # other BAT files share the profile so the log can name them.
     unique: dict[tuple[str, ...], Candidate] = {}
+    shared: dict[tuple[str, ...], list[str]] = {}
     for candidate in sorted(candidates, key=lambda item: (item.rank, item.source_name)):
-        unique.setdefault(candidate.args, candidate)
-    return list(unique.values())
+        first = unique.setdefault(candidate.args, candidate)
+        names = shared.setdefault(candidate.args, [])
+        if candidate.source_name not in {first.source_name, *names}:
+            names.append(candidate.source_name)
+    return [
+        dataclasses.replace(candidate, also_from=tuple(shared[args]))
+        if shared[args] else candidate
+        for args, candidate in unique.items()
+    ]
 
 
 def parse_search_seed(value: str) -> int:

@@ -1246,6 +1246,21 @@ class SourceSelectionTests(unittest.TestCase):
         self.assertTrue(without)
         self.assertTrue(all(candidate.source_name == SOURCE.name for candidate in without))
 
+    def test_identical_profiles_are_tested_once_and_named(self):
+        # Flowseal BATs often share a profile: one candidate, all names kept.
+        copies = [
+            TUNER.SourceFile(name, SOURCE.text, SOURCE.sha, SOURCE.url)
+            for name in ("general (ALT2).bat", "general.bat")
+        ]
+        candidates = TUNER.build_candidates(
+            "discord-voice", [SOURCE, *copies], "off", include_builtin=False
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].source_name, "general (ALT11).bat")
+        self.assertEqual(candidates[0].also_from, ("general (ALT2).bat", "general.bat"))
+        single = TUNER.build_candidates("discord-voice", [SOURCE], "off", include_builtin=False)
+        self.assertEqual(single[0].also_from, ())
+
     def test_source_services(self):
         self.assertEqual(
             TUNER.source_services(SOURCE), ["discord-tcp", "discord-voice", "youtube"]

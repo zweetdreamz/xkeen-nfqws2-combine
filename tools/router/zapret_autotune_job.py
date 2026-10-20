@@ -318,9 +318,30 @@ def candidate_summary(
             "source_name": candidate.source_name,
             "family": candidate.family,
             "rank": candidate.rank,
+            "also_from": list(candidate.also_from),
         }
         for number, candidate in enumerate(candidates, 1)
     ]
+
+
+def candidate_log_line(number: int, candidates: list[tuner.Candidate]) -> str | None:
+    """A readable line naming the BAT file(s) of candidate ``number``."""
+    if not 1 <= number <= len(candidates):
+        return None
+    candidate = candidates[number - 1]
+    if candidate.args == tuner.known_candidate(candidate.service, []).args:
+        # The project's own profile; source_name only names its BAT origin.
+        return (
+            f"Кандидат {number} из {len(candidates)}: встроенный профиль проекта "
+            f"(основа — {candidate.source_name}) · {candidate.family}"
+        )
+    line = f"Кандидат {number} из {len(candidates)}: {candidate.source_name}"
+    if candidate.also_from:
+        line += (
+            f" (тот же профиль ещё в {len(candidate.also_from)} файл(ах): "
+            + ", ".join(candidate.also_from) + ")"
+        )
+    return line + f" · {candidate.family}"
 
 
 def make_report(
@@ -376,6 +397,9 @@ def parse_event(
             current_candidate_id=parts[3],
             needs_voice_verdict=False,
         )
+        readable = candidate_log_line(number, candidates)
+        if readable:
+            writer.log(readable)
     elif event == "PROBE_DETAIL":
         detail = tuner.parse_probe_event(line)
         if detail:
@@ -436,6 +460,12 @@ def parse_event(
         writer.write(**changes)
     elif event == "VOICE_AUTO_MODE" and len(parts) >= 4:
         writer.write(voice_auto_mode=parts[2], voice_auto_reason=parts[3])
+        if parts[3] == "raw-reply":
+            writer.log(
+                "Автопроверка невозможна: сохранённый голосовой сервер отвечает и без "
+                "обхода, пакетом с роутера стратегии не различить. Каждый кандидат "
+                "проверяется вручную: переподключитесь к голосовому каналу."
+            )
     elif event == "VOICE_AUTO" and len(parts) >= 4:
         writer.write(last_voice_auto={"candidate": int(parts[2]), "result": parts[3]})
     elif event == "VOICE_UNCONFIRMED" and len(parts) >= 3:
