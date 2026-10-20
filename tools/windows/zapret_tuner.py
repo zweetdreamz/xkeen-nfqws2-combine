@@ -39,8 +39,11 @@ TOKEN_RE = re.compile(
     r"(?:=(?P<value>\"[^\"]*\"|[^\s^]+))?"
 )
 SAFE_TOKEN_RE = re.compile(r"^--[a-z0-9-]+=[A-Za-z0-9_@/.,:+<>=!-]+$")
-# Names accepted for cached and user-selected Flowseal strategy files.
-SOURCE_NAME_RE = re.compile(r"general[A-Za-z0-9 ()_.-]*\.bat", re.IGNORECASE)
+# Names accepted for downloaded, cached and user-selected Flowseal strategy
+# files: letters of any script (Flowseal uses e.g. "general (ALT3).bat"),
+# digits, spaces and ()_.,+- only, so no path separators or shell syntax.
+SOURCE_NAME_RE = re.compile(r"general[\w ()+.,-]*\.bat", re.IGNORECASE)
+GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 NATIVE_FAKE = (
     "--lua-desync=fake:blob=tls_clienthello:"
@@ -1160,8 +1163,8 @@ def fetch_sources(repository: str, ref: str) -> tuple[list[SourceFile], str]:
     )
     if not isinstance(commit_data, dict) or not isinstance(commit_data.get("sha"), str):
         raise RuntimeError("GitHub returned no commit SHA")
-    commit = commit_data["sha"]
-    if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+    commit = commit_data["sha"].lower()
+    if not GIT_SHA_RE.fullmatch(commit):
         raise RuntimeError("invalid GitHub commit SHA")
     contents = github_json(
         f"https://api.github.com/repos/{quoted_repo}/contents?ref={commit}"
@@ -1176,12 +1179,15 @@ def fetch_sources(repository: str, ref: str) -> tuple[list[SourceFile], str]:
         name = item.get("name")
         download_url = item.get("download_url")
         sha = item.get("sha")
+        # Same rules as read_source_cache(), so every fetched set can be cached.
         if (
             isinstance(name, str)
-            and name.lower().startswith("general")
-            and name.lower().endswith(".bat")
+            and len(name) <= 160
+            and SOURCE_NAME_RE.fullmatch(name)
             and isinstance(download_url, str)
+            and len(download_url) <= 1000
             and isinstance(sha, str)
+            and GIT_SHA_RE.fullmatch(sha)
         ):
             if len(sources) >= 64:
                 raise RuntimeError("too many Flowseal sources (limit 64)")
@@ -1206,7 +1212,7 @@ def read_source_cache(path: Path) -> tuple[list[SourceFile], str]:
     if not isinstance(data, dict) or data.get("format") != 1 or data.get("repository") != DEFAULT_REPOSITORY:
         raise RuntimeError("invalid Flowseal cache")
     commit = data.get("commit", "")
-    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+    if not isinstance(commit, str) or not GIT_SHA_RE.fullmatch(commit):
         raise RuntimeError("invalid cached commit")
     items = data.get("sources")
     if not isinstance(items, list) or not 1 <= len(items) <= 64:
@@ -1221,7 +1227,7 @@ def read_source_cache(path: Path) -> tuple[list[SourceFile], str]:
         if (not isinstance(name, str) or len(name) > 160
                 or not SOURCE_NAME_RE.fullmatch(name)
                 or name in names or not isinstance(text, str) or len(text.encode("utf-8")) > 262144
-                or not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha)
+                or not isinstance(sha, str) or not GIT_SHA_RE.fullmatch(sha)
                 or not isinstance(url, str) or len(url) > 1000
                 or item.get("sha256") != hashlib.sha256(text.encode("utf-8")).hexdigest()):
             raise RuntimeError("corrupt cached source")

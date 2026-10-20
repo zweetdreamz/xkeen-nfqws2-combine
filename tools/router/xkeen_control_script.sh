@@ -88,7 +88,7 @@ STATUS_ROUTE_KEYS = {
     "youtube": "youtube_route",
 }
 # Same pattern as zapret_tuner.SOURCE_NAME_RE: one Flowseal general*.bat file.
-SOURCE_FILE_NAME = re.compile(r"general[A-Za-z0-9 ()_.-]*\.bat", re.IGNORECASE)
+SOURCE_FILE_NAME = re.compile(r"general[\w ()+.,-]*\.bat", re.IGNORECASE)
 SAFE_TOKEN = re.compile(r"^--[a-z0-9-]+=[A-Za-z0-9_@/.,:+<>=!-]+$")
 SAFE_OPTIONS = {
     "filter-tcp",

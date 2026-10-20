@@ -1134,8 +1134,8 @@ class NetworkWrapperTests(unittest.TestCase):
     def test_fetch_sources_filters_sorts_and_limits(self):
         commit = {"sha": "a" * 40}
         root = [
-            {"name": "general_b.bat", "sha": "1", "download_url": "https://x/b"},
-            {"name": "General_A.BAT", "sha": "2", "download_url": "https://x/a"},
+            {"name": "general_b.bat", "sha": "1" * 40, "download_url": "https://x/b"},
+            {"name": "General_A.BAT", "sha": "2" * 40, "download_url": "https://x/a"},
             {"name": "general_c.bat", "sha": None, "download_url": "https://x/c"},
             {"name": "service.bat", "sha": "3", "download_url": "https://x/s"},
         ]
@@ -1151,13 +1151,39 @@ class NetworkWrapperTests(unittest.TestCase):
             "https://api.github.com/repos/o%20w/r/commits/feature%2Fx",
         )
         many = [
-            {"name": f"general{i}.bat", "sha": "s", "download_url": "u"}
+            {"name": f"general{i}.bat", "sha": "5" * 40, "download_url": "u"}
             for i in range(65)
         ]
         with mock.patch.object(TUNER, "github_json", side_effect=[commit, many]):
             with mock.patch.object(TUNER, "download_text", return_value=""):
                 with self.assertRaisesRegex(RuntimeError, "limit 64"):
                     TUNER.fetch_sources("o/r", "main")
+
+
+class FetchCacheRoundTripTests(unittest.TestCase):
+    """Whatever fetch_sources() returns must be storable in the cache."""
+
+    def test_unicode_names_round_trip_and_unsafe_entries_are_skipped(self):
+        commit = {"sha": "A" * 40}
+        root = [
+            {"name": "general (МГТС).bat", "sha": "b" * 40, "download_url": "https://x/m"},
+            {"name": "general (ALT).bat", "sha": "c" * 40, "download_url": "https://x/a"},
+            {"name": "general;rm.bat", "sha": "d" * 40, "download_url": "https://x/r"},
+            {"name": "general (BAD SHA).bat", "sha": "nope", "download_url": "https://x/s"},
+        ]
+        with mock.patch.object(TUNER, "github_json", side_effect=[commit, root]), \
+                mock.patch.object(TUNER, "download_text", side_effect=lambda url: f"rem {url}\n"):
+            sources, fetched_commit = TUNER.fetch_sources("o/r", "main")
+        self.assertEqual(fetched_commit, "a" * 40)
+        self.assertEqual([s.name for s in sources], ["general (ALT).bat", "general (МГТС).bat"])
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory) / "flowseal-sources.json"
+            TUNER.save_source_cache(cache, sources, fetched_commit)
+            cached, cached_commit = TUNER.read_source_cache(cache)
+        self.assertEqual(cached_commit, "a" * 40)
+        self.assertEqual([s.name for s in cached], [s.name for s in sources])
+        self.assertTrue(TUNER.SOURCE_NAME_RE.fullmatch("general (МГТС).bat"))
+        self.assertEqual(TUNER.select_source(cached, "GENERAL (мгтс).BAT")[0].name, "general (МГТС).bat")
 
 
 class MixedCandidateTests(unittest.TestCase):
