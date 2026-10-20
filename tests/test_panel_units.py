@@ -547,6 +547,7 @@ class TunerRequestTests(PanelTestCase):
                 "client_ip": "",
                 "search_seed": 777,
                 "source_file": None,
+                "voice_auto": False,
             },
         )
 
@@ -569,6 +570,7 @@ class TunerRequestTests(PanelTestCase):
                 "client_ip": "192.168.2.10",
                 "search_seed": 4294967295,
                 "source_file": None,
+                "voice_auto": False,
             },
         )
         for mix in ("off", "safe", "extended"):
@@ -586,6 +588,12 @@ class TunerRequestTests(PanelTestCase):
         for bad in ("service.bat", "../general.bat", "general;x.bat", "general" + "a" * 160 + ".bat", 5, ["general.bat"]):
             with self.subTest(bad=bad):
                 self.assertRejected("general\\*\\.bat", {**body, "source_file": bad})
+
+    def test_voice_auto(self):
+        body = {"service": "discord-voice", "client_ip": "192.168.2.10", "search_seed": 1}
+        self.assertIs(self.validate({**body, "voice_auto": True})["voice_auto"], True)
+        self.assertRejected("true или false", {**body, "voice_auto": "yes"})
+        self.assertRejected("только для Discord Voice", {"service": "youtube", "voice_auto": True})
 
     def test_empty_seed_is_randomized(self):
         with mock.patch.object(self.ns["secrets"], "randbits", return_value=9):
@@ -1451,6 +1459,40 @@ class TunerSourceTests(PanelTestCase):
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["sources"], [])
         self.assertIn("invalid Flowseal cache", payload["error"])
+
+    def test_learned_voice_endpoint(self):
+        path = self.root / "discord-voice-endpoint.json"
+        self.patch(VOICE_ENDPOINT_FILE=path)
+        self.assertIsNone(self.ns["learned_voice_endpoint"]())
+        path.write_text(json.dumps({"ip": "162.159.130.234", "port": 50007, "learned_utc": "2026-10-20T10:00:00Z"}), encoding="utf-8")
+        self.assertEqual(
+            self.ns["learned_voice_endpoint"](),
+            {"ip": "162.159.130.234", "port": 50007, "learned_utc": "2026-10-20T10:00:00Z"},
+        )
+        for data in ({"ip": "192.168.2.1", "port": 50007}, {"ip": "162.159.130.234", "port": 443},
+                     {"ip": "162.159.130.234", "port": "50007"}, {"ip": 5, "port": 50007}):
+            with self.subTest(data=data):
+                path.write_text(json.dumps(data), encoding="utf-8")
+                self.assertIsNone(self.ns["learned_voice_endpoint"]())
+
+    def test_start_tuner_job_voice_auto(self):
+        (self.root / "tuner").mkdir()
+        status = {"ok": True, "code": 0, "output": "discord_voice_route=zapret\n"}
+        settings = {
+            "service": "discord-voice", "mix_level": "off", "max_candidates": 4,
+            "client_ip": "192.168.2.60", "search_seed": 5, "source_file": None, "voice_auto": True,
+        }
+        process = mock.Mock(pid=4321)
+        endpoint = self.root / "discord-voice-endpoint.json"
+        self.patch(VOICE_ENDPOINT_FILE=endpoint, tuner_active=lambda: False,
+                   run_command=lambda *_a, **_k: status)
+        with self.assertRaisesRegex(RuntimeError, "голосовой сервер ещё не сохранён"):
+            self.ns["start_tuner_job"](settings)
+        endpoint.write_text(json.dumps({"ip": "162.159.130.234", "port": 50007}), encoding="utf-8")
+        with mock.patch.object(self.ns["subprocess"], "Popen", return_value=process) as popen, \
+                mock.patch.object(self.ns["threading"], "Thread"):
+            self.ns["start_tuner_job"](settings)
+        self.assertEqual(popen.call_args.args[0][-1], "--voice-auto")
 
     def test_start_tuner_job_passes_selected_source_file(self):
         (self.root / "tuner").mkdir()

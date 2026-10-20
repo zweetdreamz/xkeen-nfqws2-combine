@@ -39,6 +39,7 @@ RESPONSES: dict[str, dict] = {
     "/api/updates": {"ok": True, "status": "never_downloaded"},
     "/api/tuner/sources": {"ok": True, "status": "never_downloaded", "commit": "", "sources": []},
     "/api/tuner/status": {"ok": True, "status": "idle", "active": False},
+    "/api/tuner/voice-endpoint": {"ok": True, "endpoint": None},
     "/api/diagnostics/status": {"ok": True, "status": "idle", "active": False},
     "/api/route/status": {"ok": True, "status": "idle", "active": False},
     "/api/checks/config": {"ok": True, "checks": []},

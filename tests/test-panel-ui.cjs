@@ -96,6 +96,21 @@ async function main() {
     await page.selectOption("#tunerService", "discord-voice");
     assert.equal(await page.isVisible("#clientIpField"), true);
 
+    // The Voice auto check needs a learned voice server.
+    assert.equal(await page.isVisible("#voiceAutoField"), true);
+    assert.equal(await page.$eval("#tunerVoiceAuto", (box) => box.disabled), true);
+    await page.selectOption("#tunerService", "youtube");
+    assert.equal(await page.isHidden("#voiceAutoField"), true);
+    await setResponse("/api/tuner/voice-endpoint", {
+      ok: true,
+      endpoint: { ip: "162.159.130.234", port: 50007, learned_utc: "2026-10-20T10:00:00Z" },
+    });
+    await page.evaluate(() => refreshVoiceEndpoint());
+    await page.selectOption("#tunerService", "discord-voice");
+    assert.equal(await page.$eval("#tunerVoiceAuto", (box) => box.disabled), false);
+    assert.match(await page.textContent("#voiceAutoHint"), /162\.159\.130\.234:50007/);
+    await setResponse("/api/tuner/voice-endpoint", { ok: true, endpoint: null });
+
     // busy() must not disable navigation.
     await page.evaluate(() => busy(true));
     assert.equal(await page.$eval('.tab[data-tab="control"]', (tab) => tab.disabled), false);

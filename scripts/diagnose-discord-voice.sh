@@ -6,8 +6,10 @@ set -eu
 
 CLIENT_IP="${1:-}"
 DURATION="${2:-30}"
-NFQWS_CONF="/opt/etc/nfqws2/nfqws2.conf"
-TMP_DIR="/opt/tmp/discord-voice-debug.$$"
+# KD_TUNER_TEST_ROOT redirects router paths in tests (same as the tuner runner).
+ROOT_PREFIX="${KD_TUNER_TEST_ROOT:-}"
+NFQWS_CONF="$ROOT_PREFIX/opt/etc/nfqws2/nfqws2.conf"
+TMP_DIR="$ROOT_PREFIX/opt/tmp/discord-voice-debug.$$"
 LAN_PID=""
 WAN_PID=""
 
@@ -210,6 +212,43 @@ echo "- A discord.media endpoint on LAN confirms the Desktop voice target and po
 echo "- The same endpoint on WAN confirms direct routing instead of the VPN."
 echo "- Replies on LAN confirm return traffic reaches the Desktop client."
 echo "- NFQUEUE counters should grow on a fresh reconnect; reconnect again if the flow already existed."
+
+# The busiest public voice endpoint (Voice/STUN ports) that also answered.
+# The autotuner remembers it after a confirmed session to probe it later.
+awk -v client="$CLIENT_IP" '
+  function public(ip) {
+    return ip !~ /^(10|127)\./ && ip !~ /^192\.168\./ &&
+      ip !~ /^172\.(1[6-9]|2[0-9]|3[01])\./ && ip !~ /^(22[4-9]|23[0-9]|24[0-9]|25[0-5])\./
+  }
+  function voice_port(port) {
+    return (port >= 19294 && port <= 19344) || (port >= 50000 && port <= 65535)
+  }
+  function split_endpoint(value,    parts, count, port, ip, i) {
+    sub(/:$/, "", value)
+    count = split(value, parts, ".")
+    if (count != 5) return ""
+    port = parts[5] + 0
+    ip = parts[1] "." parts[2] "." parts[3] "." parts[4]
+    if (!public(ip) || !voice_port(port)) return ""
+    return ip "|" port
+  }
+  $2 == "IP" && index($3, client ".") == 1 && $4 == ">" {
+    key = split_endpoint($5)
+    if (key != "") out[key]++
+  }
+  $2 == "IP" && index($5, client ".") == 1 {
+    key = split_endpoint($3)
+    if (key != "") back[key]++
+  }
+  END {
+    best = ""
+    for (key in out) {
+      if (!(key in back)) continue
+      if (best == "" || out[key] > out[best]) best = key
+    }
+    if (best != "") print "EVENT|VOICE_ENDPOINT|" best "|" out[best] "|" back[best]
+  }
+' "$TMP_DIR/lan.txt"
 
 voice_out="$(awk -v c="$CLIENT_IP." '$2 == "IP" && index($3,c)==1 {n++} END {print n+0}' "$TMP_DIR/lan.txt")"
 voice_in="$(awk -v c="$CLIENT_IP." '$2 == "IP" && index($5,c)==1 {n++} END {print n+0}' "$TMP_DIR/lan.txt")"

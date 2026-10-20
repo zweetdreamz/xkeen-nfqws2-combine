@@ -277,6 +277,7 @@ mkdir -p "$voice_dir"
 cat > "$voice_dir/diagnose-discord-voice.sh" <<'EOF'
 #!/bin/sh
 echo 'EVENT|VOICE_OBSERVATION|15|12|1'
+echo 'EVENT|VOICE_ENDPOINT|162.159.130.234|50007|15|12'
 echo yes > "$TUNER_VERDICT_FILE"
 EOF
 chmod +x "$voice_dir/diagnose-discord-voice.sh"
@@ -304,6 +305,96 @@ assert state["voice_observation"]["incoming_packets"] == 12, state
 assert state["verification"]["voice_audio_automatic"] is False, state
 assert state["source_origin"] == "downloaded-cache", state
 assert state["commit"] == "b" * 40, state
+assert state["voice_endpoint_learned"] is True, state
+PY
+endpoint_file="$ROOT/opt/etc/xkeen-web/discord-voice-endpoint.json"
+python3 - "$endpoint_file" <<'PY'
+import json, sys
+endpoint = json.load(open(sys.argv[1], encoding="utf-8"))
+assert (endpoint["ip"], endpoint["port"]) == ("162.159.130.234", 50007), endpoint
+PY
+[ "$(sha256sum "$ROOT/opt/etc/nfqws2/nfqws2.conf" | awk '{print $1}')" = "$config_hash_before" ]
+
+# Automatic Voice check against the learned server. The probe is replaced by
+# a script that answers for the labels listed in VOICE_PROBE_REPLIES.
+probe_dir="$ROOT/opt/root/keenetic-discord-nfqws2/tools/router"
+mkdir -p "$probe_dir"
+cat > "$probe_dir/discord_voice_probe.py" <<'EOF'
+import os, sys
+host, port, label = sys.argv[1], sys.argv[2], sys.argv[sys.argv.index("--label") + 1]
+with open(os.environ["VOICE_PROBE_LOG"], "a", encoding="utf-8") as log:
+    log.write(f"{label} {host}:{port}\n")
+replies = 3 if label in os.environ.get("VOICE_PROBE_REPLIES", "").split(",") else 0
+print(f"EVENT|VOICE_PROBE|{label}|3|{replies}|{replies}")
+sys.exit(0 if replies else 1)
+EOF
+probe_log="$FIXTURE/voice-probe.log"
+
+run_voice_auto() {
+  : > "$probe_log"
+  PATH="$MOCK_BIN:$PATH" KD_TUNER_TEST_ROOT="$ROOT" VOICE_PROBE_LOG="$probe_log" \
+    VOICE_PROBE_REPLIES="$1" TUNER_VERDICT_TIMEOUT=2 python3 "$TARGET" \
+    --service discord-voice --client-ip 192.168.2.50 --voice-auto \
+    --job-id "$2" --max-candidates 2 --search-seed 7
+}
+
+# Only candidate 2 gets an answer: candidate 1 fails without asking anyone,
+# candidate 2 passes and the user confirms the sound.
+run_voice_auto candidate-2 5555555555555555
+grep -Fqx 'active 162.159.130.234:50007' "$probe_log"
+grep -Fqx 'raw 162.159.130.234:50007' "$probe_log"
+grep -Fqx 'candidate-1 162.159.130.234:50007' "$probe_log"
+grep -Fqx 'candidate-2 162.159.130.234:50007' "$probe_log"
+python3 - "$state" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+assert state["status"] == "found", state
+assert state["voice_auto_mode"] == "auto", state
+assert state["last_voice_auto"] == {"candidate": 2, "result": "pass"}, state
+assert state["voice_calibration"]["raw"]["valid"] == 0, state
+assert not state.get("voice_unconfirmed"), state
+assert state["nfqws_restored"] == "running", state
+PY
+
+# The server also answers without nfqws2: the probe proves nothing, so every
+# candidate falls back to the manual check (the mock answers "yes").
+run_voice_auto raw,active,candidate-1,candidate-2 6666666666666666
+if grep -q '^candidate-' "$probe_log"; then
+  echo "ERROR: candidates were probed although the raw probe was answered" >&2
+  exit 1
+fi
+python3 - "$state" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+assert state["status"] == "found", state
+assert (state["voice_auto_mode"], state["voice_auto_reason"]) == ("manual", "raw-reply"), state
+PY
+
+# A passing profile with nobody at the panel is kept, marked unconfirmed, and
+# does not overwrite the learned server.
+cat > "$voice_dir/diagnose-discord-voice.sh" <<'EOF'
+#!/bin/sh
+echo 'EVENT|VOICE_ENDPOINT|162.159.135.1|50020|9|9'
+EOF
+run_voice_auto candidate-1 7777777777777777
+python3 - "$state" "$endpoint_file" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+endpoint = json.load(open(sys.argv[2], encoding="utf-8"))
+assert state["status"] == "found", state
+assert state["voice_unconfirmed"] is True, state
+assert "voice_endpoint_learned" not in state, state
+assert endpoint["ip"] == "162.159.130.234", endpoint
+PY
+
+# Without a learned server the automatic mode refuses to start.
+rm -f "$endpoint_file"
+run_voice_auto candidate-1 8888888888888888 || true
+python3 - "$state" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+assert state["status"] == "error", state
+assert "no learned Discord voice server" in state["error"], state
 PY
 [ "$(sha256sum "$ROOT/opt/etc/nfqws2/nfqws2.conf" | awk '{print $1}')" = "$config_hash_before" ]
 

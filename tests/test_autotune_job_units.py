@@ -414,6 +414,44 @@ class AtomicJsonAndStateWriterTests(unittest.TestCase):
         self.assertEqual(lines[2:], ["", ""])
 
 
+class VoiceAutoTests(TempRootTestCase):
+    def test_voice_endpoint_validation(self):
+        self.assertTrue(JOB.voice_endpoint_valid("162.159.130.234", 50007))
+        self.assertTrue(JOB.voice_endpoint_valid("162.159.130.234", 19300))
+        for ip, port in (
+            ("192.168.2.1", 50007),
+            ("10.0.0.1", 50007),
+            ("2606:4700::1", 50007),
+            ("162.159.130.234", 443),
+            ("162.159.130.234", "50007"),
+            ("162.159.130.234", True),
+            ("not-an-ip", 50007),
+            (None, 50007),
+        ):
+            with self.subTest(ip=ip, port=port):
+                self.assertFalse(JOB.voice_endpoint_valid(ip, port))
+
+    def test_endpoint_store_round_trip_and_rejections(self):
+        self.assertIsNone(JOB.load_voice_endpoint())
+        JOB.save_voice_endpoint({"ip": "162.159.130.234", "port": 50007, "outgoing_packets": 3})
+        path = self.root / JOB.VOICE_ENDPOINT_LOGICAL.lstrip("/")
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        loaded = JOB.load_voice_endpoint()
+        self.assertEqual((loaded["ip"], loaded["port"]), ("162.159.130.234", 50007))
+        self.assertIn("learned_utc", loaded)
+        for text in ("[]", "{broken", '{"ip": "192.168.2.1", "port": 50007}', "x" * 5000):
+            with self.subTest(text=text[:20]):
+                path.write_text(text, encoding="utf-8")
+                self.assertIsNone(JOB.load_voice_endpoint())
+
+    def test_voice_auto_requires_discord_voice(self):
+        args = JOB.build_parser().parse_args(
+            ["--service", "youtube", "--job-id", "0123456789abcdef", "--voice-auto"]
+        )
+        with self.assertRaisesRegex(ValueError, "voice-auto"):
+            JOB.validate_args(args)
+
+
 class ParseEventTests(unittest.TestCase):
     def setUp(self):
         self.writer = FakeWriter()
@@ -424,6 +462,27 @@ class ParseEventTests(unittest.TestCase):
 
     def parse(self, line):
         return JOB.parse_event(self.writer, line, self.candidates)
+
+    def test_voice_auto_events(self):
+        self.parse("EVENT|VOICE_ENDPOINT|162.159.130.234|50007|15|12")
+        self.assertEqual(
+            self.writer.payload["voice_endpoint_observed"],
+            {"ip": "162.159.130.234", "port": 50007, "outgoing_packets": 15, "incoming_packets": 12},
+        )
+        self.parse("EVENT|VOICE_ENDPOINT|192.168.2.1|50007|15|12")
+        self.assertEqual(self.writer.payload["voice_endpoint_observed"]["ip"], "162.159.130.234")
+        self.parse("EVENT|VOICE_PROBE|active|3|1|1")
+        self.parse("EVENT|VOICE_PROBE|raw|3|0|0")
+        self.parse("EVENT|VOICE_PROBE|candidate-2|3|2|2")
+        self.assertEqual(self.writer.payload["last_voice_probe"]["label"], "candidate-2")
+        self.assertEqual(set(self.writer.payload["voice_calibration"]), {"active", "raw"})
+        self.assertEqual(self.writer.payload["voice_calibration"]["raw"]["valid"], 0)
+        self.parse("EVENT|VOICE_AUTO_MODE|auto|raw-no-reply")
+        self.assertEqual(self.writer.payload["voice_auto_mode"], "auto")
+        self.parse("EVENT|VOICE_AUTO|2|pass")
+        self.assertEqual(self.writer.payload["last_voice_auto"], {"candidate": 2, "result": "pass"})
+        self.parse("EVENT|VOICE_UNCONFIRMED|2")
+        self.assertIs(self.writer.payload["voice_unconfirmed"], True)
 
     def test_non_event_and_unknown_lines_are_ignored(self):
         for line in ("hello", "EVENT", "event|FOUND|1", "EVENT|", "EVENT|UNKNOWN|1|2"):

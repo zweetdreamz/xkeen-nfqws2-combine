@@ -71,6 +71,8 @@ JOB_START_LOCK = threading.Lock()
 ROUTE_HISTORY_DIR = Path("/opt/etc/xkeen-web/history")
 SNAPSHOT_DIR = Path("/opt/etc/keenetic-discord-nfqws2/snapshots")
 FLOWSEAL_UPDATE_STATE = Path("/opt/etc/xkeen-web/flowseal-update.json")
+# Learned by zapret_autotune_job.py after a user-confirmed Discord Voice check.
+VOICE_ENDPOINT_FILE = Path("/opt/etc/xkeen-web/discord-voice-endpoint.json")
 FLOWSEAL_SOURCE_CACHE = Path("/opt/etc/xkeen-web/flowseal-sources.json")
 FLOWSEAL_UPDATE_LOCK = threading.Lock()
 FLOWSEAL_REPOSITORY = "Flowseal/zapret-discord-youtube"
@@ -174,7 +176,7 @@ button:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .service-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;color:#fff;font-weight:800;font-size:15px}
 .service[data-service^=discord] .service-icon{background:#5865f2}.service[data-service=discord-voice] .service-icon{background:#3ba55d}
 .service-scope{color:var(--muted);font-size:12px;line-height:1.3}.service[data-service=youtube] .service-icon{background:#ff2d2d}
-.current{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:var(--sunken);color:var(--muted);font:600 11px/1.6 var(--mono);letter-spacing:.04em}
+.current:empty{display:none}.current{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:var(--sunken);color:var(--muted);font:600 11px/1.6 var(--mono);letter-spacing:.04em}
 .service:has(.mode.active[data-mode=direct]) .current{background:color-mix(in srgb,var(--direct) 14%,transparent);color:var(--direct)}
 .service:has(.mode.active[data-mode=zapret]) .current{background:color-mix(in srgb,var(--zapret) 14%,transparent);color:var(--zapret)}
 .service:has(.mode.active[data-mode=vpn]) .current{background:color-mix(in srgb,var(--vpn) 14%,transparent);color:var(--vpn)}
@@ -204,7 +206,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:7px 12px;border
 .profile h3{font-size:15px}.profile .family{flex:1;min-height:40px;margin-top:4px;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
 .profile button{width:100%;padding:8px;margin-top:10px;font-size:13px;color:var(--red)}
 .tuner-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-.field{display:grid;gap:6px;align-content:start}.field-hint{color:var(--faint);font-size:12px}.field label{color:var(--muted);font-size:13px;font-weight:600}
+.field{display:grid;gap:6px;align-content:start}.field-hint{color:var(--faint);font-size:12px}.field .check{display:flex;align-items:center;gap:8px;color:var(--text);font-size:14px;font-weight:600;cursor:pointer}.field .check input{width:18px;height:18px;margin:0;accent-color:var(--accent)}.field label{color:var(--muted);font-size:13px;font-weight:600}
 .field select,.field input{width:100%;padding:10px 12px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font:inherit;font-size:14px}
 .field select:hover,.field input:hover{border-color:var(--faint)}
 .tuner-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
@@ -314,6 +316,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
       <div class="field"><label for="tunerMax">Максимум кандидатов</label><input id="tunerMax" type="number" min="1" max="64" value="32"></div>
       <div class="field"><label for="tunerSeed">Seed (пусто = новый случайный)</label><input id="tunerSeed" inputmode="numeric" pattern="[0-9]*" placeholder="например, 1732459012"></div>
       <div class="field" id="clientIpField" hidden><label for="tunerClientIp">LAN IPv4 компьютера с Discord</label><input id="tunerClientIp" inputmode="decimal" placeholder="192.168.2.60"></div>
+      <div class="field" id="voiceAutoField" hidden><label class="check"><input id="tunerVoiceAuto" type="checkbox" disabled> Проверять Voice автоматически</label><div id="voiceAutoHint" class="field-hint">Голосовой сервер ещё не сохранён: один раз пройдите ручную проверку с ответом «Да».</div></div>
     </div>
     <div class="tuner-actions"><button id="startTuner" class="apply"><svg class="i"><use href="#i-play"/></svg>Начать подбор</button><button id="cancelTuner" class="cancel" disabled>Остановить и восстановить nfqws2</button></div>
     <div class="warning">Safe отдельно меняет repeats, out-range, TCP pos/seq и QUIC repeats. Extended добавляет ограниченные сочетания и смешивание BAT-компонентов. Пустой seed даёт новый порядок и подмножество кандидатов; сохранённый seed точно повторяет поиск. Подбор временно перезапускает только nfqws2; Xkeen не вызывается. Сервис должен заранее находиться в режиме Zapret.</div>
@@ -394,16 +397,18 @@ async function checkUpdates(){const button=document.getElementById("checkUpdates
 let tunerSourceList=[];
 function renderTunerSources(){const select=document.getElementById("tunerSource"),service=document.getElementById("tunerService").value,previous=select.value;select.textContent="";const all=document.createElement("option");all.value="";all.textContent="Все файлы и встроенный профиль";select.append(all);tunerSourceList.forEach(item=>{const option=document.createElement("option"),supported=(item.services||[]).includes(service);option.value=item.name;option.textContent=item.name+(supported?"":" — нет профиля для "+serviceLabel[service]);option.disabled=!supported;select.append(option)});const keep=tunerSourceList.find(item=>item.name===previous&&(item.services||[]).includes(service));select.value=keep?previous:""}
 async function refreshTunerSources(){const hint=document.getElementById("tunerSourceHint");try{const d=await api("/api/tuner/sources");tunerSourceList=d.sources||[];renderTunerSources();hint.textContent=d.status==="ready"?"Только выбранный файл: его профили без встроенного; Safe/Extended добавляют вариации параметров этого файла. Commit "+d.commit.slice(0,12)+".":d.status==="error"?"Список файлов недоступен: "+d.error:"Список файлов появится после «Проверить обновление»."}catch(e){hint.textContent="Список файлов недоступен: "+e}}
-function tunerServiceChanged(){document.getElementById("clientIpField").hidden=document.getElementById("tunerService").value!=="discord-voice";renderTunerSources()}
+function tunerServiceChanged(){const voice=document.getElementById("tunerService").value==="discord-voice";document.getElementById("clientIpField").hidden=!voice;document.getElementById("voiceAutoField").hidden=!voice;renderTunerSources()}
+async function refreshVoiceEndpoint(){const box=document.getElementById("tunerVoiceAuto"),hint=document.getElementById("voiceAutoHint");try{const d=await api("/api/tuner/voice-endpoint"),e=d.endpoint;box.disabled=!e;if(!e)box.checked=false;hint.textContent=e?"Сервер "+e.ip+":"+e.port+" из проверки "+fmtDate(e.learned_utc)+". Кандидаты проверяются пакетом с роутера; вас позовут только подтвердить найденный профиль.":"Голосовой сервер ещё не сохранён: один раз пройдите ручную проверку с ответом «Да»."}catch(e){hint.textContent="Состояние автопроверки недоступно: "+e}}
 function tunerControls(active){tunerRunning=active;document.getElementById("startTuner").disabled=active;document.getElementById("cancelTuner").disabled=!active;document.querySelectorAll("[data-action],.mode").forEach(b=>b.disabled=active)}
 function tunerStateLabel(state){return ({idle:"Задание не запускалось",preparing:"Получение и разбор стратегий…",running:"Проверка кандидатов…",voice_window:"Окно проверки Discord Voice…",awaiting_voice:"Ожидается ваш ответ",cancelling:"Остановка и восстановление nfqws2…",found:"Найден проходной профиль",none:"Проходной профиль не найден",cancelled:"Подбор остановлен, nfqws2 восстановлен",error:"Ошибка подбора"})[state]||state}
+function voiceSummary(d){const parts=[];if(d.voice_auto_mode==="auto")parts.push("Автопроверка: без обхода сервер не отвечает, кандидаты оцениваются пакетом с роутера.");else if(d.voice_auto_mode==="manual")parts.push("Автопроверка выключена: сервер отвечает и без обхода, поэтому каждый кандидат проверяется вручную.");if(d.last_voice_auto)parts.push("Кандидат "+d.last_voice_auto.candidate+": "+(d.last_voice_auto.result==="pass"?"сервер ответил":"нет ответа")+".");if(d.voice_unconfirmed)parts.push("Звук не подтверждён: перед применением проверьте голос вручную.");parts.push(d.voice_auto_mode==="auto"?"Найденный профиль подтверждается звуком в конце.":"Voice: требуется подтверждение звука; UDP-пакеты сами по себе не доказывают качество голоса.");return parts.join(" ")}
 function renderTuner(d){
   const state=d.status||"idle",active=!!d.active||activeTunerStates.has(state);tunerControls(active);
   document.getElementById("tunerStatus").textContent=tunerStateLabel(state)+(d.error?": "+d.error:"");
   document.getElementById("tunerCommit").textContent=[d.source_file||"",d.commit?d.commit.slice(0,12):"",d.search_seed===undefined?"":("seed "+d.search_seed)].filter(Boolean).join(" · ");
   document.getElementById("tunerProgress").textContent=d.candidate_count?("кандидат "+(d.current_candidate||0)+" из "+d.candidate_count):"—";
   const probe=d.last_probe_detail;document.getElementById("tunerProbe").textContent=probe?([probe.phase,"проход "+probe.round,probe.role,probe.http_code,probe.status,probe.seconds+" с",probe.bytes+" B"].join(" · ")):"";
-  const base=d.baseline_result,suite=d.last_suite_result;document.getElementById("tunerVerification").textContent=(base?"Исходный профиль: "+base.verdict+" ("+base.successes+"/"+base.total+"). ":"")+(suite?"Кандидат "+suite.candidate+": "+suite.phase+" · "+suite.verdict+". ":"")+(d.service==="discord-voice"?"Voice: требуется подтверждение звука; UDP-пакеты сами по себе не доказывают качество голоса.":"Победитель должен пройти два HTTP-прохода. QUIC и воспроизведение видео не подтверждаются.");
+  const base=d.baseline_result,suite=d.last_suite_result;document.getElementById("tunerVerification").textContent=(base?"Исходный профиль: "+base.verdict+" ("+base.successes+"/"+base.total+"). ":"")+(suite?"Кандидат "+suite.candidate+": "+suite.phase+" · "+suite.verdict+". ":"")+(d.service==="discord-voice"?voiceSummary(d):"Победитель должен пройти два HTTP-прохода. QUIC и воспроизведение видео не подтверждаются.");
   document.getElementById("tunerLog").textContent=(d.log_tail||[]).join("\n");
   document.getElementById("voiceVerdict").classList.toggle("visible",state==="awaiting_voice");
   const found=d.found;document.getElementById("tunerFound").classList.toggle("visible",state==="found"&&!!found);
@@ -412,11 +417,11 @@ function renderTuner(d){
 }
 async function refreshTuner(){try{renderTuner(await api("/api/tuner/status"))}catch(e){document.getElementById("tunerStatus").textContent="Ошибка статуса: "+e}}
 async function startTuner(){
-  const service=document.getElementById("tunerService").value,max=Number(document.getElementById("tunerMax").value),mix=document.getElementById("tunerMix").value,clientIp=document.getElementById("tunerClientIp").value.trim(),searchSeed=document.getElementById("tunerSeed").value.trim(),sourceFile=document.getElementById("tunerSource").value;
+  const service=document.getElementById("tunerService").value,max=Number(document.getElementById("tunerMax").value),mix=document.getElementById("tunerMix").value,clientIp=document.getElementById("tunerClientIp").value.trim(),searchSeed=document.getElementById("tunerSeed").value.trim(),sourceFile=document.getElementById("tunerSource").value,voiceAuto=service==="discord-voice"&&document.getElementById("tunerVoiceAuto").checked;
   if(service==="discord-voice"&&!clientIp){log("для Discord Voice укажите LAN IPv4 компьютера");return}
   if(!confirm("Начать подбор для "+serviceLabel[service]+(sourceFile?" из "+sourceFile:"")+"?\n\nТолько nfqws2 будет временно перезапускаться. Xkeen останется без изменений."))return;
   document.getElementById("tunerFound").classList.remove("visible");tunerControls(true);log("автоподбор: "+service,true);
-  try{const d=await api("/api/tuner/start",{method:"POST",headers:controlHeaders,body:JSON.stringify({service:service,mix_level:mix,max_candidates:max,client_ip:clientIp,search_seed:searchSeed,source_file:sourceFile})});renderTuner(d)}
+  try{const d=await api("/api/tuner/start",{method:"POST",headers:controlHeaders,body:JSON.stringify({service:service,mix_level:mix,max_candidates:max,client_ip:clientIp,search_seed:searchSeed,source_file:sourceFile,voice_auto:voiceAuto})});renderTuner(d)}
   catch(e){log("не удалось начать подбор: "+e);tunerControls(false)}
 }
 async function cancelTuner(){if(!confirm("Остановить подбор? Временный процесс будет завершён, штатный nfqws2 восстановлен."))return;try{renderTuner(await api("/api/tuner/cancel",{method:"POST",headers:controlHeaders,body:"{}"}))}catch(e){log("ошибка остановки: "+e)}}
@@ -429,7 +434,7 @@ document.getElementById("tunerService").addEventListener("change",tunerServiceCh
 document.getElementById("refreshHistory").addEventListener("click",refreshHistory);document.getElementById("refreshVersions").addEventListener("click",refreshVersions);document.getElementById("checkUpdates").addEventListener("click",checkUpdates);
 document.getElementById("openDiagnostics").addEventListener("click",()=>document.querySelector('.tab[data-tab="diagnostics"]').click());
 document.querySelectorAll(".diag-start").forEach(b=>b.addEventListener("click",()=>startDiagnostic(b.dataset.diagKind)));document.getElementById("cancelDiagnostic").addEventListener("click",cancelDiagnostic);
-log("панель готова",true);tunerServiceChanged();refresh();refreshProfiles();refreshVersions();refreshHistory();refreshUpdates();refreshTunerSources();refreshTuner();refreshDiagnostic();resumeRouteJob();
+log("панель готова",true);tunerServiceChanged();refresh();refreshProfiles();refreshVersions();refreshHistory();refreshUpdates();refreshTunerSources();refreshVoiceEndpoint();refreshTuner();refreshDiagnostic();resumeRouteJob();
 </script></body></html>"""
 
 
@@ -1640,10 +1645,30 @@ def tuner_sources():
     }
 
 
+def learned_voice_endpoint():
+    """Discord voice server remembered for the automatic Voice check, or None."""
+    try:
+        data = safe_json_file(VOICE_ENDPOINT_FILE, maximum=4096)
+        address = ipaddress.ip_address(data.get("ip", ""))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    port = data.get("port")
+    if (
+        address.version != 4
+        or not address.is_global
+        or isinstance(port, bool)
+        or not isinstance(port, int)
+        or not (19294 <= port <= 19344 or 50000 <= port <= 65535)
+    ):
+        return None
+    learned = data.get("learned_utc", "")
+    return {"ip": str(address), "port": port, "learned_utc": learned if isinstance(learned, str) else ""}
+
+
 def validate_tuner_request(body):
     if not isinstance(body, dict):
         raise ValueError("ожидается JSON-объект")
-    if set(body) - {"service", "mix_level", "max_candidates", "client_ip", "search_seed", "source_file"}:
+    if set(body) - {"service", "mix_level", "max_candidates", "client_ip", "search_seed", "source_file", "voice_auto"}:
         raise ValueError("неизвестные параметры подбора")
     service = body.get("service")
     if service not in SERVICES:
@@ -1684,6 +1709,11 @@ def validate_tuner_request(body):
         or not SOURCE_FILE_NAME.fullmatch(source_file)
     ):
         raise ValueError("файл стратегии должен быть одним general*.bat")
+    voice_auto = body.get("voice_auto", False)
+    if not isinstance(voice_auto, bool):
+        raise ValueError("voice_auto должен быть true или false")
+    if voice_auto and service != "discord-voice":
+        raise ValueError("автопроверка доступна только для Discord Voice")
     return {
         "service": service,
         "mix_level": mix_level,
@@ -1691,6 +1721,7 @@ def validate_tuner_request(body):
         "client_ip": client_ip,
         "search_seed": search_seed,
         "source_file": source_file,
+        "voice_auto": voice_auto,
     }
 
 
@@ -1736,6 +1767,10 @@ def launch_tuner_job(settings):
         raise RuntimeError(
             f"{settings['service']} использует route={route}; сначала включите Zapret"
         )
+    if settings.get("voice_auto") and learned_voice_endpoint() is None:
+        raise RuntimeError(
+            "голосовой сервер ещё не сохранён: один раз пройдите ручную проверку Voice с ответом «Да»"
+        )
     clear_previous_tuner_job()
     job_id = secrets.token_hex(8)
     command = [
@@ -1760,6 +1795,8 @@ def launch_tuner_job(settings):
         command.extend(["--client-ip", settings["client_ip"]])
     if settings.get("source_file"):
         command.extend(["--source-file", settings["source_file"]])
+    if settings.get("voice_auto"):
+        command.append("--voice-auto")
     environment = command_env()
     environment["PYTHONUNBUFFERED"] = "1"
     with (TUNER_JOB_DIR / "process.log").open("ab", buffering=0) as output:
@@ -2102,6 +2139,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/tuner/sources":
             self.send_json(200, tuner_sources())
+            return
+        if self.path == "/api/tuner/voice-endpoint":
+            self.send_json(200, {"ok": True, "endpoint": learned_voice_endpoint()})
             return
         if self.path == "/api/route/status":
             self.send_json(200, route_status())

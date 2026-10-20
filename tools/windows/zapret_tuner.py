@@ -44,6 +44,8 @@ SAFE_TOKEN_RE = re.compile(r"^--[a-z0-9-]+=[A-Za-z0-9_@/.,:+<>=!-]+$")
 # digits, spaces and ()_.,+- only, so no path separators or shell syntax.
 SOURCE_NAME_RE = re.compile(r"general[\w ()+.,-]*\.bat", re.IGNORECASE)
 GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
+# "IPv4:port" of a learned Discord voice server for the runner's auto check.
+VOICE_TARGET_RE = re.compile(r"(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}")
 
 NATIVE_FAKE = (
     "--lua-desync=fake:blob=tls_clienthello:"
@@ -1296,9 +1298,13 @@ def render_runner(
     client_ip: str,
     voice_duration: int,
     http_timeout: int,
+    voice_target: str = "",
 ) -> str:
+    if voice_target and not VOICE_TARGET_RE.fullmatch(voice_target):
+        raise ValueError(f"invalid voice target: {voice_target!r}")
     rendered = template
     replacements = {
+        "@@VOICE_TARGET@@": voice_target,
         "@@SERVICE@@": service,
         "@@CLIENT_IP@@": client_ip,
         "@@VOICE_DURATION@@": str(voice_duration),

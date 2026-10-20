@@ -10,6 +10,9 @@ CLIENT_IP="@@CLIENT_IP@@"
 VOICE_DURATION="@@VOICE_DURATION@@"
 HTTP_TIMEOUT="@@HTTP_TIMEOUT@@"
 MIN_HTTP_SUCCESS="@@MIN_HTTP_SUCCESS@@"
+# Discord Voice auto check: "IPv4:port" of a voice server learned from a
+# confirmed session, or empty for manual checks only.
+VOICE_TARGET="@@VOICE_TARGET@@"
 TEST_ROOT="${KD_TUNER_TEST_ROOT:-}"
 
 root_path() {
@@ -20,6 +23,8 @@ NFQWS_INIT="$(root_path /opt/etc/init.d/S51nfqws2)"
 NFQWS_CONF="$(root_path /opt/etc/nfqws2/nfqws2.conf)"
 NFQWS_BIN="$(root_path /opt/usr/bin/nfqws2)"
 VOICE_DIAGNOSTIC="$(root_path /opt/root/keenetic-discord-nfqws2/scripts/diagnose-discord-voice.sh)"
+VOICE_PROBE="$(root_path /opt/root/keenetic-discord-nfqws2/tools/router/discord_voice_probe.py)"
+VOICE_MODE="manual"
 NFQWS_PIDFILE="$(root_path /opt/var/run/nfqws2.pid)"
 TMP_ROOT="$(root_path /opt/tmp/zapret-tuner.$$)"
 CANDIDATE_FILE="$TMP_ROOT/candidates.txt"
@@ -27,6 +32,7 @@ CANDIDATE_LOG="$TMP_ROOT/candidate.log"
 PROBE_BODY="$TMP_ROOT/probe-body"
 PROBE_ERROR="$TMP_ROOT/probe-error"
 VERDICT_FILE="${TUNER_VERDICT_FILE:-}"
+VERDICT_TIMEOUT="${TUNER_VERDICT_TIMEOUT:-300}"
 CANDIDATE_PID=""
 WAS_RUNNING=0
 RESTORED=0
@@ -282,8 +288,46 @@ image|https://cdn.discordapp.com/embed/avatars/0.png"
   return 1
 }
 
+# Sends Discord IP Discovery requests to VOICE_TARGET from the router and
+# prints EVENT|VOICE_PROBE|label|sent|received|valid. Succeeds on a valid reply.
+voice_probe() {
+  voice_probe_label="$1"
+  python3 "$VOICE_PROBE" "${VOICE_TARGET%:*}" "${VOICE_TARGET##*:}" \
+    --label "$voice_probe_label" 2>/dev/null
+}
+
+wait_voice_verdict() {
+  if [ -n "$VERDICT_FILE" ]; then
+    verdict_waited=0
+    while [ ! -f "$VERDICT_FILE" ] && [ "$verdict_waited" -lt "$VERDICT_TIMEOUT" ]; do
+      sleep 1
+      verdict_waited=$((verdict_waited + 1))
+    done
+    if [ -f "$VERDICT_FILE" ]; then
+      verdict="$(sed -n '1p' "$VERDICT_FILE")"
+      rm -f "$VERDICT_FILE"
+    else
+      verdict="timeout"
+    fi
+  elif IFS= read -r verdict; then
+    :
+  else
+    verdict="timeout"
+  fi
+}
+
 test_voice_candidate() {
   candidate_number="$1"
+  if [ "$VOICE_MODE" = "auto" ]; then
+    if ! voice_probe "candidate-$candidate_number"; then
+      emit "VOICE_AUTO|$candidate_number|fail"
+      return 1
+    fi
+    # The server answered only with this strategy: ask for a final sound
+    # check of this one profile.
+    emit "VOICE_AUTO|$candidate_number|pass"
+  fi
+
   emit "VOICE_READY|$candidate_number|$VOICE_DURATION"
   if [ -x "$VOICE_DIAGNOSTIC" ]; then
     sh "$VOICE_DIAGNOSTIC" "$CLIENT_IP" "$VOICE_DURATION" || true
@@ -293,25 +337,16 @@ test_voice_candidate() {
   fi
 
   emit "VOICE_VERDICT|$candidate_number"
-  if [ -n "$VERDICT_FILE" ]; then
-    verdict_waited=0
-    while [ ! -f "$VERDICT_FILE" ] && [ "$verdict_waited" -lt 300 ]; do
-      sleep 1
-      verdict_waited=$((verdict_waited + 1))
-    done
-    if [ -f "$VERDICT_FILE" ]; then
-      verdict="$(sed -n '1p' "$VERDICT_FILE")"
-      rm -f "$VERDICT_FILE"
-    else
-      verdict="no"
-    fi
-  elif IFS= read -r verdict; then
-    :
-  else
-    verdict="no"
-  fi
+  wait_voice_verdict
   case "$verdict" in
     y|Y|yes|YES|да|ДА) return 0 ;;
+    timeout)
+      if [ "$VOICE_MODE" = "auto" ]; then
+        # Nobody answered: keep the automatically passing profile, unconfirmed.
+        emit "VOICE_UNCONFIRMED|$candidate_number"
+        return 0
+      fi
+      ;;
   esac
   return 1
 }
@@ -323,6 +358,11 @@ if [ "$SERVICE" != discord-voice ]; then
   test_http_candidate 0 baseline 1 || true
 fi
 
+if [ "$SERVICE" = discord-voice ] && [ -n "$VOICE_TARGET" ]; then
+  # Calibration 1: the strategy that is active right now.
+  voice_probe active || true
+fi
+
 RUNTIME_PREPARED=1
 if [ "$WAS_RUNNING" -eq 1 ]; then
   "$NFQWS_INIT" stop >/dev/null 2>&1 || {
@@ -332,6 +372,17 @@ if [ "$WAS_RUNNING" -eq 1 ]; then
 else
   firewall_stop >/dev/null 2>&1 || true
 fi
+if [ "$SERVICE" = discord-voice ] && [ -n "$VOICE_TARGET" ]; then
+  # Calibration 2: nfqws2 and its firewall rules are gone, so this request is
+  # not desynced. A reply here means the probe cannot tell strategies apart.
+  if voice_probe raw; then
+    emit "VOICE_AUTO_MODE|manual|raw-reply"
+  else
+    VOICE_MODE="auto"
+    emit "VOICE_AUTO_MODE|auto|raw-no-reply"
+  fi
+fi
+
 firewall_iptables >/dev/null 2>&1 || {
   emit "FATAL|cannot-install-temporary-firewall"
   exit 1

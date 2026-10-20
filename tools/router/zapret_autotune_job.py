@@ -34,6 +34,8 @@ TEST_ROOT = os.environ.get("KD_TUNER_TEST_ROOT", "")
 LOCK_LOGICAL = "/opt/tmp/keenetic-discord-nfqws2.lock"
 JOB_LOGICAL = "/opt/tmp/xkeen-zapret-tuner"
 NFQWS_CONF_LOGICAL = "/opt/etc/nfqws2/nfqws2.conf"
+# Discord voice server seen during the last user-confirmed Voice session.
+VOICE_ENDPOINT_LOGICAL = "/opt/etc/xkeen-web/discord-voice-endpoint.json"
 RUNNER_TEMPLATE = WINDOWS_DIR / "router-candidate-runner.sh"
 
 
@@ -228,6 +230,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--client-ip")
     parser.add_argument("--source-dir", type=Path)
     parser.add_argument("--source-file")
+    parser.add_argument(
+        "--voice-auto",
+        action="store_true",
+        help="probe the learned Discord voice server instead of asking for every candidate",
+    )
     return parser
 
 
@@ -250,8 +257,47 @@ def validate_args(args: argparse.Namespace) -> None:
         len(args.source_file) > 160 or not tuner.SOURCE_NAME_RE.fullmatch(args.source_file)
     ):
         raise ValueError("source-file must name one general*.bat file")
+    if args.voice_auto and args.service != "discord-voice":
+        raise ValueError("voice-auto applies to discord-voice only")
     if args.source_dir and not TEST_ROOT:
         raise ValueError("source-dir is allowed only in an isolated test root")
+
+
+def voice_endpoint_valid(ip: Any, port: Any) -> bool:
+    """A public IPv4 voice server on a Discord Voice/STUN port."""
+    if not isinstance(ip, str) or isinstance(port, bool) or not isinstance(port, int):
+        return False
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    in_range = 19294 <= port <= 19344 or 50000 <= port <= 65535
+    return address.version == 4 and address.is_global and in_range
+
+
+def load_voice_endpoint() -> dict[str, Any] | None:
+    path = root_path(VOICE_ENDPOINT_LOGICAL)
+    try:
+        if path.is_symlink() or path.stat().st_size > 4096:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not voice_endpoint_valid(data.get("ip"), data.get("port")):
+        return None
+    return data
+
+
+def save_voice_endpoint(observed: dict[str, Any]) -> None:
+    atomic_json(
+        root_path(VOICE_ENDPOINT_LOGICAL),
+        {
+            "format": 1,
+            "ip": observed["ip"],
+            "port": observed["port"],
+            "learned_utc": utc_now(),
+        },
+    )
 
 
 def candidate_summary(
@@ -359,6 +405,31 @@ def parse_event(
             current_candidate=int(parts[2]),
             needs_voice_verdict=True,
         )
+    elif event == "VOICE_ENDPOINT" and len(parts) >= 6:
+        ip, port = parts[2], int(parts[3])
+        if voice_endpoint_valid(ip, port):
+            writer.write(
+                voice_endpoint_observed={
+                    "ip": ip,
+                    "port": port,
+                    "outgoing_packets": int(parts[4]),
+                    "incoming_packets": int(parts[5]),
+                }
+            )
+    elif event == "VOICE_PROBE" and len(parts) >= 6:
+        probe = {"label": parts[2], "sent": int(parts[3]), "received": int(parts[4]), "valid": int(parts[5])}
+        changes: dict[str, Any] = {"last_voice_probe": probe}
+        if parts[2] in {"active", "raw"}:
+            calibration = dict(writer.payload.get("voice_calibration") or {})
+            calibration[parts[2]] = probe
+            changes["voice_calibration"] = calibration
+        writer.write(**changes)
+    elif event == "VOICE_AUTO_MODE" and len(parts) >= 4:
+        writer.write(voice_auto_mode=parts[2], voice_auto_reason=parts[3])
+    elif event == "VOICE_AUTO" and len(parts) >= 4:
+        writer.write(last_voice_auto={"candidate": int(parts[2]), "result": parts[3]})
+    elif event == "VOICE_UNCONFIRMED" and len(parts) >= 3:
+        writer.write(voice_unconfirmed=True)
     elif event == "START_FAILED":
         writer.write(last_error="|".join(parts[2:])[:500])
     elif event == "RESTORE_ERROR":
@@ -482,6 +553,15 @@ def main() -> int:
         )
 
         template = RUNNER_TEMPLATE.read_text(encoding="utf-8")
+        voice_target = ""
+        if args.voice_auto:
+            endpoint = load_voice_endpoint()
+            if endpoint is None:
+                raise RuntimeError(
+                    "no learned Discord voice server: run a manual Voice check and answer Yes first"
+                )
+            voice_target = f"{endpoint['ip']}:{endpoint['port']}"
+            writer.write(voice_target=voice_target, voice_target_learned_utc=endpoint.get("learned_utc", ""))
         runner = tuner.render_runner(
             template,
             service=args.service,
@@ -489,6 +569,7 @@ def main() -> int:
             client_ip=args.client_ip or "127.0.0.1",
             voice_duration=args.voice_duration,
             http_timeout=args.http_timeout,
+            voice_target=voice_target,
         )
         runner_path = job_dir / "runner.sh"
         runner_path.write_text(runner, encoding="utf-8")
@@ -545,6 +626,13 @@ def main() -> int:
             )
             return 0
 
+        if args.service == "discord-voice":
+            observed = writer.payload.get("voice_endpoint_observed")
+            if observed and not writer.payload.get("voice_unconfirmed"):
+                # The user confirmed sound on this server: remember it for the
+                # automatic Voice check.
+                save_voice_endpoint(observed)
+                writer.write(voice_endpoint_learned=True)
         writer.write(
             status="found",
             finished_utc=utc_now(),
