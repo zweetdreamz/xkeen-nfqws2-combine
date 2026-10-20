@@ -5,6 +5,7 @@ import socket
 import struct
 import threading
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -102,6 +103,20 @@ class ProbeTests(unittest.TestCase):
         sent, received, valid = PROBE.probe("127.0.0.1", port, count=1, interval=0, timeout=0.3)
         self.assertEqual((received, valid), (0, 0))
         self.assertEqual(sent, 1)
+
+    def test_unreachable_network_is_no_reply(self):
+        # connect() fails without a route (ENETUNREACH); the runner must get
+        # an EVENT line and a non-zero exit, not a traceback.
+        failing = unittest.mock.patch.object(
+            PROBE.socket.socket, "connect", side_effect=OSError(101, "Network is unreachable")
+        )
+        with failing:
+            self.assertEqual(PROBE.probe("162.159.130.234", 50007, count=1, interval=0), (0, 0, 0))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = PROBE.main(["162.159.130.234", "50007", "--count", "1", "--label", "raw"])
+        self.assertEqual(code, 1)
+        self.assertEqual(out.getvalue().strip(), "EVENT|VOICE_PROBE|raw|0|0|0")
 
 
 class CliTests(unittest.TestCase):

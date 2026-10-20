@@ -127,6 +127,28 @@ class ParseRoutesTests(DiagnosticsUnitBase):
                 self.assertEqual(self.module.parse_routes(text), ("unknown", "unknown", "unknown"))
 
 
+class JsoncTests(DiagnosticsUnitBase):
+    def test_comments_are_removed_outside_strings(self):
+        text = '// head\n{"a": "http://x//y", /* c */ "b": "q\\"//z", "c": 1 // tail\n}'
+        self.assertEqual(
+            json.loads(self.module.strip_json_comments(text)),
+            {"a": "http://x//y", "b": 'q"//z', "c": 1},
+        )
+        self.assertEqual(self.module.strip_json_comments('{"s":"/* kept */"}'), '{"s":"/* kept */"}')
+        self.assertEqual(self.module.strip_json_comments("/* unterminated"), " ")
+
+    def test_upgrade_findings_read_jsonc(self):
+        files = {
+            "04_outbounds.json": '// JSONC\n{"outbounds": [{"tag": "direct", "protocol": "freedom",'
+            ' "streamSettings": {"sockopt": {"addressPortStrategy": "SrvPortOnly"}}}]}',
+            "05_commented.json": '{/* "proxySettings": {} */ "outbounds": []}',
+        }
+        self.assertEqual(
+            self.module.xray_upgrade_findings(files),
+            ["04_outbounds.json: freedom direct sockopt.addressPortStrategy"],
+        )
+
+
 class XrayUpgradeTests(DiagnosticsUnitBase):
     def test_clean_configs(self):
         files = {
@@ -193,7 +215,7 @@ class RouteConsistencyTests(DiagnosticsUnitBase):
 
 class TelegramRouteTests(DiagnosticsUnitBase):
     HEADER = "# Active routes: DiscordTCP=vless, DiscordVoice=vless, YouTube=vless, Telegram={}.\n"
-    PROFILE = "--hostlist=/opt/etc/nfqws2/lists/telegram.list\n"
+    PROFILE = "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list\n"
 
     def telegram_check(self, route, tags, profile=False):
         config = self.HEADER.format(route) + (self.PROFILE if profile else "")

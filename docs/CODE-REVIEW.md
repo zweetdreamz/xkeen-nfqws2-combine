@@ -17,7 +17,7 @@ TCP/Voice, выбор BAT-файла в автоподборе, проверка
 
 | Область | Результат |
 |---|---|
-| Тесты | 423 Python-теста (было 49), shell-тесты на все 27 комбинаций маршрутов, JS-тест |
+| Тесты | 423 Python-теста на момент ревью (было 49; сейчас больше), shell-тесты на все 27 комбинаций маршрутов, JS-тест |
 | Покрытие Python (branch) | 93% всего: панель 85%, диагностика 98%, автоподбор 97%, тюнер 97%, dat-reader 98% |
 | Запуск | `sh tests/run-all.sh [--coverage]`, `TEST_SHELL="busybox sh"` |
 | CI | GitHub Actions: dash и busybox, shellcheck (warning), ruff (pyflakes, bugbear) |
@@ -34,7 +34,8 @@ zapret2 и сверяет SHA-256 с движком.
 
 1. **Откат сам себя отменяет после обновления пакетов.**
    `apply-discord-nfqws2.sh`, восстановление snapshot: если версия
-   отслеживаемого пакета (ca-certificates, wget-ssl, jq, nfqws2-keenetic)
+   отслеживаемого пакета (ca-certificates, wget-ssl, wget-nossl, jq,
+   nfqws2-keenetic)
    отличается от снимка, функция возвращает ошибку под `set -e`, `on_exit`
    видит активную транзакцию и восстанавливает rescue snapshot. После любого
    `opkg upgrade` команды `rollback-to-baseline.sh` и

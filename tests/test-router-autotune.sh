@@ -87,7 +87,11 @@ EOF
 cat > "$ROOT/opt/usr/bin/nfqws2" <<'EOF'
 #!/bin/sh
 printf 'candidate:%s\n' "$*" >> "$KD_TUNER_TEST_ROOT/nfqws-candidates.log"
-trap 'exit 0' HUP INT TERM
+if [ "${KD_TUNER_SLOW_CANDIDATE_STOP:-0}" = "1" ]; then
+  trap 'sleep 1; exit 0' HUP INT TERM
+else
+  trap 'exit 0' HUP INT TERM
+fi
 while :; do
   sleep 5
 done
@@ -253,6 +257,49 @@ grep -Fq 'nfqws-start' "$ROOT/nfqws-service.log"
 grep -Fq 'firewall-stop' "$ROOT/firewall.log"
 [ "$(sha256sum "$ROOT/opt/etc/nfqws2/nfqws2.conf" | awk '{print $1}')" = "$config_hash_before" ]
 [ ! -e "$ROOT/opt/tmp/keenetic-discord-nfqws2.lock" ]
+
+# Stop in the panel signals the whole process group: the runner gets SIGTERM
+# directly and once more from the job. The second one must not interrupt the
+# restore (the candidate takes a second to stop, so it lands inside it).
+rm -rf "$ROOT/opt/tmp/xkeen-zapret-tuner"
+mkdir "$ROOT/opt/tmp/xkeen-zapret-tuner"
+: > "$ROOT/nfqws-service.log"
+PATH="$MOCK_BIN:$PATH" \
+KD_TUNER_TEST_ROOT="$ROOT" \
+KD_TUNER_SLOW_CURL=1 \
+KD_TUNER_SLOW_CANDIDATE_STOP=1 \
+  setsid python3 "$TARGET" \
+    --service youtube \
+    --job-id 4444444444444444 \
+    --mix-level safe \
+    --max-candidates 1 \
+    --http-timeout 4 \
+    --source-dir "$SOURCE_DIR" &
+job_pid=$!
+waited=0
+while ! grep -Fq 'nfqws-stop' "$ROOT/nfqws-service.log" 2>/dev/null; do
+  sleep 1
+  waited=$((waited + 1))
+  if [ "$waited" -ge 15 ]; then
+    echo "ERROR: autotuner did not start its fixture candidate" >&2
+    python3 -c 'import os, signal, sys; os.killpg(int(sys.argv[1]), signal.SIGTERM)' "$job_pid" 2>/dev/null || true
+    exit 1
+  fi
+done
+python3 -c 'import os, signal, sys; os.killpg(int(sys.argv[1]), signal.SIGTERM)' "$job_pid"
+set +e
+wait "$job_pid"
+set -e
+python3 - "$state" <<'PY'
+import json
+import sys
+
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+assert state.get("status") == "cancelled", state
+assert state.get("nfqws_restored") == "running", state
+PY
+grep -Fq 'nfqws-start' "$ROOT/nfqws-service.log"
+[ "$(sha256sum "$ROOT/opt/etc/nfqws2/nfqws2.conf" | awk '{print $1}')" = "$config_hash_before" ]
 
 rm -f "$report"
 KD_TUNER_BADBODY=1 run_job 3333333333333333

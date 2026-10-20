@@ -213,15 +213,17 @@ echo "- The same endpoint on WAN confirms direct routing instead of the VPN."
 echo "- Replies on LAN confirm return traffic reaches the Desktop client."
 echo "- NFQUEUE counters should grow on a fresh reconnect; reconnect again if the flow already existed."
 
-# The busiest public voice endpoint (Voice/STUN ports) that also answered.
-# The autotuner remembers it after a confirmed session to probe it later.
+# The busiest public voice endpoint that also answered, on the ports every
+# autotune Voice candidate processes (19294-19344, 50000-50100). The
+# autotuner remembers it after a confirmed session to probe it later.
 awk -v client="$CLIENT_IP" '
   function public(ip) {
     return ip !~ /^(10|127)\./ && ip !~ /^192\.168\./ &&
-      ip !~ /^172\.(1[6-9]|2[0-9]|3[01])\./ && ip !~ /^(22[4-9]|23[0-9]|24[0-9]|25[0-5])\./
+      ip !~ /^172\.(1[6-9]|2[0-9]|3[01])\./ && ip !~ /^(22[4-9]|23[0-9]|24[0-9]|25[0-5])\./ &&
+      ip !~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./ && ip !~ /^(0|169\.254)\./
   }
   function voice_port(port) {
-    return (port >= 19294 && port <= 19344) || (port >= 50000 && port <= 65535)
+    return (port >= 19294 && port <= 19344) || (port >= 50000 && port <= 50100)
   }
   function split_endpoint(value,    parts, count, port, ip, i) {
     sub(/:$/, "", value)

@@ -6,7 +6,7 @@
 
 **Статус:** режимы Direct, Zapret и VPN (плюс `unmanaged`) реализованы, см.
 [TELEGRAM.md](TELEGRAM.md). Отличия от плана ниже: ipset называется
-`telegram-ip.list`, чужие Telegram-селекторы из правил пользователя не
+`kdn-telegram-ip.list`, чужие Telegram-селекторы из правил пользователя не
 вычищаются (правила проекта помечены `ruleTag` и стоят выше), отдельного
 UDP-правила нет — IP-правило без `network` покрывает TCP и UDP. WS-proxy и
 Telegram-диагностика в панели (HTTPS-пробы, TCP-connect к DC) не сделаны.

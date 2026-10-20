@@ -73,6 +73,8 @@ sed -n '/^telegram_domains() {$/,/^}$/p; /^telegram_networks() {$/,/^}$/p; /^tel
 grep -Fqx 'DOMAIN-SUFFIX,t.me,DIRECT' "$FIXTURE/telegram-mihomo.rules"
 grep -Fqx 'IP-CIDR,149.154.160.0/20,DIRECT,no-resolve' "$FIXTURE/telegram-mihomo.rules"
 grep -Fqx 'IP-CIDR6,2001:67c:4e8::/48,DIRECT,no-resolve' "$FIXTURE/telegram-mihomo.rules"
+# Unmanaged Telegram must not remove the user's identical Mihomo rules.
+grep -Fq 'case "$PREVIOUS_TELEGRAM_ROUTE:$TELEGRAM_ROUTE_MODE" in' "$TARGET"
 [ "$(wc -l < "$FIXTURE/telegram-mihomo.rules" | tr -d ' ')" = "33" ]
 if grep -Fq 'zkeenip.dat:telegram' "$TARGET"; then
   echo "ERROR: zkeenip.dat:telegram includes 194.221.0.0/16 and must not be used." >&2

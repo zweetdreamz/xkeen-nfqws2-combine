@@ -51,7 +51,11 @@ def probe(host: str, port: int, *, count: int = 3, interval: float = 0.5,
     request = discovery_request(ssrc)
     sent = received = valid = 0
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.connect((host, port))
+        try:
+            sock.connect((host, port))
+        except OSError:
+            # No route (ENETUNREACH and similar): nothing was sent.
+            return sent, received, valid
         for number in range(count):
             try:
                 sock.send(request)

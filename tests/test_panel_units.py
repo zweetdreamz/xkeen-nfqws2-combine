@@ -1498,7 +1498,8 @@ class TunerSourceTests(PanelTestCase):
             {"ip": "162.159.130.234", "port": 50007, "learned_utc": "2026-10-20T10:00:00Z"},
         )
         for data in ({"ip": "192.168.2.1", "port": 50007}, {"ip": "162.159.130.234", "port": 443},
-                     {"ip": "162.159.130.234", "port": "50007"}, {"ip": 5, "port": 50007}):
+                     {"ip": "162.159.130.234", "port": "50007"}, {"ip": 5, "port": 50007},
+                     {"ip": 2728362730, "port": 50007}, {"ip": "162.159.130.234", "port": 50101}):
             with self.subTest(data=data):
                 path.write_text(json.dumps(data), encoding="utf-8")
                 self.assertIsNone(self.ns["learned_voice_endpoint"]())
@@ -1845,6 +1846,21 @@ class ConfigHealthTests(PanelTestCase):
             ["Xray", "nfqws2", "YouTube route", "Discord TCP route", "Discord Voice route", "Telegram route"],
         )
 
+    def test_routing_with_comments_is_read(self):
+        # Xray accepts JSONC; the engine strips comments, so must the panel.
+        self.ns["NFQWS_CONFIG"].write_text(
+            "# Active routes: DiscordTCP=vless, DiscordVoice=vless, YouTube=direct.\n",
+            encoding="utf-8",
+        )
+        self.ns["XRAY_ROUTING"].write_text(
+            '// managed by XKeen\n{"routing": {"rules": [/* first */ {"outboundTag": "youtube-direct"}]}}',
+            encoding="utf-8",
+        )
+        with mock.patch.dict(self.ns, {"run_command": lambda *_a, **_k: {"ok": True, "code": 0, "output": "1"}}):
+            checks = {check["name"]: check for check in self.ns["config_health"]()["checks"]}
+        self.assertNotIn("Xray routing", checks)
+        self.assertTrue(checks["YouTube route"]["ok"], checks["YouTube route"])
+
     def test_discord_voice_route_is_checked_separately(self):
         self.ns["NFQWS_CONFIG"].write_text(
             "# Active routes: DiscordTCP=vless, DiscordVoice=zapret, YouTube=vless.\n",
@@ -1864,7 +1880,7 @@ class ConfigHealthTests(PanelTestCase):
     def telegram_checks(self, route, rules, profile):
         self.ns["NFQWS_CONFIG"].write_text(
             f"# Active routes: DiscordTCP=vless, DiscordVoice=vless, YouTube=vless, Telegram={route}.\n"
-            + ("--hostlist=/opt/etc/nfqws2/lists/telegram.list\n" if profile else ""),
+            + ("--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list\n" if profile else ""),
             encoding="utf-8",
         )
         self.ns["XRAY_ROUTING"].write_text(json.dumps({"routing": {"rules": rules}}), encoding="utf-8")

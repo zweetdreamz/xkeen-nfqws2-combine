@@ -183,7 +183,7 @@ button:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .service:has(.mode.active[data-mode=direct]) .current{background:color-mix(in srgb,var(--direct) 14%,transparent);color:var(--direct)}
 .service:has(.mode.active[data-mode=zapret]) .current{background:color-mix(in srgb,var(--zapret) 14%,transparent);color:var(--zapret)}
 .service:has(.mode.active[data-mode=vpn]) .current{background:color-mix(in srgb,var(--vpn) 14%,transparent);color:var(--vpn)}
-.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(4,1fr)}
+.modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(4,minmax(0,1fr))}
 .mode{--mode:var(--accent);padding:9px 8px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted);box-shadow:none}
 .mode[data-mode=direct]{--mode:var(--direct)}.mode[data-mode=zapret]{--mode:var(--zapret)}.mode[data-mode=vpn]{--mode:var(--vpn)}.mode[data-mode=unmanaged]{--mode:var(--muted)}
 .mode::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--mode);opacity:.55}
@@ -259,7 +259,8 @@ pre{min-height:120px;max-height:340px;overflow:auto;margin:0;padding:14px 16px;b
 .section-head .i{color:var(--accent)}
 #tunerVerification{margin:12px 0 0}
 footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
-@media(max-width:760px){.services{grid-template-columns:1fr}.service .modes{max-width:460px}}
+@media(max-width:760px){.services{grid-template-columns:minmax(0,1fr)}.service .modes{max-width:460px}}
+@media(max-width:480px){.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){header{align-items:flex-start;flex-direction:column;padding-top:20px}.services,.profiles,.tuner-grid,.updates-grid,.diagnostic-grid,.legend,.meta{grid-template-columns:1fr}.card{padding:18px}.profile-head{flex-wrap:wrap}}
 @media(max-width:480px){.page{width:calc(100% - 24px)}.xkeen-actions,.upload{grid-template-columns:1fr}.tabs{display:grid;grid-template-columns:1fr 1fr}.tabs .tab{justify-content:center;padding:8px 10px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
@@ -405,7 +406,7 @@ function tunerServiceChanged(){const voice=document.getElementById("tunerService
 async function refreshVoiceEndpoint(){const box=document.getElementById("tunerVoiceAuto"),hint=document.getElementById("voiceAutoHint");try{const d=await api("/api/tuner/voice-endpoint"),e=d.endpoint;box.disabled=!e;if(!e)box.checked=false;hint.textContent=e?"Сервер "+e.ip+":"+e.port+" из проверки "+fmtDate(e.learned_utc)+". Кандидаты проверяются пакетом с роутера; вас позовут только подтвердить найденный профиль.":"Голосовой сервер ещё не сохранён: один раз пройдите ручную проверку с ответом «Да»."}catch(e){hint.textContent="Состояние автопроверки недоступно: "+e}}
 function tunerControls(active){tunerRunning=active;document.getElementById("startTuner").disabled=active;document.getElementById("cancelTuner").disabled=!active;document.querySelectorAll("[data-action],.mode").forEach(b=>b.disabled=active)}
 function tunerStateLabel(state){return ({idle:"Задание не запускалось",preparing:"Получение и разбор стратегий…",running:"Проверка кандидатов…",voice_window:"Окно проверки Discord Voice…",awaiting_voice:"Ожидается ваш ответ",cancelling:"Остановка и восстановление nfqws2…",found:"Найден проходной профиль",none:"Проходной профиль не найден",cancelled:"Подбор остановлен, nfqws2 восстановлен",error:"Ошибка подбора"})[state]||state}
-function voiceSummary(d){const parts=[];if(d.voice_auto_mode==="auto")parts.push("Автопроверка: без обхода сервер не отвечает, кандидаты оцениваются пакетом с роутера.");else if(d.voice_auto_mode==="manual")parts.push("Автопроверка выключена: сервер отвечает и без обхода, поэтому каждый кандидат проверяется вручную.");if(d.last_voice_auto)parts.push("Кандидат "+d.last_voice_auto.candidate+": "+(d.last_voice_auto.result==="pass"?"сервер ответил":"нет ответа")+".");if(d.voice_unconfirmed)parts.push("Звук не подтверждён: перед применением проверьте голос вручную.");parts.push(d.voice_auto_mode==="auto"?"Найденный профиль подтверждается звуком в конце.":"Voice: требуется подтверждение звука; UDP-пакеты сами по себе не доказывают качество голоса.");return parts.join(" ")}
+function voiceSummary(d){const parts=[];if(d.voice_auto_mode==="auto")parts.push("Автопроверка: без обхода сервер не отвечает, кандидаты оцениваются пакетом с роутера.");else if(d.voice_auto_mode==="manual")parts.push("Автопроверка выключена: сервер отвечает и без обхода, поэтому каждый кандидат проверяется вручную.");if(d.last_voice_auto)parts.push("Кандидат "+d.last_voice_auto.candidate+": "+(d.last_voice_auto.result==="pass"?"сервер ответил":"нет ответа")+".");if(d.voice_unconfirmed)parts.push("Звук не подтверждён: перед применением проверьте голос вручную.");const active=(d.voice_calibration||{}).active;if(d.status==="none"&&d.voice_auto_mode==="auto"&&!(active&&active.valid>0))parts.push("Сохранённый голосовой сервер не ответил ни с одной стратегией, в том числе с текущей: адрес мог устареть. Повторите подбор без автопроверки.");parts.push(d.voice_auto_mode==="auto"?"Найденный профиль подтверждается звуком в конце.":"Voice: требуется подтверждение звука; UDP-пакеты сами по себе не доказывают качество голоса.");return parts.join(" ")}
 function renderTuner(d){
   const state=d.status||"idle",active=!!d.active||activeTunerStates.has(state);tunerControls(active);
   document.getElementById("tunerStatus").textContent=tunerStateLabel(state)+(d.error?": "+d.error:"");
@@ -417,7 +418,7 @@ function renderTuner(d){
   document.getElementById("voiceVerdict").classList.toggle("visible",state==="awaiting_voice");
   const found=d.found;document.getElementById("tunerFound").classList.toggle("visible",state==="found"&&!!found);
   if(found){document.getElementById("tunerFoundId").textContent=found.candidate_id;document.getElementById("tunerFoundFamily").textContent=found.family;document.getElementById("tunerFoundSource").textContent=found.source_name;document.getElementById("tunerFoundArgs").textContent=(found.args||[]).join("\n")}
-  if(active&&!tunerPoll)tunerPoll=setInterval(refreshTuner,1800);if(!active&&tunerPoll){clearInterval(tunerPoll);tunerPoll=null}
+  if(active&&!tunerPoll)tunerPoll=setInterval(refreshTuner,1800);if(!active&&tunerPoll){clearInterval(tunerPoll);tunerPoll=null;refreshVoiceEndpoint()}
 }
 async function refreshTuner(){try{renderTuner(await api("/api/tuner/status"))}catch(e){document.getElementById("tunerStatus").textContent="Ошибка статуса: "+e}}
 async function startTuner(){
@@ -425,7 +426,7 @@ async function startTuner(){
   if(service==="discord-voice"&&!clientIp){log("для Discord Voice укажите LAN IPv4 компьютера");return}
   if(!confirm("Начать подбор для "+serviceLabel[service]+(sourceFile?" из "+sourceFile:"")+"?\n\nТолько nfqws2 будет временно перезапускаться. Xkeen останется без изменений."))return;
   document.getElementById("tunerFound").classList.remove("visible");tunerControls(true);log("автоподбор: "+service,true);
-  try{const d=await api("/api/tuner/start",{method:"POST",headers:controlHeaders,body:JSON.stringify({service:service,mix_level:mix,max_candidates:max,client_ip:clientIp,search_seed:searchSeed,source_file:sourceFile,voice_auto:voiceAuto})});renderTuner(d)}
+  try{const d=await api("/api/tuner/start",{method:"POST",headers:controlHeaders,body:JSON.stringify({service:service,mix_level:mix,max_candidates:max,client_ip:service==="discord-voice"?clientIp:"",search_seed:searchSeed,source_file:sourceFile,voice_auto:voiceAuto})});renderTuner(d)}
   catch(e){log("не удалось начать подбор: "+e);tunerControls(false)}
 }
 async function cancelTuner(){if(!confirm("Остановить подбор? Временный процесс будет завершён, штатный nfqws2 восстановлен."))return;try{renderTuner(await api("/api/tuner/cancel",{method:"POST",headers:controlHeaders,body:"{}"}))}catch(e){log("ошибка остановки: "+e)}}
@@ -745,13 +746,39 @@ def atomic_text(path, text, mode=0o600):
             pass
 
 
-def safe_json_file(path, maximum=MAX_REPORT_BYTES):
+def strip_json_comments(text):
+    """Remove // and /* */ comments outside strings (Xray accepts JSONC)."""
+    result = []
+    index, length = 0, len(text)
+    while index < length:
+        char = text[index]
+        if char == '"':
+            end = index + 1
+            while end < length and text[end] != '"':
+                end += 2 if text[end] == "\\" else 1
+            result.append(text[index:end + 1])
+            index = end + 1
+        elif text.startswith("//", index):
+            end = text.find("\n", index)
+            index = length if end < 0 else end
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            result.append(" ")
+            index = length if end < 0 else end + 2
+        else:
+            result.append(char)
+            index += 1
+    return "".join(result)
+
+
+def safe_json_file(path, maximum=MAX_REPORT_BYTES, comments=False):
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise ValueError(f"необычный тип файла: {path}")
     if not 0 < info.st_size <= maximum:
         raise ValueError(f"некорректный размер файла: {path}")
-    data = json.loads(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    data = json.loads(strip_json_comments(text) if comments else text)
     if not isinstance(data, dict):
         raise ValueError(f"ожидается JSON-объект: {path}")
     return data
@@ -1071,7 +1098,7 @@ def config_health():
         nfqws_text = ""
         add("nfqws2 config", False, str(exc))
     try:
-        routing = safe_json_file(XRAY_ROUTING).get("routing")
+        routing = safe_json_file(XRAY_ROUTING, comments=True).get("routing")
         rules = routing.get("rules", []) if isinstance(routing, dict) else None
         if not isinstance(rules, list):
             raise ValueError(f"routing.rules не является списком: {XRAY_ROUTING}")
@@ -1112,7 +1139,7 @@ def config_health():
             f"route={route}, nfqws={'on' if active else 'off'}",
         )
     telegram = routes["telegram"]
-    telegram_profile = "--hostlist=/opt/etc/nfqws2/lists/telegram.list" in nfqws_text
+    telegram_profile = "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list" in nfqws_text
     telegram_rules = [
         rule for rule in rules
         if isinstance(rule, dict) and rule.get("ruleTag") == "kdn-telegram"
@@ -1688,7 +1715,10 @@ def learned_voice_endpoint():
     """Discord voice server remembered for the automatic Voice check, or None."""
     try:
         data = safe_json_file(VOICE_ENDPOINT_FILE, maximum=4096)
-        address = ipaddress.ip_address(data.get("ip", ""))
+        ip = data.get("ip")
+        if not isinstance(ip, str):
+            return None
+        address = ipaddress.ip_address(ip)
     except (OSError, ValueError, json.JSONDecodeError):
         return None
     port = data.get("port")
@@ -1697,7 +1727,7 @@ def learned_voice_endpoint():
         or not address.is_global
         or isinstance(port, bool)
         or not isinstance(port, int)
-        or not (19294 <= port <= 19344 or 50000 <= port <= 65535)
+        or not (19294 <= port <= 19344 or 50000 <= port <= 50100)
     ):
         return None
     learned = data.get("learned_utc", "")

@@ -45,8 +45,8 @@ NFQWS_INIT="$(root_path /opt/etc/init.d/S51nfqws2)"
 NFQWS_CONF="$(root_path /opt/etc/nfqws2/nfqws2.conf)"
 NFQWS_LIST="$(root_path /opt/etc/nfqws2/lists/user.list)"
 NFQWS_YOUTUBE_LIST="$(root_path /opt/etc/nfqws2/lists/youtube.list)"
-NFQWS_TELEGRAM_LIST="$(root_path /opt/etc/nfqws2/lists/telegram.list)"
-NFQWS_TELEGRAM_IPSET="$(root_path /opt/etc/nfqws2/lists/telegram-ip.list)"
+NFQWS_TELEGRAM_LIST="$(root_path /opt/etc/nfqws2/lists/kdn-telegram.list)"
+NFQWS_TELEGRAM_IPSET="$(root_path /opt/etc/nfqws2/lists/kdn-telegram-ip.list)"
 NFQWS_DISCORD_UDP_BLOB="$(root_path /opt/etc/nfqws2/blobs/discord_udp.bin)"
 NFQWS_YOUTUBE_TLS_BLOB="$(root_path /opt/etc/nfqws2/blobs/tls_clienthello.bin)"
 NFQWS_YOUTUBE_QUIC_BLOB="$(root_path /opt/etc/nfqws2/blobs/quic_initial.bin)"
@@ -59,6 +59,7 @@ XKEEN_DIR="$(root_path /opt/etc/xkeen)"
 XKEEN_PORT_PROXYING="$XKEEN_DIR/port_proxying.lst"
 XKEEN_PORT_EXCLUDE="$XKEEN_DIR/port_exclude.lst"
 XRAY_CONFIG_DIR="$(root_path /opt/etc/xray/configs)"
+XRAY_DAT_DIR="$(root_path /opt/etc/xray/dat)"
 MIHOMO_CONFIG="$(root_path /opt/etc/mihomo/config.yaml)"
 OPKG_FEED="$(root_path /opt/etc/opkg/nfqws2-keenetic.conf)"
 SOURCE_DISCORD_UDP_BLOB="$SCRIPT_DIR/config/blobs/ACTIVE_DISCORD_UDP.bin"
@@ -93,6 +94,7 @@ YOUTUBE_ROUTE_MODE="vless"
 # Telegram is opt-in: "unmanaged" leaves its traffic to the user's own rules.
 # Empty means "keep the route recorded in nfqws2.conf" (resolved below).
 TELEGRAM_ROUTE_MODE=""
+TELEGRAM_ROUTE_EXPLICIT=0
 DISCORD_TCP_ROUTE_EXPLICIT=0
 DISCORD_VOICE_ROUTE_EXPLICIT=0
 YOUTUBE_ROUTE_EXPLICIT=0
@@ -324,6 +326,19 @@ any_route_is() {
     [ "$TELEGRAM_ROUTE_MODE" = "$1" ]
 }
 
+# Managed Telegram rules use the v2fly geosite/geoip files. Checked only when
+# XKeen's dat directory exists; otherwise 'xkeen -xtest' reports the problem.
+telegram_dat_present() {
+  [ "$TELEGRAM_ROUTE_MODE" != "unmanaged" ] || return 0
+  [ -d "$XRAY_DAT_DIR" ] || return 0
+  for telegram_dat in geosite_v2fly.dat geoip_v2fly.dat; do
+    [ -s "$XRAY_DAT_DIR/$telegram_dat" ] || {
+      echo "ERROR: Telegram routing needs $XRAY_DAT_DIR/$telegram_dat (ext:${telegram_dat}:telegram)." >&2
+      return 1
+    }
+  done
+}
+
 # XKeen must proxy these ports for the managed services to reach Xray.
 set_xkeen_required_ports() {
   XKEEN_REQUIRED_PORTS="80,443,2053,2083,2087,2096,8443,3478:3481,5349,19294:19344,50000:$VOICE_HIGH"
@@ -501,6 +516,7 @@ while [ "$#" -gt 0 ]; do
         exit 2
       }
       TELEGRAM_ROUTE_MODE="$1"
+      TELEGRAM_ROUTE_EXPLICIT=1
       ;;
     --proxy-outbound)
       shift
@@ -544,7 +560,10 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-[ -n "$TELEGRAM_ROUTE_MODE" ] || TELEGRAM_ROUTE_MODE="$(recorded_telegram_route)"
+# The route before this run: Mihomo rules for Telegram are removed only when
+# the project may have added them.
+PREVIOUS_TELEGRAM_ROUTE="$(recorded_telegram_route)"
+[ -n "$TELEGRAM_ROUTE_MODE" ] || TELEGRAM_ROUTE_MODE="$PREVIOUS_TELEGRAM_ROUTE"
 case "$TELEGRAM_ROUTE_MODE" in
   direct|zapret|vless|unmanaged) ;;
   *)
@@ -554,6 +573,11 @@ case "$TELEGRAM_ROUTE_MODE" in
 esac
 
 if [ "$STANDALONE_ZAPRET" -eq 1 ]; then
+  # Without XKeen there is no VPN; a recorded (not requested) Telegram VPN
+  # route becomes unmanaged instead of blocking the standalone apply.
+  if [ "$TELEGRAM_ROUTE_MODE" = "vless" ] && [ "$TELEGRAM_ROUTE_EXPLICIT" -eq 0 ]; then
+    TELEGRAM_ROUTE_MODE="unmanaged"
+  fi
   [ "$DISCORD_TCP_ROUTE_EXPLICIT" -eq 1 ] || DISCORD_TCP_ROUTE_MODE="zapret"
   [ "$DISCORD_VOICE_ROUTE_EXPLICIT" -eq 1 ] || DISCORD_VOICE_ROUTE_MODE="zapret"
   [ "$YOUTUBE_ROUTE_EXPLICIT" -eq 1 ] || YOUTUBE_ROUTE_MODE="zapret"
@@ -658,6 +682,27 @@ verify_discord_udp_blob_source() {
     echo "ERROR: Flowseal Discord UDP blob checksum mismatch." >&2
     echo "       Expected: $DISCORD_UDP_BLOB_SHA256" >&2
     echo "       Actual:   $blob_hash" >&2
+    return 1
+  }
+}
+
+# Telegram registers its own copy of the package TLS blob, so its profiles do
+# not depend on the package config registering tls_clienthello.
+verify_telegram_blob() {
+  [ "$TELEGRAM_ROUTE_MODE" = "zapret" ] || return 0
+  have sha256sum || {
+    echo "ERROR: sha256sum is required to verify the Telegram TLS blob." >&2
+    return 1
+  }
+  [ -f "$NFQWS_YOUTUBE_TLS_BLOB" ] || {
+    echo "ERROR: required nfqws2 TLS blob is missing: $NFQWS_YOUTUBE_TLS_BLOB" >&2
+    return 1
+  }
+  telegram_blob_actual="$(sha256sum "$NFQWS_YOUTUBE_TLS_BLOB" | awk '{ print $1 }')"
+  [ "$telegram_blob_actual" = "$YOUTUBE_TLS_BLOB_SHA256" ] || {
+    echo "ERROR: TLS blob checksum mismatch: $NFQWS_YOUTUBE_TLS_BLOB" >&2
+    echo "       Expected: $YOUTUBE_TLS_BLOB_SHA256" >&2
+    echo "       Actual:   $telegram_blob_actual" >&2
     return 1
   }
 }
@@ -1531,6 +1576,8 @@ preflight() {
                [ "$TELEGRAM_ROUTE_MODE" = "vless" ]; } &&
              ! resolve_xray_proxy_outbound; then
           preflight_errors=$((preflight_errors + 1))
+        elif ! telegram_dat_present; then
+          preflight_errors=$((preflight_errors + 1))
         elif ! xkeen -xtest >/dev/null 2>&1; then
           echo "ERROR: current Xray configuration fails 'xkeen -xtest'." >&2
           preflight_errors=$((preflight_errors + 1))
@@ -1955,6 +2002,16 @@ nfqws_package_drift() {
      [ "$drift_snapshot_version" != "$drift_current_version" ]; then
     printf '%s\n' "$drift_snapshot_version"
   fi
+}
+
+# True when a snapshot already holds project changes to XKeen (an earlier
+# integrated apply), so it cannot serve as the XKeen baseline.
+snapshot_has_xkeen_changes() {
+  for xkeen_artifact in "$1"/files/opt/etc/xray/configs/04_*_nfqws2_outbound.json; do
+    [ -e "$xkeen_artifact" ] && return 0
+  done
+  grep -qx '# BEGIN keenetic-discord-nfqws2' \
+    "$1/files/opt/etc/xkeen/port_proxying.lst" 2>/dev/null
 }
 
 restore_files() {
@@ -2399,7 +2456,7 @@ load_current_nfqws_context() {
 
   TELEGRAM_ROUTE_MODE="$(recorded_telegram_route)"
   recorded_udp_settings
-  UDP_STRATEGY="$RECORDED_UDP_STRATEGY"
+  UDP_STRATEGY="${RECORDED_UDP_STRATEGY:-flowseal}"
   if [ "$RECORDED_UDP_RANGE" = "wide" ]; then
     WIDE_UDP=1
     VOICE_HIGH=65535
@@ -2434,9 +2491,12 @@ recorded_udp_settings() {
     *50000:65535*|*50000-65535*) RECORDED_UDP_RANGE=wide ;;
     *) RECORDED_UDP_RANGE=narrow ;;
   esac
+  # Configs without the line predate it. A Voice profile without the
+  # discord_udp blob is the legacy one; without a Voice profile nothing is
+  # known and the default (flowseal) applies.
   if grep -Fq -- '--blob=discord_udp:' "$NFQWS_CONF" 2>/dev/null; then
     RECORDED_UDP_STRATEGY=flowseal
-  else
+  elif grep -Fq -- '--filter-l7=stun,discord' "$NFQWS_CONF" 2>/dev/null; then
     RECORDED_UDP_STRATEGY=legacy
   fi
 }
@@ -2546,7 +2606,7 @@ status_report() {
   echo "telegram_route=$reported_telegram_route"
   if [ -f "$NFQWS_CONF" ]; then
     recorded_udp_settings
-    echo "udp_strategy=$RECORDED_UDP_STRATEGY"
+    echo "udp_strategy=${RECORDED_UDP_STRATEGY:-unknown}"
     echo "udp_range=$RECORDED_UDP_RANGE"
   else
     echo "udp_strategy=unknown"
@@ -3176,7 +3236,11 @@ make_mihomo_removal_rules_json() {
     echo "AND,((NETWORK,UDP),(DST-PORT,50000-50100)),DIRECT"
     echo "AND,((NETWORK,UDP),(DST-PORT,50000-65535)),DIRECT"
     youtube_domains | awk '{ print "DOMAIN-SUFFIX," $0 ",DIRECT" }'
-    telegram_mihomo_rules
+    # Mihomo rules carry no tag: identical user rules are left alone unless
+    # the project managed Telegram before (or manages it now).
+    case "$PREVIOUS_TELEGRAM_ROUTE:$TELEGRAM_ROUTE_MODE" in
+      direct:*|zapret:*|*:direct|*:zapret) telegram_mihomo_rules ;;
+    esac
   } | jq -Rsc 'split("\n") | map(select(length > 0))' > "$mihomo_removal_file"
 }
 
@@ -3463,8 +3527,12 @@ NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
     fi
   fi
 
+  telegram_base_append=""
   telegram_custom_append=""
   if [ "$TELEGRAM_ROUTE_MODE" = "zapret" ]; then
+    verify_telegram_blob
+    telegram_base_append='NFQWS_BASE_ARGS="$NFQWS_BASE_ARGS
+                 --blob=telegram_tls:@/opt/etc/nfqws2/blobs/tls_clienthello.bin"'
     # Web/CDN by hostlist (TLS) and MTProto to the Telegram DC networks.
     # The MTProto strategy is a starting point; verify it in the app.
     telegram_custom_append='if [ -n "$NFQWS_ARGS_CUSTOM" ]; then
@@ -3473,18 +3541,18 @@ NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
 fi
 NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
 --filter-tcp=443 --filter-l7=tls
---hostlist=/opt/etc/nfqws2/lists/telegram.list
+--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list
 --out-range=-d10
 --payload=tls_client_hello
---lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000
---lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up
+--lua-desync=fake:blob=telegram_tls:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000
+--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=telegram_tls:tcp_ts_up
 --new
 --filter-tcp=80,443,5222
---ipset=/opt/etc/nfqws2/lists/telegram-ip.list
+--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list
 --filter-l7=mtproto
 --out-range=-d10
 --payload=mtproto_initial
---lua-desync=fake:blob=tls_clienthello:repeats=6
+--lua-desync=fake:blob=telegram_tls:repeats=6
 --lua-desync=multisplit:pos=1"'
   fi
 
@@ -3531,6 +3599,7 @@ $udp_desync\""
 # Base TCP/QUIC use user.list; YouTube has isolated custom profiles.
 $udp_base_append
 $youtube_base_append
+$telegram_base_append
 $discord_tcp_profile_assignment
 $udp_profile_assignment
 NFQWS_EXTRA_ARGS="$nfqws_extra_args"
@@ -3638,8 +3707,14 @@ apply_transaction() {
     if [ "$STANDALONE_ZAPRET" -eq 0 ] &&
        [ "$(snapshot_scope "$existing_baseline" 2>/dev/null || true)" = "standalone" ] &&
        ! read_pointer "$XKEEN_BASELINE_POINTER" >/dev/null 2>&1; then
-      atomic_pointer "$XKEEN_BASELINE_POINTER" "$PREAPPLY_SNAPSHOT"
-      echo "XKeen baseline recorded (the first baseline covers nfqws2 only): $PREAPPLY_SNAPSHOT"
+      if snapshot_has_xkeen_changes "$PREAPPLY_SNAPSHOT"; then
+        # An earlier release applied to XKeen without recording a baseline.
+        echo "WARNING: XKeen already contains changes of this project; no XKeen baseline is recorded." >&2
+        echo "         --rollback will restore nfqws2 only; Xray keeps the project rules." >&2
+      else
+        atomic_pointer "$XKEEN_BASELINE_POINTER" "$PREAPPLY_SNAPSHOT"
+        echo "XKeen baseline recorded (the first baseline covers nfqws2 only): $PREAPPLY_SNAPSHOT"
+      fi
     fi
   else
     create_snapshot baseline

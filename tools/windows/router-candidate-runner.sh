@@ -55,6 +55,10 @@ stop_candidate() {
 restore_service() {
   [ "$RESTORED" -eq 0 ] || return 0
   RESTORED=1
+  # Stop sends SIGTERM to the process group and the job terminates the runner
+  # too. A second signal here would re-enter the trap, which returns at once
+  # and exits before nfqws2 is started again; ignore signals until restored.
+  trap '' HUP INT TERM
   if [ "$RUNTIME_PREPARED" -eq 0 ]; then
     rm -f "$CANDIDATE_FILE" "$CANDIDATE_LOG" "$PROBE_BODY" "$PROBE_ERROR"
     rmdir "$TMP_ROOT" 2>/dev/null || true

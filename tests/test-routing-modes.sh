@@ -489,9 +489,9 @@ telegram_outbound_file="$ROOT/opt/etc/xray/configs/04_telegram_nfqws2_outbound.j
 
 assert_telegram() {
   # Lists are always installed; they are inert without the profile.
-  [ "$(ls -l "$ROOT/opt/etc/nfqws2/lists/telegram.list" | awk '{print $1}')" = "-rw-r--r--" ]
-  cmp -s "$ROOT/opt/etc/nfqws2/lists/telegram.list" "$SCRIPT_DIR/config/telegram-user.list"
-  cmp -s "$ROOT/opt/etc/nfqws2/lists/telegram-ip.list" "$SCRIPT_DIR/config/telegram-ip.list"
+  [ "$(ls -l "$ROOT/opt/etc/nfqws2/lists/kdn-telegram.list" | awk '{print $1}')" = "-rw-r--r--" ]
+  cmp -s "$ROOT/opt/etc/nfqws2/lists/kdn-telegram.list" "$SCRIPT_DIR/config/telegram-user.list"
+  cmp -s "$ROOT/opt/etc/nfqws2/lists/kdn-telegram-ip.list" "$SCRIPT_DIR/config/telegram-ip.list"
 
   # The user's own Telegram rule (fixture) is never touched.
   jq -e '
@@ -523,10 +523,13 @@ assert_telegram() {
   esac
 
   if [ "$1" = "zapret" ]; then
-    grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/telegram.list' "$nfqws_file"
-    grep -Fq -- '--ipset=/opt/etc/nfqws2/lists/telegram-ip.list' "$nfqws_file"
+    grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list' "$nfqws_file"
+    grep -Fq -- '--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list' "$nfqws_file"
     grep -Fq -- '--filter-l7=mtproto' "$nfqws_file"
     grep -Fq -- '--payload=mtproto_initial' "$nfqws_file"
+    # Telegram registers its own TLS blob and uses only that name.
+    grep -Fq -- '--blob=telegram_tls:@/opt/etc/nfqws2/blobs/tls_clienthello.bin' "$nfqws_file"
+    grep -Fq -- '--lua-desync=fake:blob=telegram_tls:repeats=6' "$nfqws_file"
   elif grep -Fq -- 'telegram' "$nfqws_file"; then
     echo "ERROR: Telegram profile present with Telegram=$1" >&2
     exit 1
@@ -701,6 +704,25 @@ if run_service_tool youtube unmanaged --yes-router --core xray >/dev/null 2>&1; 
   echo "ERROR: only Telegram may be unmanaged" >&2
   exit 1
 fi
+
+# A config written before the "# Discord UDP:" line with Voice off must not
+# be read as the legacy strategy (the wrappers would pass it on).
+apply_split_mode zapret direct vless
+sed -i '/^# Discord UDP: /d' "$nfqws_file"
+run_tool --status | grep -Fqx 'udp_strategy=unknown'
+run_service_tool discord-voice zapret --yes-router --core xray >/dev/null
+grep -Fq -- '--lua-desync=fake:blob=discord_udp:repeats=6' "$nfqws_file"
+assert_mode zapret zapret vless
+
+# Managed Telegram needs the v2fly dat files when XKeen's dat dir exists.
+mkdir -p "$ROOT/opt/etc/xray/dat"
+printf 'x' > "$ROOT/opt/etc/xray/dat/geosite_v2fly.dat"
+if run_service_tool telegram direct --yes-router --core xray >/dev/null 2>&1; then
+  echo "ERROR: Telegram applied without geoip_v2fly.dat" >&2
+  exit 1
+fi
+assert_mode zapret zapret vless
+rm -rf "$ROOT/opt/etc/xray/dat"
 
 # A config written before the TCP/Voice split still reports both routes.
 sed -i 's/^# Active routes: .*/# Active routes: Discord=zapret, YouTube=vless./' "$nfqws_file"

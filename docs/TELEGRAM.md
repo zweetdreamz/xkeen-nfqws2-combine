@@ -69,9 +69,13 @@ direct) существует только в режимах `direct` и `zapret`
 ## Mihomo
 
 В `direct` и `zapret` проект добавляет `DOMAIN-SUFFIX,<домен>,DIRECT`,
-`IP-CIDR,<сеть>,DIRECT,no-resolve` и `IP-CIDR6,…`. Правила удаляются по
-точному совпадению текста, поэтому при переходе в `vpn` или `unmanaged`
-пропадёт и пользовательское правило, совпадающее с ними символ в символ.
+`IP-CIDR,<сеть>,DIRECT,no-resolve` и `IP-CIDR6,…`. Пометить их, как в Xray,
+нельзя, поэтому они удаляются по точному совпадению текста и только тогда,
+когда Telegram управлялся до этого apply (`direct`/`zapret`) или управляется
+сейчас. Пока Telegram остаётся `unmanaged` или `vpn`, пользовательские
+правила Mihomo для Telegram не трогаются; при выходе из `direct`/`zapret`
+пропадёт и пользовательское правило, совпадающее с правилом проекта символ
+в символ.
 
 ## nfqws2 (режим Zapret)
 
@@ -79,25 +83,29 @@ direct) существует только в режимах `direct` и `zapret`
 
 ```text
 --filter-tcp=443 --filter-l7=tls
---hostlist=/opt/etc/nfqws2/lists/telegram.list
+--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list
 --out-range=-d10 --payload=tls_client_hello
---lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000
---lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up
+--lua-desync=fake:blob=telegram_tls:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000
+--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=telegram_tls:tcp_ts_up
 --new
 --filter-tcp=80,443,5222
---ipset=/opt/etc/nfqws2/lists/telegram-ip.list
+--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list
 --filter-l7=mtproto
 --out-range=-d10 --payload=mtproto_initial
---lua-desync=fake:blob=tls_clienthello:repeats=6
+--lua-desync=fake:blob=telegram_tls:repeats=6
 --lua-desync=multisplit:pos=1
 ```
 
 Первый профиль повторяет TLS-стратегию YouTube для сайта и CDN. Второй
 обрабатывает только начало MTProto-соединения к сетям Telegram (zapret2
 распознаёт obfuscated2-init с 0.1.2). `TCP_PORTS` при этом расширяется на
-80 и 5222; фильтр `NFQWS_ARGS` Discord не меняется. Файлы
-`telegram.list` и `telegram-ip.list` пишутся всегда, без профиля они ни на
-что не влияют.
+80 и 5222; фильтр `NFQWS_ARGS` Discord не меняется. Fake-пакет —
+собственный blob `telegram_tls` (файл пакета `tls_clienthello.bin`,
+проверяется SHA-256), поэтому профиль не зависит от того, регистрирует ли
+конфиг пакета `tls_clienthello`. Файлы
+`kdn-telegram.list` и `kdn-telegram-ip.list` пишутся всегда, без профиля они ни на
+что не влияют; префикс `kdn-` не даёт затереть собственные списки
+пользователя с именем `telegram.list`.
 
 ## Ограничения
 

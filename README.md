@@ -1,10 +1,12 @@
 # XKeen + nfqws2 для Discord и YouTube
 
-Проект позволяет независимо выбирать маршрут для трёх сервисов:
+Проект позволяет независимо выбирать маршрут для четырёх сервисов:
 
 - **Discord TCP** — домены Discord: TCP/TLS и QUIC;
 - **Discord Voice** — Voice/STUN UDP-порты Discord;
-- **YouTube**.
+- **YouTube**;
+- **Telegram** — по умолчанию не управляется, включается явно
+  ([docs/TELEGRAM.md](docs/TELEGRAM.md)).
 
 Для каждого доступны три режима:
 
@@ -265,8 +267,8 @@ Discord Voice или YouTube.
 
 [`tools/router/xkeen_control_script.sh`](tools/router/xkeen_control_script.sh)
 создаёт single-page панель управления XKeen и маршрутами
-`Direct / Zapret / VPN` для трёх сервисов: Discord TCP, Discord Voice и
-YouTube — у каждого своя карточка. Вкладка **Автоподбор** перебирает
+`Direct / Zapret / VPN` для четырёх сервисов: Discord TCP, Discord Voice,
+YouTube и Telegram (у него есть ещё `Выкл`) — у каждого своя карточка. Вкладка **Автоподбор** перебирает
 актуальные Flowseal-профили на роутере, а **Импорт профиля** принимает отчёт
 Windows-тюнера. Смена маршрута выполняется фоновым заданием: краткий разрыв
 LAN-соединения при перезапуске Xray не теряет результат, а после повторного
@@ -300,7 +302,8 @@ LAN-устройства. Проверка состояния служб ост�
 
 ## Что именно настраивается
 
-- отдельные правила Xray/Mihomo для Discord TCP, Discord Voice и YouTube;
+- отдельные правила Xray/Mihomo для Discord TCP, Discord Voice, YouTube и
+  Telegram (правила Telegram помечены `ruleTag: kdn-telegram`);
 - разные hostlist и nfqws2-профили сервисов;
 - TCP/TLS, QUIC и Discord Voice/STUN;
 - узкий UDP-диапазон по умолчанию, явный `--wide-udp` и возврат
@@ -342,9 +345,12 @@ UDP-портов `3478-3481,5349,19294-19344,50000-50100`; в nfqws2 —
 - [`tools/windows/README.md`](tools/windows/README.md) — безопасный перебор
   стратегий.
 - [`tools/router/README.md`](tools/router/README.md) — локальная панель XKeen
-  и трёхрежимные переключатели сервисов.
+  и переключатели режимов сервисов.
 - [`tools/dat-reader/README.md`](tools/dat-reader/README.md) — просмотр
   категорий и доменов внутри бинарных баз Xray/V2Ray `.dat`.
+- [`docs/TELEGRAM.md`](docs/TELEGRAM.md) — Telegram: режимы, правила,
+  профили nfqws2 и ограничения;
+  [`docs/TELEGRAM-RESEARCH.md`](docs/TELEGRAM-RESEARCH.md) — исследование.
 - [`docs/CODE-REVIEW.md`](docs/CODE-REVIEW.md) — итоги ревью кода, найденные
   ошибки поведения и совместимость с nfqws2-keenetic 1.3.1 / Xray 26.10.17.
 

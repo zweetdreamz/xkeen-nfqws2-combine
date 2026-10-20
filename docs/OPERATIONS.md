@@ -97,8 +97,9 @@ proxy-маршрутизации XKeen.
 
 После обновления скриптов повторный apply не нужен: старая строка
 `# Active routes: Discord=X, YouTube=Y.` в `nfqws2.conf` читается как X для
-TCP и Voice. Новый apply записывает
-`# Active routes: DiscordTCP=X, DiscordVoice=Y, YouTube=Z.`
+TCP и Voice, а строка без `Telegram=` — как Telegram `unmanaged`. Новый
+apply записывает
+`# Active routes: DiscordTCP=X, DiscordVoice=Y, YouTube=Z, Telegram=T.`
 
 Настройки Discord UDP тоже запоминаются в управляемом блоке:
 

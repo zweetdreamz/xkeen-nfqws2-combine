@@ -119,6 +119,9 @@ case "${1:-}" in
         chmod +x "$KD_TEST_ROOT/opt/etc/init.d/S51nfqws2"
         cp "$KD_STANDALONE_FIXTURE/nfqws2.conf.template" \
           "$KD_TEST_ROOT/opt/etc/nfqws2/nfqws2.conf"
+        # The package ships this blob (Telegram Zapret registers it).
+        cp "$KD_STANDALONE_FIXTURE/tls_clienthello.bin" \
+          "$KD_TEST_ROOT/opt/etc/nfqws2/blobs/tls_clienthello.bin"
       fi
     done
     ;;
@@ -130,6 +133,9 @@ case "${1:-}" in
     ;;
 esac
 EOF
+
+cp "${NFQWS_TEST_BLOB_SOURCE:-/opt/etc/nfqws2/blobs}/tls_clienthello.bin" \
+  "$FIXTURE/tls_clienthello.bin"
 
 cat > "$MOCK_BIN/ip" <<'EOF'
 #!/bin/sh
@@ -193,10 +199,10 @@ nfqws_conf="$ROOT/opt/etc/nfqws2/nfqws2.conf"
 grep -Fq '# Deployment mode: standalone-zapret.' "$nfqws_conf"
 grep -Fq '# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=direct, Telegram=zapret.' "$nfqws_conf"
 # Telegram Zapret needs only nfqws2: hostlist, ipset and MTProto ports.
-grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/telegram.list' "$nfqws_conf"
-grep -Fq -- '--ipset=/opt/etc/nfqws2/lists/telegram-ip.list' "$nfqws_conf"
+grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list' "$nfqws_conf"
+grep -Fq -- '--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list' "$nfqws_conf"
 grep -Fqx 'TCP_PORTS=80,443,2053,2083,2087,2096,8443,5222' "$nfqws_conf"
-[ -s "$ROOT/opt/etc/nfqws2/lists/telegram-ip.list" ]
+[ -s "$ROOT/opt/etc/nfqws2/lists/kdn-telegram-ip.list" ]
 grep -Fq 'ISP_INTERFACE="fixture-wan"' "$nfqws_conf"
 grep -Fq 'NFQWS_ARGS_UDP="--filter-udp=443,3478-3481' "$nfqws_conf"
 [ -f "$PACKAGE_STATE/nfqws2-keenetic" ]

@@ -439,6 +439,10 @@ class VoiceAutoTests(TempRootTestCase):
             ("10.0.0.1", 50007),
             ("2606:4700::1", 50007),
             ("162.159.130.234", 443),
+            # Candidates never process ports above 50100.
+            ("162.159.130.234", 50101),
+            ("162.159.130.234", 65535),
+            ("100.64.0.1", 50007),
             ("162.159.130.234", "50007"),
             ("162.159.130.234", True),
             ("not-an-ip", 50007),
@@ -526,9 +530,16 @@ class ParseEventTests(unittest.TestCase):
         self.parse("EVENT|CANDIDATE|2|abc123")
         self.assertEqual(
             self.writer.writes,
-            [{"status": "running", "current_candidate": 2,
+            [{"voice_endpoint_observed": None, "status": "running", "current_candidate": 2,
               "current_candidate_id": "abc123", "needs_voice_verdict": False}],
         )
+
+    def test_endpoint_of_a_rejected_candidate_is_not_kept(self):
+        self.parse("EVENT|CANDIDATE|1|aaa")
+        self.parse("EVENT|VOICE_ENDPOINT|162.159.130.234|50007|40|38")
+        self.assertEqual(self.writer.payload["voice_endpoint_observed"]["port"], 50007)
+        self.parse("EVENT|CANDIDATE|2|bbb")
+        self.assertIsNone(self.writer.payload["voice_endpoint_observed"])
 
     def test_suite_results(self):
         self.parse("EVENT|SUITE_RESULT|0|baseline|1|fail|1|4")

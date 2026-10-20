@@ -270,14 +270,16 @@ def validate_args(args: argparse.Namespace) -> None:
 
 
 def voice_endpoint_valid(ip: Any, port: Any) -> bool:
-    """A public IPv4 voice server on a Discord Voice/STUN port."""
+    """A public IPv4 voice server on a port every Voice candidate processes."""
     if not isinstance(ip, str) or isinstance(port, bool) or not isinstance(port, int):
         return False
     try:
         address = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    in_range = 19294 <= port <= 19344 or 50000 <= port <= 65535
+    # Candidates filter 19294-19344 and 50000-50100; a server on another
+    # port would never be affected by any candidate.
+    in_range = 19294 <= port <= 19344 or 50000 <= port <= 50100
     return address.version == 4 and address.is_global and in_range
 
 
@@ -367,6 +369,8 @@ def parse_event(
     if event == "CANDIDATE" and len(parts) >= 4:
         number = int(parts[2])
         writer.write(
+            # Only the endpoint seen with the confirmed candidate is learned.
+            voice_endpoint_observed=None,
             status="running",
             current_candidate=number,
             current_candidate_id=parts[3],

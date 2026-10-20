@@ -264,6 +264,31 @@ def process_ids(name: str) -> list[int]:
     return [int(value) for value in result["output"].split() if value.isdigit()]
 
 
+def strip_json_comments(text: str) -> str:
+    """Remove // and /* */ comments outside strings (Xray accepts JSONC)."""
+    result: list[str] = []
+    index, length = 0, len(text)
+    while index < length:
+        char = text[index]
+        if char == '"':
+            end = index + 1
+            while end < length and text[end] != '"':
+                end += 2 if text[end] == "\\" else 1
+            result.append(text[index:end + 1])
+            index = end + 1
+        elif text.startswith("//", index):
+            end = text.find("\n", index)
+            index = length if end < 0 else end
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            result.append(" ")
+            index = length if end < 0 else end + 2
+        else:
+            result.append(char)
+            index += 1
+    return "".join(result)
+
+
 def xray_upgrade_findings(files: dict[str, str]) -> list[str]:
     """Settings that Xray 26.10+ refuses to load, by config file name.
 
@@ -271,7 +296,8 @@ def xray_upgrade_findings(files: dict[str, str]) -> list[str]:
     - "addressPortStrategy" in the sockopt of a freedom outbound.
     """
     findings = []
-    for name, text in sorted(files.items()):
+    for name, raw_text in sorted(files.items()):
+        text = strip_json_comments(raw_text)
         if re.search(r'"proxySettings"\s*:', text):
             findings.append(f"{name}: proxySettings → sockopt.dialerProxy")
         try:
@@ -311,7 +337,7 @@ def route_consistency(config: str, tags: set[str], discord_list: str) -> list[di
         okay = mode in ROUTE_VALUES and (mode == "vless" or tag in tags) and active == (mode == "zapret")
         checks.append(make_check(name, "ok" if okay else "error", f"route={mode}, nfqws={'on' if active else 'off'}"))
     telegram = telegram_route(config)
-    telegram_active = "--hostlist=/opt/etc/nfqws2/lists/telegram.list" in config
+    telegram_active = "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list" in config
     if telegram != "unmanaged":
         okay = (
             telegram in ROUTE_VALUES
@@ -370,7 +396,7 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
 
     tags = set()
     try:
-        routing = json.loads(safe_read(root_path(XRAY_ROUTING_LOGICAL)))
+        routing = json.loads(strip_json_comments(safe_read(root_path(XRAY_ROUTING_LOGICAL))))
         rules = routing.get("routing", {}).get("rules", [])
         tags = {rule.get("outboundTag") for rule in rules if isinstance(rule, dict)}
         expected = set()

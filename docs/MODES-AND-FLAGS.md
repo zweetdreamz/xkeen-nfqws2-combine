@@ -9,8 +9,9 @@ LAN → XKeen/Xray → VLESS
                  ↘ service-direct → [NFQUEUE/nfqws2] → WAN
 ```
 
-Discord TCP, Discord Voice и YouTube переключаются независимо между
-`direct`, `zapret` и `vless`. Скрипт не должен без отдельного
+Discord TCP, Discord Voice, YouTube и Telegram переключаются независимо
+между `direct`, `zapret` и `vless`; у Telegram есть ещё `unmanaged`
+(по умолчанию). Скрипт не должен без отдельного
 решения пользователя менять DNS, `proxy_router`, DSCP, IPv6 XKeen, общие
 policy marks или hardware offload.
 
@@ -21,7 +22,7 @@ policy marks или hardware offload.
 | Роутер | Keenetic Giga KN-1011, KeeneticOS 5.0.12 |
 | XKeen/core | XKeen 2.0, Xray 26.7.28, Hybrid |
 | WAN | `eth3` |
-| nfqws2 | пакет 1.2.4, NFQUEUE 300 |
+| nfqws2 | пакет 1.2.4, NFQUEUE 300 (20.10.2026 обновлён до 1.3.1) |
 | Скрипт на роутере и в рабочей папке | 3.0.0 |
 | Активный режим | `both` |
 | Discord UDP | `flowseal`, узкий диапазон |
@@ -98,7 +99,7 @@ sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-ro
 | Discord TCP | доменное правило `ext:geosite_v2fly.dat:discord` | hostlist `user.list`, `NFQWS_ARGS`, `TCP_PORTS` |
 | Discord Voice | правило UDP-портов Voice/STUN | `NFQWS_ARGS_UDP`, `UDP_PORTS`, blob `discord_udp` |
 | YouTube | доменные правила YouTube | `youtube.list` в `NFQWS_ARGS_CUSTOM` |
-| Telegram | правила `ruleTag: kdn-telegram` (домены и IP v2fly) | `telegram.list` и `telegram-ip.list` в `NFQWS_ARGS_CUSTOM` |
+| Telegram | правила `ruleTag: kdn-telegram` (домены и IP v2fly) | `kdn-telegram.list` и `kdn-telegram-ip.list` в `NFQWS_ARGS_CUSTOM` |
 
 | Режим | Core route | nfqws2 сервиса |
 |---|---|---|
@@ -136,7 +137,7 @@ Wrapper сначала читает `--status` и сохраняет режим�
 Применённые маршруты записываются в `nfqws2.conf`:
 
 ```text
-# Active routes: DiscordTCP=X, DiscordVoice=Y, YouTube=Z.
+# Active routes: DiscordTCP=X, DiscordVoice=Y, YouTube=Z, Telegram=T.
 # Discord UDP: strategy=flowseal|legacy, range=narrow|wide.
 ```
 
