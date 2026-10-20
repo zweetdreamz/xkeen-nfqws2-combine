@@ -14,6 +14,10 @@ ROOT="$FIXTURE/root"
 MOCK_BIN="$FIXTURE/bin"
 
 safe_cleanup() {
+  ws_pidfile="$ROOT/opt/var/run/kdn-telegram-ws.pid"
+  if [ -f "$ws_pidfile" ]; then
+    kill "$(sed -n '1p' "$ws_pidfile")" 2>/dev/null || true
+  fi
   pidfile="$ROOT/opt/var/run/nfqws2.pid"
   if [ -f "$pidfile" ]; then
     fixture_pid="$(sed -n '1p' "$pidfile")"
@@ -45,7 +49,12 @@ mkdir -p \
   "$ROOT/opt/etc/opkg" \
   "$ROOT/opt/tmp" \
   "$ROOT/opt/var/run" \
+  "$ROOT/opt/bin" \
   "$MOCK_BIN"
+# The Telegram WS relay runs on the real Python, on a free port.
+ln -s "$(command -v python3)" "$ROOT/opt/bin/python3"
+KD_TEST_TELEGRAM_WS_PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+export KD_TEST_TELEGRAM_WS_PORT
 
 cat > "$ROOT/opt/etc/init.d/S05xkeen" <<'EOF'
 #!/bin/sh
@@ -546,6 +555,22 @@ assert_telegram() {
       ' "$routing_file" >/dev/null
       [ ! -e "$telegram_outbound_file" ]
       ;;
+    ws)
+      jq -e '
+        [.routing.rules[]? | select(((.ruleTag? // "") | tostring | startswith("kdn-telegram")))] as $rules
+        | ($rules | map(.ruleTag)) == ["kdn-telegram-domain", "kdn-telegram-sniffed", "kdn-telegram-ip", "kdn-telegram-udp"]
+        and ($rules | map(.outboundTag)) == ["telegram-direct", "telegram-direct", "telegram-ws", "telegram-direct"]
+        and $rules[1].protocol == ["http", "tls", "quic"] and $rules[2].network == "tcp"
+      ' "$routing_file" >/dev/null
+      jq -e --arg redirect "127.0.0.1:$KD_TEST_TELEGRAM_WS_PORT" '
+        any(.outbounds[]; .tag == "telegram-ws" and .settings.redirect == $redirect)
+        and any(.outbounds[]; .tag == "telegram-direct")
+      ' "$telegram_outbound_file" >/dev/null
+      [ -x "$ROOT/opt/etc/init.d/S99kdn-telegram-ws" ]
+      kill -0 "$(cat "$ROOT/opt/var/run/kdn-telegram-ws.pid")"
+      python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 3).close()' \
+        "$KD_TEST_TELEGRAM_WS_PORT"
+      ;;
     direct|zapret)
       jq -e '
         [.routing.rules[]? | select(((.ruleTag? // "") | tostring | startswith("kdn-telegram")))] as $rules
@@ -557,7 +582,18 @@ assert_telegram() {
       ;;
   esac
 
-  if [ "$1" = "zapret" ]; then
+  if [ "$1" != ws ] && [ -e "$ROOT/opt/etc/init.d/S99kdn-telegram-ws" ]; then
+    echo "ERROR: Telegram WS relay left behind with Telegram=$1" >&2
+    exit 1
+  fi
+  if [ "$1" = "ws" ]; then
+    # The TLS profile stays for the domains and the relay's own TLS.
+    grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list' "$nfqws_file"
+    if grep -Fq -- '--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list' "$nfqws_file"; then
+      echo "ERROR: MTProto profile active although MTProto goes through the WS relay" >&2
+      exit 1
+    fi
+  elif [ "$1" = "zapret" ]; then
     grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list' "$nfqws_file"
     grep -Fq -- '--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list' "$nfqws_file"
     grep -Fq -- '--filter-l7=mtproto' "$nfqws_file"
@@ -791,6 +827,18 @@ run_service_tool youtube direct --yes-router --core xray >/dev/null
 assert_mode zapret zapret direct zapret
 run_service_tool discord-tcp vpn --yes-router --core xray >/dev/null
 assert_mode vless zapret direct zapret
+run_service_tool telegram ws --yes-router --core xray >/dev/null
+assert_mode vless zapret direct ws
+relay_pid="$(cat "$ROOT/opt/var/run/kdn-telegram-ws.pid")"
+# Rollback: the relay is not in snapshots and follows the restored route.
+run_tool --rollback-latest --yes-router >/dev/null
+assert_mode vless zapret direct zapret
+if kill -0 "$relay_pid" 2>/dev/null; then
+  echo "ERROR: the WS relay still runs after rolling back to Telegram=zapret" >&2
+  exit 1
+fi
+run_service_tool telegram ws --yes-router --core xray >/dev/null
+assert_mode vless zapret direct ws
 run_service_tool telegram direct --yes-router --core xray >/dev/null
 assert_mode vless zapret direct direct
 run_service_tool telegram vpn --yes-router --core xray >/dev/null

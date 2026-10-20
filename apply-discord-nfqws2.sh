@@ -60,6 +60,17 @@ XKEEN_PORT_PROXYING="$XKEEN_DIR/port_proxying.lst"
 XKEEN_PORT_EXCLUDE="$XKEEN_DIR/port_exclude.lst"
 XRAY_CONFIG_DIR="$(root_path /opt/etc/xray/configs)"
 XRAY_DAT_DIR="$(root_path /opt/etc/xray/dat)"
+# Telegram WS relay: an Entware service derived from the recorded Telegram
+# route (not part of snapshots; reconciled after every apply and restore).
+TELEGRAM_WS_INIT="$(root_path /opt/etc/init.d/S99kdn-telegram-ws)"
+TELEGRAM_WS_PIDFILE="$(root_path /opt/var/run/kdn-telegram-ws.pid)"
+TELEGRAM_WS_LOG="$(root_path /opt/var/log/kdn-telegram-ws.log)"
+TELEGRAM_WS_PYTHON="$(root_path /opt/bin/python3)"
+TELEGRAM_WS_RELAY="$SCRIPT_DIR/tools/router/telegram_ws_relay.py"
+TELEGRAM_WS_PORT=18443
+if [ -n "$TEST_ROOT" ] && [ -n "${KD_TEST_TELEGRAM_WS_PORT:-}" ]; then
+  TELEGRAM_WS_PORT="$KD_TEST_TELEGRAM_WS_PORT"
+fi
 MIHOMO_CONFIG="$(root_path /opt/etc/mihomo/config.yaml)"
 OPKG_FEED="$(root_path /opt/etc/opkg/nfqws2-keenetic.conf)"
 SOURCE_DISCORD_UDP_BLOB="$SCRIPT_DIR/config/blobs/ACTIVE_DISCORD_UDP.bin"
@@ -154,10 +165,12 @@ Routing options:
   --discord-route direct|zapret|vless
                              Shorthand that sets both Discord routes.
   --youtube-route direct|zapret|vless
-  --telegram-route direct|zapret|vless|unmanaged
+  --telegram-route direct|zapret|vless|ws|unmanaged
                              Telegram domains and DC networks. Without the
                              option the recorded route is kept (initially
                              unmanaged: the project does not touch Telegram).
+                             ws: MTProto through the router's WebSocket relay
+                             (tools/router/telegram_ws_relay.py), Xray only.
   --proxy-outbound TAG       Xray proxy outbound used for vless modes;
                              normally detected from existing YouTube rules
   --core auto|xray|mihomo
@@ -303,7 +316,7 @@ recorded_telegram_route() {
         }
       }
       END {
-        if (value ~ /^(direct|zapret|vless|unmanaged)$/) print value
+        if (value ~ /^(direct|zapret|vless|ws|unmanaged)$/) print value
         else print "unmanaged"
       }
     ' "$NFQWS_CONF"
@@ -337,6 +350,19 @@ telegram_dat_present() {
       return 1
     }
   done
+}
+
+# The WS relay runs on Entware Python with ssl and asyncio.
+telegram_ws_ready() {
+  [ -x "$TELEGRAM_WS_PYTHON" ] &&
+    "$TELEGRAM_WS_PYTHON" -c 'import asyncio, ssl' >/dev/null 2>&1 || {
+    echo "ERROR: Telegram WS needs $TELEGRAM_WS_PYTHON with ssl and asyncio (opkg install python3 python3-openssl)." >&2
+    return 1
+  }
+  [ -f "$TELEGRAM_WS_RELAY" ] || {
+    echo "ERROR: Telegram WS relay is missing: $TELEGRAM_WS_RELAY" >&2
+    return 1
+  }
 }
 
 # XKeen must proxy these ports for the managed services to reach Xray.
@@ -565,7 +591,7 @@ done
 PREVIOUS_TELEGRAM_ROUTE="$(recorded_telegram_route)"
 [ -n "$TELEGRAM_ROUTE_MODE" ] || TELEGRAM_ROUTE_MODE="$PREVIOUS_TELEGRAM_ROUTE"
 case "$TELEGRAM_ROUTE_MODE" in
-  direct|zapret|vless|unmanaged) ;;
+  direct|zapret|vless|ws|unmanaged) ;;
   *)
     echo "ERROR: unsupported Telegram route: $TELEGRAM_ROUTE_MODE" >&2
     exit 2
@@ -575,9 +601,13 @@ esac
 if [ "$STANDALONE_ZAPRET" -eq 1 ]; then
   # Without XKeen there is no VPN; a recorded (not requested) Telegram VPN
   # route becomes unmanaged instead of blocking the standalone apply.
-  if [ "$TELEGRAM_ROUTE_MODE" = "vless" ] && [ "$TELEGRAM_ROUTE_EXPLICIT" -eq 0 ]; then
-    TELEGRAM_ROUTE_MODE="unmanaged"
-  fi
+  case "$TELEGRAM_ROUTE_MODE:$TELEGRAM_ROUTE_EXPLICIT" in
+    vless:0|ws:0) TELEGRAM_ROUTE_MODE="unmanaged" ;;
+    ws:1)
+      echo "ERROR: Telegram WS needs XKeen/Xray and cannot be used with --standalone-zapret." >&2
+      exit 2
+      ;;
+  esac
   [ "$DISCORD_TCP_ROUTE_EXPLICIT" -eq 1 ] || DISCORD_TCP_ROUTE_MODE="zapret"
   [ "$DISCORD_VOICE_ROUTE_EXPLICIT" -eq 1 ] || DISCORD_VOICE_ROUTE_MODE="zapret"
   [ "$YOUTUBE_ROUTE_EXPLICIT" -eq 1 ] || YOUTUBE_ROUTE_MODE="zapret"
@@ -689,7 +719,7 @@ verify_discord_udp_blob_source() {
 # Telegram registers its own copy of the package TLS blob, so its profiles do
 # not depend on the package config registering tls_clienthello.
 verify_telegram_blob() {
-  [ "$TELEGRAM_ROUTE_MODE" = "zapret" ] || return 0
+  case "$TELEGRAM_ROUTE_MODE" in zapret|ws) ;; *) return 0 ;; esac
   have sha256sum || {
     echo "ERROR: sha256sum is required to verify the Telegram TLS blob." >&2
     return 1
@@ -1605,12 +1635,18 @@ preflight() {
           preflight_errors=$((preflight_errors + 1))
         elif ! telegram_dat_present; then
           preflight_errors=$((preflight_errors + 1))
+        elif [ "$TELEGRAM_ROUTE_MODE" = ws ] && ! telegram_ws_ready; then
+          preflight_errors=$((preflight_errors + 1))
         elif ! xkeen -xtest >/dev/null 2>&1; then
           echo "ERROR: current Xray configuration fails 'xkeen -xtest'." >&2
           preflight_errors=$((preflight_errors + 1))
         fi
         ;;
       mihomo)
+        if [ "$TELEGRAM_ROUTE_MODE" = ws ]; then
+          echo "ERROR: Telegram WS needs Xray (freedom redirect); Mihomo is not supported." >&2
+          preflight_errors=$((preflight_errors + 1))
+        fi
         if [ -n "$DIRECT_MARK_REQUESTED" ]; then
           echo "ERROR: --direct-mark is Xray-only; Mihomo uses routing-mark in its own config." >&2
           preflight_errors=$((preflight_errors + 1))
@@ -2001,6 +2037,80 @@ restore_packages() {
   return "$restore_package_errors"
 }
 
+# Writes the Entware init script of the Telegram WS relay.
+write_telegram_ws_init() {
+  ws_init_tmp="$(make_tmp)"
+  cat > "$ws_init_tmp" <<EOF
+#!/bin/sh
+# Telegram WS relay of keenetic-discord-nfqws2. Generated by
+# apply-discord-nfqws2.sh while Telegram=ws; removed when the route changes.
+PYTHON="$TELEGRAM_WS_PYTHON"
+RELAY="$TELEGRAM_WS_RELAY"
+PIDFILE="$TELEGRAM_WS_PIDFILE"
+LOG="$TELEGRAM_WS_LOG"
+LISTEN="127.0.0.1:$TELEGRAM_WS_PORT"
+
+running() {
+  [ -f "\$PIDFILE" ] && kill -0 "\$(cat "\$PIDFILE" 2>/dev/null)" 2>/dev/null
+}
+
+start() {
+  running && return 0
+  mkdir -p "\$(dirname "\$PIDFILE")" "\$(dirname "\$LOG")"
+  "\$PYTHON" "\$RELAY" --listen "\$LISTEN" --pidfile "\$PIDFILE" --log "\$LOG" >/dev/null 2>&1 &
+  waited=0
+  while [ "\$waited" -lt 10 ]; do
+    running && return 0
+    sleep 1
+    waited=\$((waited + 1))
+  done
+  return 1
+}
+
+stop() {
+  if running; then
+    pid="\$(cat "\$PIDFILE")"
+    kill "\$pid" 2>/dev/null
+    # Wait for the process itself: it removes the pidfile before it exits.
+    waited=0
+    while kill -0 "\$pid" 2>/dev/null && [ "\$waited" -lt 10 ]; do
+      sleep 1
+      waited=\$((waited + 1))
+    done
+    kill -9 "\$pid" 2>/dev/null || true
+  fi
+  rm -f "\$PIDFILE"
+}
+
+case "\$1" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  status) if running; then echo running; else echo stopped; exit 1; fi ;;
+  *) echo "Usage: \$0 start|stop|restart|status" >&2; exit 2 ;;
+esac
+EOF
+  atomic_replace_file "$TELEGRAM_WS_INIT" "$ws_init_tmp" 755
+}
+
+# Brings the relay service in line with Telegram route $1: running for ws,
+# stopped and removed otherwise.
+reconcile_telegram_ws() {
+  if [ "$1" = ws ]; then
+    write_telegram_ws_init
+    "$TELEGRAM_WS_INIT" restart >/dev/null 2>&1 &&
+      "$TELEGRAM_WS_INIT" status >/dev/null 2>&1 || {
+      echo "ERROR: Telegram WS relay did not start; see $TELEGRAM_WS_LOG" >&2
+      return 1
+    }
+    echo "Telegram WS relay running on 127.0.0.1:$TELEGRAM_WS_PORT"
+  elif [ -f "$TELEGRAM_WS_INIT" ]; then
+    sh "$TELEGRAM_WS_INIT" stop >/dev/null 2>&1 || true
+    rm -f "$TELEGRAM_WS_INIT"
+    echo "Telegram WS relay stopped and removed."
+  fi
+}
+
 # nfqws2 data that profiles and routes change. Everything else under
 # /opt/etc/nfqws2 (lua/, nfqws2.conf-opkg...) belongs to the package.
 NFQWS_DATA_ITEMS="nfqws2.conf lists blobs imported-profiles profile-versions"
@@ -2193,6 +2303,8 @@ restore_snapshot_internal() {
     "$restore_snapshot_dir/RUNTIME.tsv" \
     "$restore_snapshot_scope" || restore_result=1
   restore_ipv6_runtime "$restore_snapshot_dir/IPV6_RUNTIME.txt" || restore_result=1
+  # The WS relay is not in snapshots: follow the restored Telegram route.
+  reconcile_telegram_ws "$(recorded_telegram_route)" || restore_result=1
 
   if [ "$restore_result" -eq 0 ]; then
     echo "Restore complete: $restore_snapshot_dir"
@@ -2617,10 +2729,12 @@ status_report() {
     telegram_outbound="$(
       strict_json_stream "$telegram_routing" |
         jq -r '[.routing.rules[]? | select(((.ruleTag? // "") | tostring | startswith("kdn-telegram"))) | .outboundTag]
-               | if length > 0 then .[0] else "" end' 2>/dev/null || true
+               | if index("telegram-ws") != null then "telegram-ws"
+                 elif length > 0 then .[0] else "" end' 2>/dev/null || true
     )"
     case "$telegram_outbound" in
       "") reported_telegram_route="unmanaged" ;;
+      telegram-ws) reported_telegram_route="ws" ;;
       telegram-direct)
         case "$reported_telegram_route" in
           direct|zapret) ;;
@@ -3171,6 +3285,21 @@ patch_xray() {
     # each ruleTag to be unique): only they are replaced or
     # removed, other Telegram rules of the user stay (ours come first).
     | (if $telegram_mode == "unmanaged" then []
+       elif $telegram_mode == "ws" then
+         # Domains and sniffed TLS/HTTP go direct; the rest of the TCP to the
+         # Telegram networks is MTProto and goes to the WS relay; UDP (calls)
+         # goes direct.
+         [
+           {"type": "field", "ruleTag": "kdn-telegram-domain", "inboundTag": ["redirect", "tproxy"],
+            "outboundTag": "telegram-direct", "domain": ["ext:geosite_v2fly.dat:telegram"]},
+           {"type": "field", "ruleTag": "kdn-telegram-sniffed", "inboundTag": ["redirect", "tproxy"],
+            "outboundTag": "telegram-direct", "ip": ["ext:geoip_v2fly.dat:telegram"],
+            "protocol": ["http", "tls", "quic"]},
+           {"type": "field", "ruleTag": "kdn-telegram-ip", "inboundTag": ["redirect", "tproxy"],
+            "outboundTag": "telegram-ws", "ip": ["ext:geoip_v2fly.dat:telegram"], "network": "tcp"},
+           {"type": "field", "ruleTag": "kdn-telegram-udp", "inboundTag": ["redirect", "tproxy"],
+            "outboundTag": "telegram-direct", "ip": ["ext:geoip_v2fly.dat:telegram"], "network": "udp"}
+         ]
        else
          (if $telegram_mode == "vless" then $proxy_outbound
           else "telegram-direct" end) as $telegram_outbound
@@ -3225,6 +3354,14 @@ patch_xray() {
   telegram_outbound_file="$XRAY_CONFIG_DIR/04_telegram_nfqws2_outbound.json"
   case "$TELEGRAM_ROUTE_MODE" in
     direct|zapret) write_xray_direct_outbound "$telegram_outbound_file" "telegram-direct" ;;
+    ws)
+      write_xray_direct_outbound "$telegram_outbound_file" "telegram-direct"
+      telegram_ws_outbound="$(make_tmp)"
+      jq --arg redirect "127.0.0.1:$TELEGRAM_WS_PORT" \
+        '.outbounds += [{"tag": "telegram-ws", "protocol": "freedom", "settings": {"redirect": $redirect}}]' \
+        "$telegram_outbound_file" > "$telegram_ws_outbound"
+      replace_preserving_mode "$telegram_outbound_file" "$telegram_ws_outbound"
+      ;;
     *) rm -f "$telegram_outbound_file" ;;
   esac
 
@@ -3597,6 +3734,23 @@ NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
 --lua-desync=fake:blob=telegram_tls:repeats=6
 --lua-desync=multisplit:pos=1"'
     fi
+  elif [ "$TELEGRAM_ROUTE_MODE" = "ws" ]; then
+    # WS: MTProto goes through the relay; only the TLS profile stays. It also
+    # covers the relay's own TLS to kws*.web.telegram.org (telegram.org).
+    verify_telegram_blob
+    telegram_base_append='NFQWS_BASE_ARGS="$NFQWS_BASE_ARGS
+                 --blob=telegram_tls:@/opt/etc/nfqws2/blobs/tls_clienthello.bin"'
+    telegram_custom_append='if [ -n "$NFQWS_ARGS_CUSTOM" ]; then
+  NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
+--new"
+fi
+NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
+--filter-tcp=443 --filter-l7=tls
+--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list
+--out-range=-d10
+--payload=tls_client_hello
+--lua-desync=fake:blob=telegram_tls:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000
+--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=telegram_tls:tcp_ts_up"'
   fi
 
   discord_tcp_profile_assignment=""
@@ -3780,6 +3934,8 @@ apply_transaction() {
   if [ "$STANDALONE_ZAPRET" -eq 1 ]; then
     restart_nfqws_only_and_verify
   else
+    # Before XKeen restarts, so the redirect target already listens.
+    reconcile_telegram_ws "$TELEGRAM_ROUTE_MODE"
     restart_and_verify
   fi
 

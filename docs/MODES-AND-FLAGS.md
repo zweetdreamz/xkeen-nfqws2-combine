@@ -124,7 +124,7 @@ Wrapper сначала читает `--status` и сохраняет режим�
 --discord-voice-route direct|zapret|vless
 --discord-route direct|zapret|vless      сокращение: оба маршрута Discord
 --youtube-route direct|zapret|vless
---telegram-route direct|zapret|vless|unmanaged   без флага: записанный маршрут
+--telegram-route direct|zapret|vless|ws|unmanaged без флага: записанный маршрут
 --proxy-outbound TAG
 ```
 

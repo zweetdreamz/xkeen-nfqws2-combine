@@ -127,7 +127,7 @@ def release_project_lock(lock: Path | None) -> None:
 
 
 ROUTE_VALUES = {"direct", "zapret", "vless"}
-TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"unmanaged"}
+TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"ws", "unmanaged"}
 
 
 def parse_active_routes(text: str) -> dict[str, str] | None:

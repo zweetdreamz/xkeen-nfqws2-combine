@@ -204,7 +204,7 @@ def make_check(name: str, status: str, detail: str) -> dict[str, str]:
 
 
 ROUTE_VALUES = {"direct", "zapret", "vless"}
-TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"unmanaged"}
+TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"ws", "unmanaged"}
 
 
 def parse_active_routes(text: str) -> dict[str, str] | None:
@@ -338,7 +338,15 @@ def route_consistency(config: str, tags: set[str], discord_list: str) -> list[di
         checks.append(make_check(name, "ok" if okay else "error", f"route={mode}, nfqws={'on' if active else 'off'}"))
     telegram = telegram_route(config)
     telegram_active = "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list" in config
-    if telegram != "unmanaged":
+    mtproto_active = "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list" in config
+    if telegram == "ws":
+        # Relay for MTProto, direct + TLS profile for the domains.
+        okay = {"telegram-ws", "telegram-direct"} <= tags and telegram_active and not mtproto_active
+        checks.append(make_check(
+            "Telegram route", "ok" if okay else "error",
+            f"route=ws, nfqws={'on' if telegram_active else 'off'}",
+        ))
+    elif telegram != "unmanaged":
         okay = (
             telegram in ROUTE_VALUES
             and (telegram == "vless" or "telegram-direct" in tags)
@@ -404,8 +412,10 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
             expected.add("discord-direct")
         if youtube_route != "vless":
             expected.add("youtube-direct")
-        if telegram_route(config) in {"direct", "zapret"}:
+        if telegram_route(config) in {"direct", "zapret", "ws"}:
             expected.add("telegram-direct")
+        if telegram_route(config) == "ws":
+            expected.add("telegram-ws")
         missing = sorted(expected - tags)
         add("Xray routing", "error" if missing else "ok", "missing: " + ", ".join(missing) if missing else "service-direct rules согласованы")
     except (OSError, ValueError, json.JSONDecodeError) as exc:

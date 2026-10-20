@@ -185,6 +185,13 @@ if run_tool \
   echo "ERROR: standalone mode accepted a VLESS Telegram route" >&2
   exit 1
 fi
+if run_tool \
+  --preflight \
+  --standalone-zapret \
+  --telegram-route ws >/dev/null 2>&1; then
+  echo "ERROR: standalone mode accepted the Telegram WS route" >&2
+  exit 1
+fi
 
 run_tool \
   --apply \

@@ -243,10 +243,21 @@ class TelegramRouteTests(DiagnosticsUnitBase):
             ("zapret", {"telegram-direct"}, False, "error"),
             ("vless", set(), False, "ok"),
             ("vless", set(), True, "error"),
+            ("ws", {"telegram-direct", "telegram-ws"}, True, "ok"),
+            ("ws", {"telegram-direct"}, True, "error"),
+            ("ws", {"telegram-direct", "telegram-ws"}, False, "error"),
         ):
             with self.subTest(route=route, tags=tags, profile=profile):
                 [check] = self.telegram_check(route, tags, profile)
                 self.assertEqual(check["status"], status)
+
+
+    def test_ws_route_must_not_keep_the_mtproto_ipset(self):
+        config = (self.HEADER.format("ws") + self.PROFILE
+                  + "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list\n")
+        [check] = [c for c in self.module.route_consistency(config, {"telegram-direct", "telegram-ws"}, "")
+                   if c["name"] == "Telegram route"]
+        self.assertEqual(check["status"], "error")
 
 
 class SummaryTests(DiagnosticsUnitBase):

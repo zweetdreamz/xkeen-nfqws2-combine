@@ -95,7 +95,7 @@ async function main() {
       await page.$$eval('[data-service="telegram"] .mode', (buttons) =>
         buttons.map((button) => [button.dataset.mode, button.classList.contains("active")])
       ),
-      [["direct", false], ["zapret", false], ["vpn", false], ["unmanaged", true]]
+      [["direct", false], ["zapret", false], ["vpn", false], ["ws", false], ["unmanaged", true]]
     );
     assert.equal(await page.$$eval('.mode[data-mode="unmanaged"]', (buttons) => buttons.length), 1);
     // 2x2 grid on a desktop width; the four Telegram buttons share one row.

@@ -1999,6 +1999,32 @@ class ConfigHealthTests(PanelTestCase):
             with self.subTest(route=route, rules=len(rules), profile=profile):
                 self.assertEqual(self.telegram_checks(route, rules, profile)["ok"], expected)
 
+    def test_telegram_ws_route_needs_its_rules_and_relay(self):
+        ws_rules = [
+            {"ruleTag": "kdn-telegram-domain", "outboundTag": "telegram-direct", "domain": ["x"]},
+            {"ruleTag": "kdn-telegram-sniffed", "outboundTag": "telegram-direct", "protocol": ["tls"]},
+            {"ruleTag": "kdn-telegram-ip", "outboundTag": "telegram-ws", "network": "tcp"},
+            {"ruleTag": "kdn-telegram-udp", "outboundTag": "telegram-direct", "network": "udp"},
+        ]
+        for rules, running, expected in (
+            (ws_rules, True, True),
+            (ws_rules, False, False),
+            (ws_rules[:2] + ws_rules[3:], True, False),
+            ([dict(rule, outboundTag="telegram-direct") for rule in ws_rules], True, False),
+        ):
+            with self.subTest(rules=len(rules), running=running), \
+                    mock.patch.dict(self.ns, {"telegram_ws_running": lambda running=running: running}):
+                self.assertEqual(self.telegram_checks("ws", rules, True)["ok"], expected)
+
+    def test_telegram_ws_running_reads_the_pidfile(self):
+        pidfile = self.root / "kdn-telegram-ws.pid"
+        with mock.patch.dict(self.ns, {"TELEGRAM_WS_PIDFILE": pidfile}):
+            self.assertFalse(self.ns["telegram_ws_running"]())
+            pidfile.write_text(f"{os.getpid()}\n", encoding="ascii")
+            self.assertTrue(self.ns["telegram_ws_running"]())
+            pidfile.write_text("1\n", encoding="ascii")
+            self.assertFalse(self.ns["telegram_ws_running"]())
+
     def test_missing_files_and_processes_fail(self):
         with mock.patch.dict(self.ns, {"run_command": lambda *_a, **_k: {"ok": False, "code": 1, "output": ""}}):
             health = self.ns["config_health"]()

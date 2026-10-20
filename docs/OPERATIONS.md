@@ -86,6 +86,7 @@ sh set-service-route.sh youtube zapret --core auto --wan-interface eth3 --yes-ro
 sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-router
 
 sh set-service-route.sh telegram zapret    --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh telegram ws        --core xray --wan-interface eth3 --yes-router
 sh set-service-route.sh telegram unmanaged --core auto --wan-interface eth3 --yes-router
 ```
 

@@ -11,12 +11,13 @@ Usage:
   sh set-service-route.sh discord-voice direct|zapret|vpn --yes-router [apply options]
   sh set-service-route.sh discord       direct|zapret|vpn --yes-router [apply options]
   sh set-service-route.sh youtube       direct|zapret|vpn --yes-router [apply options]
-  sh set-service-route.sh telegram      direct|zapret|vpn|unmanaged --yes-router [apply options]
+  sh set-service-route.sh telegram      direct|zapret|vpn|ws|unmanaged --yes-router [apply options]
 
 discord-tcp covers Discord domains (TCP/TLS and QUIC), discord-voice covers
 Discord Voice/STUN UDP ports, and discord switches both at once. telegram
-covers Telegram domains and DC networks; "unmanaged" removes the project's
-Telegram rules and leaves Telegram to the user's own routing.
+covers Telegram domains and DC networks; "ws" carries MTProto through the
+router's WebSocket relay; "unmanaged" removes the project's Telegram rules and
+leaves Telegram to the user's own routing.
 
 The routes of the other services and the Discord UDP settings (--wide-udp,
 --udp-strategy) are read from the current managed state and preserved; pass
@@ -50,12 +51,12 @@ esac
 case "$requested_mode" in
   direct|zapret) route_mode="$requested_mode" ;;
   vpn|vless) route_mode="vless" ;;
-  unmanaged|off)
+  unmanaged|off|ws)
     [ "$service" = "telegram" ] || {
-      echo "ERROR: only telegram can be unmanaged." >&2
+      echo "ERROR: only telegram can be $requested_mode." >&2
       exit 2
     }
-    route_mode="unmanaged"
+    case "$requested_mode" in ws) route_mode="ws" ;; *) route_mode="unmanaged" ;; esac
     ;;
   *)
     echo "ERROR: mode must be direct, zapret or vpn." >&2
@@ -90,7 +91,7 @@ require_route "Discord TCP" "$current_discord_tcp"
 require_route "Discord Voice" "$current_discord_voice"
 require_route "YouTube" "$current_youtube"
 case "$current_telegram" in
-  direct|zapret|vless|unmanaged) ;;
+  direct|zapret|vless|ws|unmanaged) ;;
   *) current_telegram="unmanaged" ;;
 esac
 

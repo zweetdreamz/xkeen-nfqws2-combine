@@ -4,7 +4,7 @@
 
 - включить, выключить или перезапустить XKeen;
 - для Discord TCP, Discord Voice, YouTube и Telegram независимо выбрать
-  `Direct`, `Zapret` или `VPN` (для Telegram ещё `Выкл`);
+  `Direct`, `Zapret` или `VPN` (для Telegram ещё `WS` и `Выкл`);
 - видеть этап и процент выполнения переключения;
 - хранить историю переключений и вернуть состояние до выбранной операции;
 - запускать проверки конфигурации и доступности после применения;
@@ -25,7 +25,7 @@
 | Discord TCP | домены Discord: сайт, API, CDN, QUIC |
 | Discord Voice | голос и STUN по UDP-портам |
 | YouTube | сайт, видео, QUIC |
-| Telegram | сайт, CDN, MTProto; кнопка `Выкл` убирает правила проекта ([TELEGRAM.md](../../docs/TELEGRAM.md)) |
+| Telegram | сайт, CDN, MTProto; `WS` — MTProto через WebSocket-ретранслятор на роутере, `Выкл` убирает правила проекта ([TELEGRAM.md](../../docs/TELEGRAM.md)) |
 
 | Кнопка | Маршрут | nfqws2 |
 |---|---|---|

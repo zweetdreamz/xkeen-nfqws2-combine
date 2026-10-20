@@ -9,8 +9,11 @@ XKeen/Xray/Mihomo. Путь пакета отдельно разобран в
 Режим выбирается отдельно для каждого сервиса: Discord TCP (домены
 Discord, TCP/TLS и QUIC), Discord Voice (Voice/STUN UDP-порты), YouTube и
 Telegram. Telegram дополнительно может быть `unmanaged`: тогда проект не
-добавляет для него правил. Правила Telegram помечены
-`ruleTag` `kdn-telegram-domain` и `kdn-telegram-ip` (уникальные: Xray не
+добавляет для него правил, или `ws`: MTProto уходит в outbound `telegram-ws`
+(freedom с `redirect` на ретранслятор `127.0.0.1:18443`, служба
+`S99kdn-telegram-ws`). Правила Telegram помечены
+`ruleTag` `kdn-telegram-domain`, `kdn-telegram-ip`, а в `ws` ещё
+`kdn-telegram-sniffed` и `kdn-telegram-udp` (уникальные: Xray не
 принимает повторяющиеся теги), проект меняет только их; outbound —
 `04_telegram_nfqws2_outbound.json` (`telegram-direct`), порт 5222 добавляется
 в ограниченный `port_proxying.lst`. Подробно — [TELEGRAM.md](TELEGRAM.md).
@@ -93,7 +96,7 @@ policy routing читается из runtime-hook, `ip rule` и Keenetic policy.
 Для активного zapret-режима скрипт:
 
 1. создаёт отдельный Freedom outbound `discord-direct`, `youtube-direct`
-   и/или `telegram-direct` (Telegram в `direct`/`zapret`);
+   и/или `telegram-direct` (Telegram в `direct`/`zapret`/`ws`);
 2. не переиспользует обычный пользовательский `direct`, в котором могут быть
    bind/interface/mark;
 3. переносит подходящие доменные `.dat` selectors из proxy rules в первые

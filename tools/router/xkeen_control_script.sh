@@ -88,7 +88,8 @@ ROUTE_SERVICES = ("discord-tcp", "discord-voice", "youtube", "telegram")
 ROUTE_REQUEST_SERVICES = ROUTE_SERVICES + ("discord",)
 ROUTE_VALUES = {"direct", "zapret", "vless"}
 # Telegram is opt-in: "unmanaged" means the project leaves it to user rules.
-TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"unmanaged"}
+TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"ws", "unmanaged"}
+TELEGRAM_WS_PIDFILE = Path("/opt/var/run/kdn-telegram-ws.pid")
 STATUS_ROUTE_KEYS = {
     "discord-tcp": "discord_tcp_route",
     "discord-voice": "discord_voice_route",
@@ -187,9 +188,9 @@ button:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .service:has(.mode.active[data-mode=direct]) .current{background:color-mix(in srgb,var(--direct) 14%,transparent);color:var(--direct)}
 .service:has(.mode.active[data-mode=zapret]) .current{background:color-mix(in srgb,var(--zapret) 14%,transparent);color:var(--zapret)}
 .service:has(.mode.active[data-mode=vpn]) .current{background:color-mix(in srgb,var(--vpn) 14%,transparent);color:var(--vpn)}
-.modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(4,minmax(0,1fr))}
+.modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(5,minmax(0,1fr))}
 .mode{--mode:var(--accent);padding:9px 8px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted);box-shadow:none}
-.mode[data-mode=direct]{--mode:var(--direct)}.mode[data-mode=zapret]{--mode:var(--zapret)}.mode[data-mode=vpn]{--mode:var(--vpn)}.mode[data-mode=unmanaged]{--mode:var(--muted)}
+.mode[data-mode=direct]{--mode:var(--direct)}.mode[data-mode=zapret]{--mode:var(--zapret)}.mode[data-mode=vpn]{--mode:var(--vpn)}.mode[data-mode=unmanaged]{--mode:var(--muted)}.mode[data-mode=ws]{--mode:#229ed9}
 .mode::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--mode);opacity:.55}
 .mode:hover{background:var(--surface);color:var(--text);border-color:transparent}
 .mode.active{background:var(--surface);color:var(--mode);border-color:color-mix(in srgb,var(--mode) 45%,transparent);box-shadow:var(--shadow)}
@@ -264,7 +265,7 @@ pre{min-height:120px;max-height:340px;overflow:auto;margin:0;padding:14px 16px;b
 #tunerVerification{margin:12px 0 0}
 footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
 @media(max-width:760px){.services{grid-template-columns:minmax(0,1fr)}.service .modes{max-width:460px}}
-@media(max-width:480px){.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:480px){.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:760px){header{align-items:flex-start;flex-direction:column;padding-top:20px}.services,.profiles,.tuner-grid,.updates-grid,.diagnostic-grid,.legend,.meta{grid-template-columns:1fr}.card{padding:18px}.profile-head{flex-wrap:wrap}}
 @media(max-width:480px){.page{width:calc(100% - 24px)}.xkeen-actions,.upload{grid-template-columns:1fr}.tabs{display:grid;grid-template-columns:1fr 1fr}.tabs .tab{justify-content:center;padding:8px 10px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
@@ -296,7 +297,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
     <article class="service" data-service="discord-tcp"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">D</span><div><h3>Discord TCP</h3><div class="service-scope">Сайт, API, CDN, QUIC</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
     <article class="service" data-service="discord-voice"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">V</span><div><h3>Discord Voice</h3><div class="service-scope">Голос и STUN по UDP</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
     <article class="service" data-service="youtube"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">Y</span><div><h3>YouTube</h3><div class="service-scope">Сайт, видео, QUIC</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
-    <article class="service" data-service="telegram"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">T</span><div><h3>Telegram</h3><div class="service-scope">Сайт, CDN и MTProto · звонки только через VPN</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button><button class="mode" data-mode="unmanaged" title="Убрать правила проекта; Telegram идёт по вашим правилам XKeen">Выкл</button></div></article>
+    <article class="service" data-service="telegram"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">T</span><div><h3>Telegram</h3><div class="service-scope">Сайт, CDN и MTProto · звонки только через VPN</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button><button class="mode" data-mode="ws" title="MTProto через WebSocket-ретранслятор на роутере (как Telegram Web)">WS</button><button class="mode" data-mode="unmanaged" title="Убрать правила проекта; Telegram идёт по вашим правилам XKeen">Выкл</button></div></article>
   </div><div class="legend"><div><b>Direct</b>Напрямую через WAN, без nfqws2.</div><div><b>Zapret</b>Через WAN с обработкой nfqws2.</div><div><b>VPN</b>Через существующий VLESS outbound Xray.</div></div><div class="warning">Смена маршрута выполняет полный транзакционный apply и перезапускает службы, включая Xkeen.</div><div id="routeProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="routeStage">Подготовка</b><span id="routePercent">0%</span></div><div class="bar"><span id="routeBar"></span></div></div></section>
   <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-check"/></svg><h2>Проверка после применения</h2></div><div id="postApplyStatus" class="hint">После переключения здесь появится краткий статус служб и конфигов.</div></div><button id="openDiagnostics" class="clear">Открыть диагностику</button></div></section>
   <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-history"/></svg><h2>История и откат</h2></div><div class="hint">Для каждой смены сохраняются режимы, результат и pre-apply snapshot.</div></div><button id="refreshHistory" class="clear">Обновить</button></div><div id="history" class="history-list"><div class="empty">История пуста.</div></div></section>
@@ -360,7 +361,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
 <script>
 const logEl=document.getElementById("log"),dot=document.getElementById("dot"),statusText=document.getElementById("statusText");
 const controlHeaders={"X-XKeen-Control":"1","Content-Type":"application/json"};
-const label={direct:"DIRECT",zapret:"ZAPRET",vless:"VPN",vpn:"VPN",unmanaged:"ВЫКЛ",unknown:"НЕИЗВЕСТНО"};
+const label={direct:"DIRECT",zapret:"ZAPRET",vless:"VPN",vpn:"VPN",ws:"WS",unmanaged:"ВЫКЛ",unknown:"НЕИЗВЕСТНО"};
 const serviceLabel={youtube:"YouTube",discord:"Discord",telegram:"Telegram",rollback:"Откат","discord-tcp":"Discord TCP","discord-voice":"Discord Voice"};
 const activeTunerStates=new Set(["preparing","running","voice_window","voice_watch","awaiting_voice","cancelling"]);
 let selectedReport=null,validatedDescriptor=null,tunerPoll=null,routeWatch=null,diagnosticWatch=null;
@@ -1189,6 +1190,17 @@ def config_health():
     ]
     if telegram == "unmanaged":
         telegram_ok = not telegram_rules and not telegram_profile
+    elif telegram == "ws":
+        # Four rules: domains, sniffed TLS/HTTP and UDP direct; MTProto to the relay.
+        outbounds = sorted(str(rule.get("outboundTag")) for rule in telegram_rules)
+        relay_running = telegram_ws_running()
+        telegram_ok = (
+            outbounds == ["telegram-direct"] * 3 + ["telegram-ws"]
+            and telegram_profile
+            and "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list" not in nfqws_text
+            and relay_running
+        )
+        add("Telegram WS relay", relay_running, "работает" if relay_running else "не запущен")
     else:
         expected_outbound = "telegram-direct" if telegram != "vless" else None
         telegram_ok = (
@@ -1208,6 +1220,14 @@ def config_health():
         f"route={telegram}, rules={len(telegram_rules)}, nfqws={'on' if telegram_profile else 'off'}",
     )
     return {"ok": True, "routes": routes, "checks": checks, "all_ok": all(item["ok"] for item in checks)}
+
+
+def telegram_ws_running():
+    try:
+        pid = int(TELEGRAM_WS_PIDFILE.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return False
+    return pid > 1 and process_alive(pid)
 
 
 def process_alive(pid):
@@ -1349,7 +1369,7 @@ def validate_route(service, mode):
         raise ValueError("неподдерживаемый сервис")
     allowed = {"direct", "zapret", "vpn"}
     if service == "telegram":
-        allowed = allowed | {"unmanaged"}
+        allowed = allowed | {"ws", "unmanaged"}
     if mode not in allowed:
         raise ValueError("неподдерживаемый маршрут")
     return service, mode
@@ -2401,7 +2421,7 @@ class Handler(BaseHTTPRequestHandler):
             len(parts) == 4
             and parts[:2] == ["api", "route"]
             and parts[2] in ROUTE_REQUEST_SERVICES
-            and parts[3] in {"direct", "zapret", "vpn", "unmanaged"}
+            and parts[3] in {"direct", "zapret", "vpn", "ws", "unmanaged"}
         ):
             try:
                 payload = start_route_job(parts[2], parts[3])

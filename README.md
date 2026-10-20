@@ -97,11 +97,14 @@ sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-ro
 ```
 
 Telegram — четвёртый сервис, по умолчанию не управляется (`unmanaged`).
-Включается так же, без настройки клиентов; подробности и ограничения — в
+Включается так же, без настройки клиентов; кроме `direct`/`zapret`/`vpn`
+есть режим `ws`: MTProto идёт через WebSocket-ретранслятор на роутере, как
+у Telegram Web (только Xray); подробности и ограничения — в
 [docs/TELEGRAM.md](docs/TELEGRAM.md):
 
 ```sh
 sh set-service-route.sh telegram zapret    --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh telegram ws        --core xray --wan-interface eth3 --yes-router
 sh set-service-route.sh telegram unmanaged --core auto --wan-interface eth3 --yes-router
 ```
 
@@ -273,7 +276,7 @@ Discord Voice или YouTube.
 [`tools/router/xkeen_control_script.sh`](tools/router/xkeen_control_script.sh)
 создаёт single-page панель управления XKeen и маршрутами
 `Direct / Zapret / VPN` для четырёх сервисов: Discord TCP, Discord Voice,
-YouTube и Telegram (у него есть ещё `Выкл`) — у каждого своя карточка. Вкладка **Автоподбор** перебирает
+YouTube и Telegram (у него есть ещё `WS` и `Выкл`) — у каждого своя карточка. Вкладка **Автоподбор** перебирает
 актуальные Flowseal-профили на роутере, а **Импорт профиля** принимает отчёт
 Windows-тюнера. Смена маршрута выполняется фоновым заданием: краткий разрыв
 LAN-соединения при перезапуске Xray не теряет результат, а после повторного
@@ -308,8 +311,7 @@ LAN-устройства. Проверка состояния служб ост�
 ## Что именно настраивается
 
 - отдельные правила Xray/Mihomo для Discord TCP, Discord Voice, YouTube и
-  Telegram (правила Telegram помечены `ruleTag` `kdn-telegram-domain` и
-  `kdn-telegram-ip`);
+  Telegram (правила Telegram помечены `ruleTag` с префиксом `kdn-telegram`);
 - разные hostlist и nfqws2-профили сервисов;
 - TCP/TLS, QUIC и Discord Voice/STUN;
 - узкий UDP-диапазон по умолчанию, явный `--wide-udp` и возврат
