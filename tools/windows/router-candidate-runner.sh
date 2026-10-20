@@ -24,6 +24,7 @@ NFQWS_CONF="$(root_path /opt/etc/nfqws2/nfqws2.conf)"
 NFQWS_BIN="$(root_path /opt/usr/bin/nfqws2)"
 VOICE_DIAGNOSTIC="$(root_path /opt/root/keenetic-discord-nfqws2/scripts/diagnose-discord-voice.sh)"
 VOICE_PROBE="$(root_path /opt/root/keenetic-discord-nfqws2/tools/router/discord_voice_probe.py)"
+TELEGRAM_PROBE="$(root_path /opt/root/keenetic-discord-nfqws2/tools/router/telegram_mtproto.py)"
 VOICE_MODE="manual"
 NFQWS_PIDFILE="$(root_path /opt/var/run/nfqws2.pid)"
 TMP_ROOT="$(root_path /opt/tmp/zapret-tuner.$$)"
@@ -93,6 +94,9 @@ case "$SERVICE" in
   discord-voice)
     TUNER_UDP_PORTS="443,3478:3481,5349,19294:19344,50000:50100"
     ;;
+  telegram)
+    TUNER_TCP_PORTS="80,443,5222"
+    ;;
   *)
     emit "FATAL|unsupported-service"
     exit 2
@@ -105,6 +109,17 @@ for required in sh awk grep base64 curl iptables-save jq od; do
     exit 1
   }
 done
+
+if [ "$SERVICE" = telegram ]; then
+  command -v python3 >/dev/null 2>&1 || {
+    emit "FATAL|missing-command:python3"
+    exit 1
+  }
+  [ -f "$TELEGRAM_PROBE" ] || {
+    emit "FATAL|missing-telegram-probe:$TELEGRAM_PROBE"
+    exit 1
+  }
+fi
 
 [ -x "$NFQWS_INIT" ] || {
   emit "FATAL|missing-init:$NFQWS_INIT"
@@ -176,6 +191,22 @@ start_candidate() {
   return 0
 }
 
+# Prints NFQWS_ARGS_CUSTOM without the profiles (parts between --new) that
+# contain one of the tokens given as arguments: those of the tested service.
+custom_without() {
+  printf '%s\n' "${NFQWS_ARGS_CUSTOM:-}" | awk -v markers="$*" '
+    BEGIN { count = split(markers, list, " "); for (i = 1; i <= count; i++) mark[list[i]] = 1 }
+    function flush() {
+      if (part != "" && !hit) {out=out (out!=""?" --new ":"") part}
+      part=""; hit=0
+    }
+    {for(i=1;i<=NF;i++) {
+      if($i=="--new") flush()
+      else {part=part (part!=""?" ":"") $i; if($i in mark) hit=1}
+    }}
+    END {flush(); print out}'
+}
+
 candidate_runtime_args() (
   # Subshell prevents one candidate from becoming the base for the next.
   # The NFQWS_ARGS* variables are read by the sourced _startup_args.
@@ -183,17 +214,14 @@ candidate_runtime_args() (
   case "$SERVICE" in
     discord-voice) NFQWS_ARGS_UDP="$candidate_args" ;;
     discord-tcp) NFQWS_ARGS="$candidate_args" ;;
-    youtube)
-      preserved_custom="$(printf '%s\n' "${NFQWS_ARGS_CUSTOM:-}" | awk '
-        function flush() {
-          if (part != "" && !youtube) {out=out (out!=""?" --new ":"") part}
-          part=""; youtube=0
-        }
-        {for(i=1;i<=NF;i++) {
-          if($i=="--new") flush()
-          else {part=part (part!=""?" ":"") $i; if($i=="--hostlist=/opt/etc/nfqws2/lists/youtube.list") youtube=1}
-        }}
-        END {flush(); print out}' )"
+    youtube|telegram)
+      if [ "$SERVICE" = youtube ]; then
+        preserved_custom="$(custom_without --hostlist=/opt/etc/nfqws2/lists/youtube.list)"
+      else
+        preserved_custom="$(custom_without \
+          --hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list \
+          --ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list)"
+      fi
       NFQWS_ARGS_CUSTOM="$candidate_args"
       [ -z "$preserved_custom" ] || NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM --new $preserved_custom"
       ;;
@@ -292,6 +320,46 @@ image|https://cdn.discordapp.com/embed/avatars/0.png"
   return 1
 }
 
+# MTProto handshakes (req_pq_multi -> resPQ) with the five Telegram data
+# centers from the router; prints EVENT|TG_MTPROTO lines and succeeds when at
+# least two answered.
+telegram_probe() {
+  python3 "$TELEGRAM_PROBE" --label "$1" --timeout 5 --min-ok 2 2>/dev/null
+}
+
+# A Telegram pass: two of three HTTPS checks of the web/CDN domains and an
+# MTProto handshake with at least two data centers.
+test_telegram_candidate() {
+  candidate_number="$1"
+  probe_phase="${2:-candidate}"
+  probe_round="${3:-1}"
+  successes=0
+  total=0
+  for target in \
+    "web|https://telegram.org/" \
+    "web|https://web.telegram.org/" \
+    "image|https://telegram.org/img/t_logo.png"
+  do
+    total=$((total + 1))
+    if http_probe "${target#*|}" "${target%%|*}"; then
+      successes=$((successes + 1))
+    fi
+  done
+  emit "HTTP_RESULT|$candidate_number|$successes|$total"
+  if telegram_probe "$probe_phase-$candidate_number-$probe_round"; then
+    mtproto=pass
+  else
+    mtproto=fail
+  fi
+  emit "TG_RESULT|$candidate_number|$probe_phase|$probe_round|$mtproto"
+  if [ "$successes" -ge 2 ] && [ "$mtproto" = pass ]; then
+    emit "SUITE_RESULT|$candidate_number|$probe_phase|$probe_round|pass|$successes|$total"
+    return 0
+  fi
+  emit "SUITE_RESULT|$candidate_number|$probe_phase|$probe_round|fail|$successes|$total"
+  return 1
+}
+
 # Sends Discord IP Discovery requests to VOICE_TARGET from the router and
 # prints EVENT|VOICE_PROBE|label|sent|received|valid. Succeeds on a valid reply.
 voice_probe() {
@@ -357,7 +425,10 @@ test_voice_candidate() {
 
 emit "SESSION|$SERVICE|runtime-only"
 
-if [ "$SERVICE" != discord-voice ]; then
+if [ "$SERVICE" = telegram ]; then
+  emit "BASELINE|started"
+  test_telegram_candidate 0 baseline 1 || true
+elif [ "$SERVICE" != discord-voice ]; then
   emit "BASELINE|started"
   test_http_candidate 0 baseline 1 || true
 fi
@@ -375,6 +446,16 @@ if [ "$WAS_RUNNING" -eq 1 ]; then
   }
 else
   firewall_stop >/dev/null 2>&1 || true
+fi
+if [ "$SERVICE" = telegram ]; then
+  # Calibration: nfqws2 is stopped. Data centers that answer now are not
+  # blocked by the DPI; none answering here and with every candidate points
+  # to a network problem rather than to the strategies.
+  if telegram_probe raw; then
+    emit "TG_CALIBRATION|raw|pass"
+  else
+    emit "TG_CALIBRATION|raw|fail"
+  fi
 fi
 if [ "$SERVICE" = discord-voice ] && [ -n "$VOICE_TARGET" ]; then
   # Calibration 2: nfqws2 and its firewall rules are gone, so this request is
@@ -407,6 +488,13 @@ while IFS='|' read -r candidate_number candidate_id encoded_args <&3; do
   if [ "$SERVICE" = "discord-voice" ]; then
     if test_voice_candidate "$candidate_number"; then
       found=1
+    fi
+  elif [ "$SERVICE" = "telegram" ]; then
+    if test_telegram_candidate "$candidate_number" candidate 1; then
+      sleep 1
+      if test_telegram_candidate "$candidate_number" confirm 2; then
+        found=1
+      fi
     fi
   elif test_http_candidate "$candidate_number" candidate 1; then
     sleep 1

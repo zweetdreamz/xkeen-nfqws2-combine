@@ -729,6 +729,64 @@ jq '.routing.rules = [
 mv "$routing_file.tmp" "$routing_file"
 run_service_tool telegram zapret --yes-router --core xray >/dev/null
 assert_mode zapret zapret vless zapret
+
+# A Telegram profile found by the autotuner replaces the built-in one; it
+# must keep its two parts (TLS by kdn-telegram.list, MTProto by the ipset).
+make_telegram_stage() {
+  printf '%s\n' "$@" > "$ROOT/opt/tmp/telegram-args"
+  telegram_id="$(
+    { printf '%s\n' telegram "fixture BAT.bat" "fixture telegram"; cat "$ROOT/opt/tmp/telegram-args"; } |
+      awk 'NR == 1 { text=$0; next } { text=text "\n" $0 } END { printf "%s", text }' |
+      sha256sum | cut -c1-12
+  )"
+  jq -n --arg id "$telegram_id" --rawfile args "$ROOT/opt/tmp/telegram-args" '{
+    format: 1, service: "telegram", candidate_id: $id,
+    source_name: "fixture BAT.bat", source_sha: "s", source_url: "https://example.invalid/t",
+    family: "fixture telegram", args: ($args | split("\n") | map(select(length > 0))),
+    notes: [], rank: 5, report: {}
+  }' > "$ROOT/opt/tmp/telegram-profile.json"
+}
+make_telegram_stage \
+  --filter-tcp=443 --filter-l7=tls --hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list \
+  --out-range=-d10 --payload=tls_client_hello --lua-desync=fake:blob=telegram_tls:repeats=3 \
+  --new \
+  --filter-tcp=80,443,5222 --ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list \
+  --filter-l7=mtproto --out-range=-d10 --payload=mtproto_initial --lua-desync=multisplit:pos=2
+run_tool --apply-import-profile "$ROOT/opt/tmp/telegram-profile.json" --yes-router >/dev/null
+grep -Fq -- '--lua-desync=fake:blob=telegram_tls:repeats=3' "$nfqws_file"
+grep -Fq -- '--lua-desync=multisplit:pos=2' "$nfqws_file"
+if grep -Fq -- '--lua-desync=fake:blob=telegram_tls:repeats=6' "$nfqws_file"; then
+  echo "ERROR: built-in Telegram profile remains next to the imported one" >&2
+  exit 1
+fi
+sh -n "$nfqws_file"
+# The import survives an unrelated route switch.
+run_service_tool youtube direct --yes-router --core xray >/dev/null
+grep -Fq -- '--lua-desync=fake:blob=telegram_tls:repeats=3' "$nfqws_file"
+run_service_tool youtube vpn --yes-router --core xray >/dev/null
+# A profile that leaves its lists or crosses into Discord is refused.
+before_bad="$(sha256sum "$nfqws_file" | awk '{print $1}')"
+make_telegram_stage \
+  --filter-tcp=443 --filter-l7=tls --hostlist=/opt/etc/nfqws2/lists/user.list \
+  --payload=tls_client_hello --lua-desync=fake:blob=telegram_tls:repeats=3 \
+  --new \
+  --filter-tcp=80,443,5222 --ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list \
+  --filter-l7=mtproto --payload=mtproto_initial --lua-desync=multisplit:pos=2
+if run_tool --apply-import-profile "$ROOT/opt/tmp/telegram-profile.json" --yes-router >/dev/null 2>&1; then
+  echo "ERROR: a Telegram profile with the Discord hostlist was imported" >&2
+  exit 1
+fi
+make_telegram_stage --filter-tcp=443 --ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list \
+  --filter-l7=tls --hostlist=/opt/etc/nfqws2/lists/user.list --payload=tls_client_hello
+jq '.service = "discord-tcp"' "$ROOT/opt/tmp/telegram-profile.json" > "$ROOT/opt/tmp/tcp-ipset.json"
+if run_tool --apply-import-profile "$ROOT/opt/tmp/tcp-ipset.json" --yes-router >/dev/null 2>&1; then
+  echo "ERROR: --ipset was accepted outside a Telegram profile" >&2
+  exit 1
+fi
+[ "$(sha256sum "$nfqws_file" | awk '{print $1}')" = "$before_bad" ]
+run_tool --clear-imported-profile telegram --yes-router >/dev/null
+[ ! -e "$ROOT/opt/etc/nfqws2/imported-profiles/telegram.json" ]
+assert_mode zapret zapret vless zapret
 run_service_tool youtube direct --yes-router --core xray >/dev/null
 assert_mode zapret zapret direct zapret
 run_service_tool discord-tcp vpn --yes-router --core xray >/dev/null

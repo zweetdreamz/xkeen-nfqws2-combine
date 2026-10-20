@@ -184,7 +184,7 @@ class ValidateArgsTests(unittest.TestCase):
 
     def test_parser_rejects_bad_choices(self):
         for argv in (
-            ("--service", "telegram", "--job-id", "x"),
+            ("--service", "whatsapp", "--job-id", "x"),
             ("--service", "youtube"),
             ("--service", "youtube", "--job-id", "x", "--mix-level", "wild"),
             ("--service", "youtube", "--job-id", "x", "--search-seed", "-1"),
@@ -544,6 +544,21 @@ class ParseEventTests(unittest.TestCase):
         # Candidate 1 is the built-in profile: named as such, not as a BAT.
         self.parse("EVENT|CANDIDATE|1|abc123")
         self.assertIn("встроенный профиль проекта", self.writer.logs[1])
+
+    def test_telegram_events(self):
+        for dc, status in (("1", "timeout"), ("2", "ok"), ("4", "ok")):
+            self.parse(f"EVENT|TG_MTPROTO|raw|{dc}|149.154.167.51|{status}|120")
+        self.parse("EVENT|TG_CALIBRATION|raw|pass")
+        self.assertEqual(self.writer.payload["telegram_raw"], "pass")
+        self.assertIn("ответили 2 из 5", self.writer.logs[-1])
+        self.assertIn("не блокируется", self.writer.logs[-1])
+        self.parse("EVENT|TG_MTPROTO|candidate-3-1|2|149.154.167.51|reset|40")
+        self.parse("EVENT|TG_RESULT|3|candidate|1|fail")
+        self.assertEqual(
+            self.writer.payload["last_mtproto_result"],
+            {"candidate": 3, "phase": "candidate", "answered": 0, "verdict": "fail"},
+        )
+        self.assertIn("DC2 reset", self.writer.logs[-1])
 
     def test_manual_voice_mode_is_explained(self):
         self.parse("EVENT|VOICE_AUTO_MODE|manual|raw-reply")

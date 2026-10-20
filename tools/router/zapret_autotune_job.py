@@ -225,7 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--service",
         required=True,
-        choices=("youtube", "discord-tcp", "discord-voice"),
+        choices=tuner.TUNER_SERVICES,
     )
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--mix-level", choices=("off", "safe", "extended"), default="safe")
@@ -408,6 +408,32 @@ def parse_event(
         result = {"candidate": int(parts[2]), "phase": parts[3], "round": int(parts[4]),
                   "verdict": parts[5], "successes": int(parts[6]), "total": int(parts[7])}
         writer.write(**({"baseline_result": result} if parts[3] == "baseline" else {"last_suite_result": result}))
+    elif event == "TG_MTPROTO" and len(parts) >= 7:
+        # EVENT|TG_MTPROTO|label|dc|ip|status|ms: one line per data center,
+        # collected per label (calibration or candidate pass).
+        label, dc, status = parts[2], parts[3], parts[5]
+        probes = dict(writer.payload.get("telegram_mtproto") or {})
+        probes[label] = {**probes.get(label, {}), dc: status}
+        writer.write(telegram_mtproto=probes)
+    elif event == "TG_CALIBRATION" and len(parts) >= 4:
+        writer.write(telegram_raw=parts[3])
+        answered = sum(
+            status == "ok"
+            for status in (writer.payload.get("telegram_mtproto") or {}).get("raw", {}).values()
+        )
+        writer.log(
+            f"Калибровка MTProto без nfqws2: ответили {answered} из 5 дата-центров"
+            + (" — MTProto у провайдера не блокируется" if parts[3] == "pass" else "")
+            + "."
+        )
+    elif event == "TG_RESULT" and len(parts) >= 6:
+        label = f"{parts[3]}-{parts[2]}-{parts[4]}"
+        statuses = (writer.payload.get("telegram_mtproto") or {}).get(label, {})
+        answered = sum(status == "ok" for status in statuses.values())
+        writer.write(last_mtproto_result={"candidate": int(parts[2]), "phase": parts[3],
+                                          "answered": answered, "verdict": parts[5]})
+        details = ", ".join(f"DC{dc} {status}" for dc, status in sorted(statuses.items()))
+        writer.log(f"MTProto ({parts[3]} {parts[2]}): ответили {answered} из 5 — {details}")
     elif event == "VOICE_OBSERVATION" and len(parts) >= 5:
         writer.write(voice_observation={"outgoing_packets": int(parts[2]), "incoming_packets": int(parts[3]), "wan_match": parts[4] == "1"})
     elif event == "PROBE" and len(parts) >= 5:

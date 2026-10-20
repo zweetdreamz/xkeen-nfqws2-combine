@@ -55,6 +55,33 @@ NATIVE_SPLIT = (
     "--lua-desync=multisplit:pos=1,midsld:seqovl=1:"
     "seqovl_pattern=tls_clienthello:tcp_ts_up"
 )
+# Telegram: a TLS profile for the web/CDN domains and an MTProto profile for
+# the data-center networks, as the engine writes them (apply-discord-nfqws2.sh).
+TELEGRAM_TLS_SELECTORS = (
+    "--filter-tcp=443",
+    "--filter-l7=tls",
+    "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list",
+)
+TELEGRAM_MTPROTO_SELECTORS = (
+    "--filter-tcp=80,443,5222",
+    "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list",
+    "--filter-l7=mtproto",
+)
+TELEGRAM_KNOWN_ARGS = (
+    *TELEGRAM_TLS_SELECTORS,
+    "--out-range=-d10",
+    "--payload=tls_client_hello",
+    "--lua-desync=fake:blob=telegram_tls:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000",
+    "--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=telegram_tls:tcp_ts_up",
+    "--new",
+    *TELEGRAM_MTPROTO_SELECTORS,
+    "--out-range=-d10",
+    "--payload=mtproto_initial",
+    "--lua-desync=fake:blob=telegram_tls:repeats=6",
+    "--lua-desync=multisplit:pos=1",
+)
+TUNER_SERVICES = ("youtube", "discord-tcp", "discord-voice", "telegram")
+
 NATIVE_QUIC = (
     "--filter-udp=443",
     "--filter-l7=quic",
@@ -1039,9 +1066,65 @@ def source_services(source: SourceFile) -> list[str]:
     """Services for which ``source`` yields at least one translated profile."""
     return sorted(
         service
-        for service in ("youtube", "discord-tcp", "discord-voice")
+        for service in TUNER_SERVICES
         if build_candidates(service, [source], "off", include_builtin=False)
     )
+
+
+def telegram_candidate(tcp: Candidate) -> Candidate:
+    """Apply the TLS strategy of a Discord TCP candidate to both Telegram profiles.
+
+    The desync functions run on the TLS ClientHello of the Telegram domains
+    and on the first MTProto packet to the DC networks, as the package's own
+    default config does for http,tls,mtproto. Blob names point to the
+    project's telegram_tls copy of the package TLS ClientHello.
+    """
+    out_range = next((t for t in tcp.args if t.startswith("--out-range=")), "--out-range=-d10")
+    functions = [
+        re.sub(r"((?:^|:)(?:blob|pattern|seqovl_pattern))=tls_clienthello(?=:|$)", r"\1=telegram_tls", token)
+        for token in tcp.args
+        if token.startswith("--lua-desync=")
+    ]
+    args = (
+        *TELEGRAM_TLS_SELECTORS, out_range, "--payload=tls_client_hello", *functions,
+        "--new",
+        *TELEGRAM_MTPROTO_SELECTORS, out_range, "--payload=mtproto_initial", *functions,
+    )
+    candidate = make_candidate(
+        service="telegram",
+        source=candidate_source(tcp),
+        family=tcp.family,
+        args=args,
+        notes=tcp.notes,
+        rank=tcp.rank,
+    )
+    return dataclasses.replace(candidate, also_from=tcp.also_from, pinned=tcp.pinned)
+
+
+def telegram_candidates(
+    sources: Sequence[SourceFile], mix_level: str, *, include_builtin: bool
+) -> list[Candidate]:
+    """Telegram candidates: the engine default plus every Discord TCP strategy."""
+    result = [
+        telegram_candidate(candidate)
+        for candidate in build_candidates(
+            "discord-tcp", sources, mix_level, include_builtin=include_builtin
+        )
+    ]
+    if include_builtin:
+        preferred = known_candidate("discord-tcp", sources)
+        result.insert(0, make_candidate(
+            service="telegram",
+            source=candidate_source(preferred),
+            family="project default (TLS + MTProto)",
+            args=TELEGRAM_KNOWN_ARGS,
+            notes=("profile written by apply-discord-nfqws2.sh for Telegram=zapret",),
+            rank=0,
+        ))
+    unique: dict[tuple[str, ...], Candidate] = {}
+    for candidate in result:
+        unique.setdefault(candidate.args, candidate)
+    return list(unique.values())
 
 
 def build_candidates(
@@ -1057,6 +1140,8 @@ def build_candidates(
     and everything built on it (native sweeps and native/source mixes), so
     that only profiles derived from ``sources`` are tested.
     """
+    if service == "telegram":
+        return telegram_candidates(sources, mix_level, include_builtin=include_builtin)
     by_source = {
         source.name: parse_profiles(source)
         for source in sources
@@ -1512,14 +1597,19 @@ def parse_probe_event(line: str) -> dict | None:
 
 
 def verification_report(service: str, output: Sequence[str]) -> dict:
+    method = {
+        "discord-voice": "manual-duplex-voice",
+        "telegram": "router-http-and-mtproto-handshake-two-rounds",
+    }.get(service, "router-http-content-two-rounds")
     return {
-        "method": "manual-duplex-voice" if service == "discord-voice" else "router-http-content-two-rounds",
+        "method": method,
         "voice_audio_automatic": False,
         "quic_verified": False,
         "video_playback_verified": False,
         "probes": [result for line in output if (result := parse_probe_event(line)) is not None],
         "suite_results": [line for line in output if line.startswith("EVENT|SUITE_RESULT|")],
         "voice_observations": [line for line in output if line.startswith("EVENT|VOICE_OBSERVATION|")],
+        "mtproto_handshakes": [line for line in output if line.startswith("EVENT|TG_MTPROTO|")],
     }
 
 
@@ -1563,7 +1653,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "service",
-        choices=("youtube", "discord-tcp", "discord-voice"),
+        choices=TUNER_SERVICES,
         help="service/protocol family to tune",
     )
     result.add_argument("--router", default="192.168.2.1")

@@ -52,6 +52,21 @@ VALID_ARGS = {
         "--payload=stun,discord_ip_discovery",
         "--lua-desync=fake:blob=discord_udp:repeats=6",
     ],
+    "telegram": [
+        "--filter-tcp=443",
+        "--filter-l7=tls",
+        "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list",
+        "--out-range=-d10",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=telegram_tls:repeats=6",
+        "--new",
+        "--filter-tcp=80,443,5222",
+        "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list",
+        "--filter-l7=mtproto",
+        "--out-range=-d10",
+        "--payload=mtproto_initial",
+        "--lua-desync=fake:blob=telegram_tls:repeats=6",
+    ],
 }
 
 
@@ -314,8 +329,26 @@ class CandidateValidationTests(PanelTestCase):
         with self.assertRaisesRegex(ValueError, pattern):
             self.validate(candidate, report)
 
+    def test_telegram_profile_must_keep_its_two_parts(self):
+        good = VALID_ARGS["telegram"]
+        split = good.index("--new")
+        bad_variants = {
+            "no MTProto part": good[:split],
+            "parts swapped": good[split + 1:] + ["--new"] + good[:split],
+            "Discord hostlist": [t.replace("kdn-telegram.list", "user.list") for t in good],
+            "wider ports": [t.replace("80,443,5222", "1-65535") for t in good],
+            "extra UDP filter": good + ["--filter-udp=443"],
+            "other ipset": [t.replace("kdn-telegram-ip.list", "ipset.list") for t in good],
+        }
+        for label, args in bad_variants.items():
+            with self.subTest(label=label):
+                self.assertRejected("Telegram", make_candidate("telegram", args=args))
+        # ipset belongs to Telegram only.
+        tcp = VALID_ARGS["discord-tcp"] + ["--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list"]
+        self.assertRejected("ipset", make_candidate("discord-tcp", args=tcp))
+
     def test_accepts_each_service(self):
-        for service in ("youtube", "discord-tcp", "discord-voice"):
+        for service in ("youtube", "discord-tcp", "discord-voice", "telegram"):
             with self.subTest(service=service):
                 candidate = make_candidate(service)
                 profile = self.validate(candidate, make_report(service, candidate))
@@ -370,7 +403,7 @@ class CandidateValidationTests(PanelTestCase):
         for value in (None, [], "candidate", 1):
             with self.subTest(value=value):
                 self.assertRejected("нет найденного кандидата", value)
-        self.assertRejected("неподдерживаемый сервис", make_candidate(service="telegram"))
+        self.assertRejected("неподдерживаемый сервис", make_candidate(service="whatsapp"))
         self.assertRejected("неподдерживаемый сервис", {"args": []})
 
     def test_rejects_bad_text_fields(self):
@@ -614,7 +647,7 @@ class TunerRequestTests(PanelTestCase):
             ("youtube", "ожидается JSON-объект"),
             ({"service": "youtube", "extra": 1}, "неизвестные параметры подбора"),
             ({}, "неподдерживаемый сервис"),
-            ({"service": "telegram"}, "неподдерживаемый сервис"),
+            ({"service": "whatsapp"}, "неподдерживаемый сервис"),
             ({"service": "youtube", "mix_level": "max"}, "неподдерживаемый уровень смешивания"),
             ({"service": "youtube", "max_candidates": 0}, "число кандидатов"),
             ({"service": "youtube", "max_candidates": 65}, "число кандидатов"),
@@ -1755,6 +1788,7 @@ class ProfileStoreTests(PanelTestCase):
                 {"service": "youtube", "installed": False},
                 {"service": "discord-tcp", "installed": False},
                 {"service": "discord-voice", "installed": False},
+                {"service": "telegram", "installed": False},
             ],
         )
 
@@ -2120,7 +2154,7 @@ class HttpLayerTests(unittest.TestCase):
         response, data = self.request("GET", "/api/imported")
         payload = json.loads(data)
         self.assertFalse(payload["rollback_available"])
-        self.assertEqual([item["service"] for item in payload["profiles"]], ["youtube", "discord-tcp", "discord-voice"])
+        self.assertEqual([item["service"] for item in payload["profiles"]], ["youtube", "discord-tcp", "discord-voice", "telegram"])
         response, data = self.request("GET", "/api/route/status")
         self.assertEqual(json.loads(data)["status"], "idle")
         response, data = self.request("GET", "/api/tuner/status")
@@ -2224,7 +2258,7 @@ class HttpLayerTests(unittest.TestCase):
         self.assertJsonError(response, data, 400, "некорректный JSON")
 
     def test_unknown_post_is_404(self):
-        for path in ("/api/nope", "/", "/api/import/clear/telegram", "/api/route/discord"):
+        for path in ("/api/nope", "/", "/api/import/clear/whatsapp", "/api/route/discord"):
             with self.subTest(path=path):
                 response, data = self.post(path)
                 self.assertJsonError(response, data, 404, "unknown action")

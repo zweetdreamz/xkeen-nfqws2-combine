@@ -82,7 +82,7 @@ FLOWSEAL_REPOSITORY = "Flowseal/zapret-discord-youtube"
 FLOWSEAL_REF = "main"
 MAX_REPORT_BYTES = 512 * 1024
 MAX_HISTORY_ITEMS = 50
-SERVICES = ("youtube", "discord-tcp", "discord-voice")
+SERVICES = ("youtube", "discord-tcp", "discord-voice", "telegram")
 ROUTE_SERVICES = ("discord-tcp", "discord-voice", "youtube", "telegram")
 # "discord" is accepted as a shorthand that switches Discord TCP and Voice together.
 ROUTE_REQUEST_SERVICES = ROUTE_SERVICES + ("discord",)
@@ -106,6 +106,7 @@ SAFE_OPTIONS = {
     "out-range",
     "payload",
     "lua-desync",
+    "ipset",
 }
 SAFE_LUA = {"fake", "multisplit", "multidisorder", "fakedsplit", "hostfakesplit"}
 
@@ -207,7 +208,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:7px 12px;border
 .candidate{display:none}.candidate.visible{display:block;margin-top:16px}
 .meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px;margin:14px 0;padding:14px 16px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line)}
 .meta div{min-width:0;overflow-wrap:anywhere}.meta b{display:block;color:var(--faint);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
-.profiles{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.profiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
 .profile{display:flex;flex-direction:column;padding:14px}
 .profile h3{font-size:15px}.profile .family{flex:1;min-height:40px;margin-top:4px;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
 .profile button{width:100%;padding:8px;margin-top:10px;font-size:13px;color:var(--red)}
@@ -318,7 +319,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
     <div class="section-head"><svg class="i"><use href="#i-spark"/></svg><h2>Автоподбор стратегий</h2></div>
     <p class="hint">Актуальные general*.bat временно проверяются на роутере. Меняется только проверяемый профиль; остальные TCP/QUIC/UDP-профили сохраняются. Для TCP выполняются baseline и два прохода кандидата с проверкой API/CDN. Voice требует подтверждения звука.</p>
     <div class="tuner-grid">
-      <div class="field"><label for="tunerService">Сервис</label><select id="tunerService"><option value="youtube">YouTube</option><option value="discord-tcp">Discord TCP</option><option value="discord-voice">Discord Voice</option></select></div>
+      <div class="field"><label for="tunerService">Сервис</label><select id="tunerService"><option value="youtube">YouTube</option><option value="discord-tcp">Discord TCP</option><option value="discord-voice">Discord Voice</option><option value="telegram">Telegram</option></select></div>
       <div class="field"><label for="tunerSource">BAT-файл Flowseal</label><select id="tunerSource"><option value="">Все файлы и встроенный профиль</option></select><div id="tunerSourceHint" class="field-hint">Выберите файл, чтобы проверить только его конфиг. Список появится после «Проверить обновление».</div></div>
       <div class="field"><label for="tunerMix">Глубина перебора</label><select id="tunerMix"><option value="safe">Safe — по одному параметру</option><option value="extended">Extended — плюс сочетания</option><option value="off">Только прямой перевод BAT</option></select></div>
       <div class="field"><label for="tunerMax">Максимум кандидатов</label><input id="tunerMax" type="number" min="1" max="64" value="32"></div>
@@ -410,6 +411,7 @@ function tunerServiceChanged(){const voice=document.getElementById("tunerService
 async function refreshVoiceEndpoint(){const box=document.getElementById("tunerVoiceAuto"),hint=document.getElementById("voiceAutoHint");try{const d=await api("/api/tuner/voice-endpoint"),e=d.endpoint;box.disabled=!e;if(!e)box.checked=false;hint.textContent=e?"Сервер "+e.ip+":"+e.port+" из проверки "+fmtDate(e.learned_utc)+". Кандидаты проверяются пакетом с роутера; вас позовут только подтвердить найденный профиль.":"Голосовой сервер ещё не сохранён: один раз пройдите ручную проверку с ответом «Да»."}catch(e){hint.textContent="Состояние автопроверки недоступно: "+e}}
 function tunerControls(active){tunerRunning=active;document.getElementById("startTuner").disabled=active;document.getElementById("cancelTuner").disabled=!active;document.querySelectorAll("[data-action],.mode").forEach(b=>b.disabled=active)}
 function tunerStateLabel(state){return ({idle:"Задание не запускалось",preparing:"Получение и разбор стратегий…",running:"Проверка кандидатов…",voice_window:"Окно проверки Discord Voice…",awaiting_voice:"Ожидается ваш ответ",cancelling:"Остановка и восстановление nfqws2…",found:"Найден проходной профиль",none:"Проходной профиль не найден",cancelled:"Подбор остановлен, nfqws2 восстановлен",error:"Ошибка подбора"})[state]||state}
+function telegramSummary(d){const parts=[];const raw=(d.telegram_mtproto||{}).raw;if(raw){const ok=Object.values(raw).filter(v=>v==="ok").length;parts.push("Без nfqws2 MTProto ответили "+ok+" из 5 дата-центров"+(d.telegram_raw==="pass"?": MTProto у провайдера не блокируется.":"."))}const m=d.last_mtproto_result;if(m)parts.push("Кандидат "+m.candidate+": MTProto ответили "+m.answered+" из 5.");parts.push("Победитель должен дважды пройти HTTPS к сайтам Telegram (2 из 3) и MTProto-рукопожатие хотя бы с двумя дата-центрами. Звонки не проверяются.");if(d.status==="none"&&raw&&!Object.values(raw).includes("ok"))parts.push("Ни один дата-центр не ответил даже без nfqws2: проверьте сеть роутера.");return parts.join(" ")}
 function voiceSummary(d){const parts=[];if(d.voice_auto_mode==="auto")parts.push("Автопроверка: без обхода сервер не отвечает, кандидаты оцениваются пакетом с роутера.");else if(d.voice_auto_mode==="manual")parts.push("Автопроверка невозможна: сохранённый голосовой сервер отвечает даже без обхода (провайдер не блокирует пробный пакет), поэтому пакетом с роутера рабочую стратегию не отличить — каждый кандидат проверяется вручную.");if(d.last_voice_auto)parts.push("Кандидат "+d.last_voice_auto.candidate+": "+(d.last_voice_auto.result==="pass"?"сервер ответил":"нет ответа")+".");if(d.voice_unconfirmed)parts.push("Звук не подтверждён: перед применением проверьте голос вручную.");const active=(d.voice_calibration||{}).active;if(d.status==="none"&&d.voice_auto_mode==="auto"&&!(active&&active.valid>0))parts.push("Сохранённый голосовой сервер не ответил ни с одной стратегией, в том числе с текущей: адрес мог устареть. Повторите подбор без автопроверки.");parts.push(d.voice_auto_mode==="auto"?"Найденный профиль подтверждается звуком в конце.":"Voice: требуется подтверждение звука; UDP-пакеты сами по себе не доказывают качество голоса.");return parts.join(" ")}
 function renderTuner(d){
   const state=d.status||"idle",active=!!d.active||activeTunerStates.has(state);tunerControls(active);
@@ -417,7 +419,7 @@ function renderTuner(d){
   document.getElementById("tunerCommit").textContent=[d.source_file||"",d.commit?d.commit.slice(0,12):""].filter(Boolean).join(" · ");
   document.getElementById("tunerProgress").textContent=d.candidate_count?("кандидат "+(d.current_candidate||0)+" из "+d.candidate_count):"—";
   const probe=d.last_probe_detail;document.getElementById("tunerProbe").textContent=probe?([probe.phase,"проход "+probe.round,probe.role,probe.http_code,probe.status,probe.seconds+" с",probe.bytes+" B"].join(" · ")):"";
-  const base=d.baseline_result,suite=d.last_suite_result;document.getElementById("tunerVerification").textContent=(base?"Исходный профиль: "+base.verdict+" ("+base.successes+"/"+base.total+"). ":"")+(suite?"Кандидат "+suite.candidate+": "+suite.phase+" · "+suite.verdict+". ":"")+(d.service==="discord-voice"?voiceSummary(d):"Победитель должен пройти два HTTP-прохода. QUIC и воспроизведение видео не подтверждаются.");
+  const base=d.baseline_result,suite=d.last_suite_result;document.getElementById("tunerVerification").textContent=(base?"Исходный профиль: "+base.verdict+" ("+base.successes+"/"+base.total+"). ":"")+(suite?"Кандидат "+suite.candidate+": "+suite.phase+" · "+suite.verdict+". ":"")+(d.service==="discord-voice"?voiceSummary(d):d.service==="telegram"?telegramSummary(d):"Победитель должен пройти два HTTP-прохода. QUIC и воспроизведение видео не подтверждаются.");
   document.getElementById("tunerLog").textContent=(d.log_tail||[]).join("\n");
   document.getElementById("voiceVerdict").classList.toggle("visible",state==="awaiting_voice");
   const found=d.found;document.getElementById("tunerFound").classList.toggle("visible",state==="found"&&!!found);
@@ -553,6 +555,35 @@ def voice_ports_allowed(value):
     return bool(value)
 
 
+TELEGRAM_TLS_PART = {
+    "--filter-tcp=443",
+    "--filter-l7=tls",
+    "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list",
+    "--payload=tls_client_hello",
+}
+TELEGRAM_MTPROTO_PART = {
+    "--filter-tcp=80,443,5222",
+    "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list",
+    "--filter-l7=mtproto",
+    "--payload=mtproto_initial",
+}
+
+
+def validate_telegram_args(args):
+    """Two profiles: TLS for the Telegram domains, then MTProto for its DCs."""
+    if args.count("--new") != 1:
+        raise ValueError("Telegram профиль должен состоять из двух частей")
+    split = args.index("--new")
+    for part, required in ((args[:split], TELEGRAM_TLS_PART), (args[split + 1:], TELEGRAM_MTPROTO_PART)):
+        selectors = {
+            token for token in part
+            if token.split("=", 1)[0] in {"--filter-tcp", "--filter-udp", "--filter-l7",
+                                          "--hostlist", "--ipset", "--payload"}
+        }
+        if selectors != required:
+            raise ValueError("Telegram профиль выходит за свои списки и порты")
+
+
 def validate_candidate(candidate, report):
     if not isinstance(candidate, dict):
         raise ValueError("в отчёте нет найденного кандидата")
@@ -589,6 +620,8 @@ def validate_candidate(candidate, report):
             raise ValueError(f"неподдерживаемая опция: --{name}")
         if name == "lua-desync" and value.split(":", 1)[0] not in SAFE_LUA:
             raise ValueError("неподдерживаемая Lua-стратегия")
+        if name == "ipset" and service != "telegram":
+            raise ValueError("ipset допустим только в профиле Telegram")
 
     def values(prefix):
         return [token[len(prefix):] for token in args if token.startswith(prefix)]
@@ -630,6 +663,8 @@ def validate_candidate(candidate, report):
             raise ValueError("лишний hostlist Discord TCP")
         if any("youtube" in token or "discord_udp" in token for token in args):
             raise ValueError("Discord TCP профиль пересекается с другим семейством")
+    elif service == "telegram":
+        validate_telegram_args(args)
     else:
         udp = values("--filter-udp=")
         lua = values("--lua-desync=")
