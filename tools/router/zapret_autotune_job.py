@@ -241,6 +241,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="probe the learned Discord voice server instead of asking for every candidate",
     )
+    parser.add_argument(
+        "--voice-traffic",
+        action="store_true",
+        help="judge each Voice candidate by the client's own voice traffic (stay in a channel)",
+    )
     return parser
 
 
@@ -265,6 +270,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("source-file must name one general*.bat file")
     if args.voice_auto and args.service != "discord-voice":
         raise ValueError("voice-auto applies to discord-voice only")
+    if args.voice_traffic and args.service != "discord-voice":
+        raise ValueError("voice-traffic applies to discord-voice only")
+    if args.voice_traffic and args.voice_auto:
+        raise ValueError("choose one Voice check: voice-auto or voice-traffic")
     if args.source_dir and not TEST_ROOT:
         raise ValueError("source-dir is allowed only in an isolated test root")
 
@@ -322,6 +331,16 @@ def candidate_summary(
         }
         for number, candidate in enumerate(candidates, 1)
     ]
+
+
+def available_log_line(available: int, maximum: int, mix_level: str) -> str:
+    """Explain the run size: identical profiles are merged, the maximum is a cap."""
+    depth = {"off": "только прямой перевод BAT", "safe": "Safe", "extended": "Extended"}[mix_level]
+    tested = min(available, maximum)
+    line = f"Разных вариантов: {available} ({depth}); максимум {maximum} — проверяется {tested}."
+    if available < maximum:
+        line += " Одинаковые после перевода профили проверяются один раз."
+    return line
 
 
 def candidate_log_line(number: int, candidates: list[tuner.Candidate]) -> str | None:
@@ -459,6 +478,28 @@ def parse_event(
             voice_duration=int(parts[3]),
             needs_voice_verdict=False,
         )
+    elif event == "VOICE_WATCH" and len(parts) >= 4:
+        writer.write(
+            status="voice_watch",
+            current_candidate=int(parts[2]),
+            voice_duration=int(parts[3]),
+            needs_voice_verdict=False,
+        )
+    elif event == "VOICE_TRAFFIC_RESULT" and len(parts) >= 4:
+        number, state = int(parts[2]), parts[3]
+        changes: dict[str, Any] = {"last_voice_traffic": {"candidate": number, "state": state}}
+        if number == 0:
+            changes["voice_traffic_baseline"] = state
+        writer.write(**changes)
+        meaning = {
+            "connected": "голос подключился и держится",
+            "attempts": "Discord пытается подключиться, но соединение не держится",
+            "established": "голос уже был подключён до проверки — новых попыток нет",
+            "idle": "голосового трафика нет — зайдите в голосовой канал и оставайтесь в нём",
+            "unavailable": "диагностика недоступна",
+        }.get(state, state)
+        who = "Текущий профиль" if number == 0 else f"Кандидат {number}"
+        writer.log(f"{who}: {meaning}.")
     elif event == "VOICE_VERDICT" and len(parts) >= 3:
         writer.write(
             status="awaiting_voice",
@@ -598,16 +639,14 @@ def main() -> int:
                 sources = tuner.select_source(sources, args.source_file)
             except ValueError as error:
                 raise RuntimeError(str(error)) from error
-        candidates = tuner.select_candidates(
-            tuner.build_candidates(
-                args.service,
-                sources,
-                args.mix_level,
-                include_builtin=not args.source_file,
-            ),
-            args.max_candidates,
-            args.search_seed,
+        available = tuner.build_candidates(
+            args.service,
+            sources,
+            args.mix_level,
+            include_builtin=not args.source_file,
         )
+        candidates = tuner.select_candidates(available, args.max_candidates, args.search_seed)
+        writer.log(available_log_line(len(available), args.max_candidates, args.mix_level))
         if not candidates and args.source_file:
             raise RuntimeError(f"{args.source_file} has no {args.service} profile")
         if not candidates:
@@ -636,6 +675,7 @@ def main() -> int:
             voice_duration=args.voice_duration,
             http_timeout=args.http_timeout,
             voice_target=voice_target,
+            voice_traffic=args.voice_traffic,
         )
         runner_path = job_dir / "runner.sh"
         runner_path.write_text(runner, encoding="utf-8")

@@ -690,7 +690,7 @@ class CandidateBuildingTests(unittest.TestCase):
             TUNER.mixed_candidates("discord-voice", [], [SOURCE], "extended"), []
         )
 
-    def test_voice_safe_sweep_is_five_variants(self):
+    def test_voice_safe_sweep_is_eight_variants(self):
         sweeps = TUNER.parameter_sweep_candidates(
             "discord-voice", [], [SOURCE], "safe"
         )
@@ -699,12 +699,20 @@ class CandidateBuildingTests(unittest.TestCase):
             [
                 "voice repeats=2",
                 "voice repeats=3",
+                "voice repeats=4",
+                "voice repeats=8",
                 "voice repeats=11",
                 "voice out-range=<n3",
                 "voice out-range=<n4",
+                "voice out-range=<n6",
             ],
         )
-        self.assertEqual([candidate.rank for candidate in sweeps], [20, 21, 22, 23, 24])
+        self.assertEqual([candidate.rank for candidate in sweeps], list(range(20, 28)))
+        # Every variant keeps the single discord_udp fake the engine accepts.
+        for candidate in TUNER.parameter_sweep_candidates("discord-voice", [], [SOURCE], "extended"):
+            lua = [arg for arg in candidate.args if arg.startswith("--lua-desync=")]
+            self.assertEqual(len(lua), 1)
+            self.assertRegex(lua[0], r"^--lua-desync=fake:blob=discord_udp:repeats=([1-9]|[1-9][0-9])$")
 
     def test_off_build_contains_known_and_exact_only(self):
         candidates = TUNER.build_candidates("discord-tcp", [SOURCE], "off")

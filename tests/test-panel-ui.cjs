@@ -117,9 +117,11 @@ async function main() {
     await page.selectOption("#tunerService", "discord-voice");
     assert.equal(await page.isVisible("#clientIpField"), true);
 
-    // The Voice auto check needs a learned voice server.
+    // Voice check modes: traffic by default; the router probe needs a learned server.
     assert.equal(await page.isVisible("#voiceAutoField"), true);
-    assert.equal(await page.$eval("#tunerVoiceAuto", (box) => box.disabled), true);
+    assert.equal(await page.$eval("#tunerVoiceCheck", (select) => select.value), "traffic");
+    assert.match(await page.textContent("#voiceAutoHint"), /оставайтесь в нём/);
+    assert.equal(await page.$eval('#tunerVoiceCheck option[value="probe"]', (option) => option.disabled), true);
     await page.selectOption("#tunerService", "youtube");
     assert.equal(await page.isHidden("#voiceAutoField"), true);
     await setResponse("/api/tuner/voice-endpoint", {
@@ -128,8 +130,10 @@ async function main() {
     });
     await page.evaluate(() => refreshVoiceEndpoint());
     await page.selectOption("#tunerService", "discord-voice");
-    assert.equal(await page.$eval("#tunerVoiceAuto", (box) => box.disabled), false);
+    assert.equal(await page.$eval('#tunerVoiceCheck option[value="probe"]', (option) => option.disabled), false);
+    await page.selectOption("#tunerVoiceCheck", "probe");
     assert.match(await page.textContent("#voiceAutoHint"), /162\.159\.130\.234:50007/);
+    await page.selectOption("#tunerVoiceCheck", "traffic");
     await setResponse("/api/tuner/voice-endpoint", { ok: true, endpoint: null });
 
     // Success is stated first; known harmless lines are explained before the raw output.

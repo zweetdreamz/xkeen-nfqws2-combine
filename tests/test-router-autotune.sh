@@ -488,6 +488,59 @@ windows_output="$(
 printf '%s\n' "$windows_output" | grep -Fq 'EVENT|CANDIDATE|2|'
 printf '%s\n' "$windows_output" | grep -Fq 'EVENT|FOUND|2|'
 [ "$(sha256sum "$ROOT/opt/etc/nfqws2/nfqws2.conf" | awk '{print $1}')" = "$config_hash_before" ]
+# Discord Voice by the client's own traffic: the user stays in a channel and
+# the diagnostic reports the state per window. Baseline idle, candidate 1
+# only attempts, candidate 2 connects; then the user confirms the sound.
+: > "$FIXTURE/traffic-calls"
+cat > "$voice_dir/diagnose-discord-voice.sh" <<'EOF'
+echo call >> "$KD_TRAFFIC_CALLS"
+case "$(wc -l < "$KD_TRAFFIC_CALLS" | tr -d ' ')" in
+  1) echo "EVENT|VOICE_TRAFFIC|idle" ;;
+  2) echo "EVENT|VOICE_TRAFFIC|attempts" ;;
+  *) echo "EVENT|VOICE_FLOW|63611|104.29.136.187|19300|12|11|10|1"; echo "EVENT|VOICE_TRAFFIC|connected" ;;
+esac
+EOF
+traffic_runner="$FIXTURE/traffic-runner.sh"
+python3 - "$SCRIPT_DIR/tools/windows" "$traffic_runner" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import zapret_tuner as tuner
+template = (Path(sys.argv[1]) / "router-candidate-runner.sh").read_text(encoding="utf-8")
+source = tuner.SourceFile("general.bat", "", "a" * 40, "https://example.invalid/general.bat")
+first = tuner.known_candidate("discord-voice", [source])
+second = tuner.make_candidate(
+    service="discord-voice", source=source, family="second",
+    args=tuple(arg.replace("repeats=6", "repeats=11") for arg in first.args), notes=(), rank=1,
+)
+Path(sys.argv[2]).write_text(
+    tuner.render_runner(
+        template, service="discord-voice", candidates=[first, second],
+        client_ip="192.168.2.50", voice_duration=10, http_timeout=6, voice_traffic=True,
+    ),
+    encoding="utf-8",
+)
+PY
+traffic_output="$(
+  printf 'yes\n' |
+    PATH="$MOCK_BIN:$PATH" KD_TUNER_TEST_ROOT="$ROOT" KD_TRAFFIC_CALLS="$FIXTURE/traffic-calls" sh "$traffic_runner"
+)"
+for expected in \
+  'EVENT|VOICE_TRAFFIC_RESULT|0|idle' \
+  'EVENT|VOICE_TRAFFIC_RESULT|1|attempts' \
+  'EVENT|VOICE_TRAFFIC_RESULT|2|connected' \
+  'EVENT|VOICE_VERDICT|2'
+do
+  printf '%s\n' "$traffic_output" | grep -Fqx "$expected"
+done
+# Candidate 1 never asked for a verdict: no reconnect per candidate.
+if printf '%s\n' "$traffic_output" | grep -Fqx 'EVENT|VOICE_VERDICT|1'; then
+  echo "ERROR: the traffic check asked for a verdict on a failing candidate" >&2
+  exit 1
+fi
+printf '%s\n' "$traffic_output" | grep -Fq 'EVENT|FOUND|2|'
+[ "$(sha256sum "$ROOT/opt/etc/nfqws2/nfqws2.conf" | awk '{print $1}')" = "$config_hash_before" ]
+
 # Telegram: HTTPS to its sites plus MTProto handshakes. The probe fixture:
 # no data center answers with nfqws2 stopped (calibration), two answer with
 # a candidate running.

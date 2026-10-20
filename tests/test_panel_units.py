@@ -589,6 +589,7 @@ class TunerRequestTests(PanelTestCase):
                 "search_seed": 777,
                 "source_file": None,
                 "voice_auto": False,
+                "voice_traffic": False,
             },
         )
 
@@ -612,6 +613,7 @@ class TunerRequestTests(PanelTestCase):
                 "search_seed": 4294967295,
                 "source_file": None,
                 "voice_auto": False,
+                "voice_traffic": False,
             },
         )
         for mix in ("off", "safe", "extended"):
@@ -635,6 +637,13 @@ class TunerRequestTests(PanelTestCase):
         self.assertIs(self.validate({**body, "voice_auto": True})["voice_auto"], True)
         self.assertRejected("true или false", {**body, "voice_auto": "yes"})
         self.assertRejected("только для Discord Voice", {"service": "youtube", "voice_auto": True})
+
+    def test_voice_traffic(self):
+        body = {"service": "discord-voice", "client_ip": "192.168.2.10", "search_seed": 1}
+        self.assertIs(self.validate({**body, "voice_traffic": True})["voice_traffic"], True)
+        self.assertRejected("true или false", {**body, "voice_traffic": 1})
+        self.assertRejected("только для Discord Voice", {"service": "youtube", "voice_traffic": True})
+        self.assertRejected("один способ", {**body, "voice_traffic": True, "voice_auto": True})
 
     def test_empty_seed_is_randomized(self):
         with mock.patch.object(self.ns["secrets"], "randbits", return_value=9):

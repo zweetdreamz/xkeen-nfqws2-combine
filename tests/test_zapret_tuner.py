@@ -165,7 +165,8 @@ class TunerTests(unittest.TestCase):
                 for command in commands
             )
         )
-        self.assertLessEqual(len(candidates), 20)
+        # Bounded: 8 repeats x 4 ranges plus the single-axis sweep and exact profiles.
+        self.assertLessEqual(len(candidates), 48)
 
     def test_runner_has_no_unresolved_markers(self):
         template = MODULE_PATH.with_name("router-candidate-runner.sh").read_text(

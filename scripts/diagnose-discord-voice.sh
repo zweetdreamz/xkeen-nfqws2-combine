@@ -252,6 +252,53 @@ awk -v client="$CLIENT_IP" '
   }
 ' "$TMP_DIR/lan.txt"
 
+# Voice flows of the client (Voice/STUN ports) and a verdict for the
+# autotuner's traffic check. A Discord voice session starts with a 74-byte
+# IP Discovery request; once connected the server keeps answering (about one
+# packet per second even in silence). "connected": a flow that started in
+# this window and got replies for at least 8 seconds; "established": the same
+# for a flow that existed before the window; "attempts": discovery without a
+# lasting answer; "idle": no voice traffic.
+awk -v client="$CLIENT_IP" '
+  function voice_port(port) {
+    return (port >= 19294 && port <= 19344) || (port >= 50000 && port <= 65535)
+  }
+  function endpoint(value, parts) {
+    sub(/:$/, "", value)
+    if (split(value, parts, ".") != 5) return ""
+    return parts[1] "." parts[2] "." parts[3] "." parts[4] "|" parts[5]
+  }
+  $2 == "IP" && index($3, client ".") == 1 && $4 == ">" {
+    remote = endpoint($5); split(remote, r, "|")
+    if (remote == "" || !voice_port(r[2] + 0)) next
+    split($3, c, "."); key = c[5] "|" remote
+    out[key]++
+    if ($NF == 74) discovery[key] = 1
+    next
+  }
+  $2 == "IP" && index($5, client ".") == 1 {
+    remote = endpoint($3); split(remote, r, "|")
+    if (remote == "" || !voice_port(r[2] + 0)) next
+    target = $5; sub(/:$/, "", target); split(target, c, ".")
+    key = c[5] "|" remote
+    if (!(key in first_in)) first_in[key] = $1
+    last_in[key] = $1
+    in_count[key]++
+  }
+  END {
+    state = "idle"
+    for (key in out) {
+      span = (key in first_in) ? last_in[key] - first_in[key] : 0
+      lasting = in_count[key] >= 8 && span >= 8
+      printf "EVENT|VOICE_FLOW|%s|%d|%d|%d|%d\n", key, out[key], in_count[key] + 0, int(span), (key in discovery)
+      if (lasting && (key in discovery)) state = "connected"
+      else if (lasting && state != "connected") state = "established"
+      else if ((key in discovery) && state == "idle") state = "attempts"
+    }
+    print "EVENT|VOICE_TRAFFIC|" state
+  }
+' "$TMP_DIR/lan.txt"
+
 voice_out="$(awk -v c="$CLIENT_IP." '$2 == "IP" && index($3,c)==1 {n++} END {print n+0}' "$TMP_DIR/lan.txt")"
 voice_in="$(awk -v c="$CLIENT_IP." '$2 == "IP" && index($5,c)==1 {n++} END {print n+0}' "$TMP_DIR/lan.txt")"
 printf 'EVENT|VOICE_OBSERVATION|%s|%s|%s\n' "$voice_out" "$voice_in" "$wan_matches"

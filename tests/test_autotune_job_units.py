@@ -472,6 +472,17 @@ class VoiceAutoTests(TempRootTestCase):
         with self.assertRaisesRegex(ValueError, "voice-auto"):
             JOB.validate_args(args)
 
+    def test_voice_traffic_options(self):
+        base = ["--job-id", "0123456789abcdef", "--client-ip", "192.168.2.10"]
+        for argv, message in (
+            (["--service", "youtube", *base, "--voice-traffic"], "voice-traffic applies"),
+            (["--service", "discord-voice", *base, "--voice-traffic", "--voice-auto"], "choose one"),
+        ):
+            with self.subTest(argv=argv):
+                with self.assertRaisesRegex(ValueError, message):
+                    JOB.validate_args(JOB.build_parser().parse_args(argv))
+        JOB.validate_args(JOB.build_parser().parse_args(["--service", "discord-voice", *base, "--voice-traffic"]))
+
 
 class ParseEventTests(unittest.TestCase):
     def setUp(self):
@@ -559,6 +570,28 @@ class ParseEventTests(unittest.TestCase):
             {"candidate": 3, "phase": "candidate", "answered": 0, "verdict": "fail"},
         )
         self.assertIn("DC2 reset", self.writer.logs[-1])
+
+    def test_voice_traffic_events(self):
+        self.parse("EVENT|VOICE_WATCH|0|25")
+        self.assertEqual(self.writer.payload["status"], "voice_watch")
+        self.parse("EVENT|VOICE_TRAFFIC_RESULT|0|idle")
+        self.assertEqual(self.writer.payload["voice_traffic_baseline"], "idle")
+        self.assertIn("Текущий профиль: голосового трафика нет", self.writer.logs[-1])
+        self.parse("EVENT|VOICE_TRAFFIC_RESULT|3|connected")
+        self.assertEqual(self.writer.payload["last_voice_traffic"], {"candidate": 3, "state": "connected"})
+        self.assertEqual(self.writer.payload["voice_traffic_baseline"], "idle")
+        self.assertEqual(self.writer.logs[-1], "Кандидат 3: голос подключился и держится.")
+
+    def test_available_log_line(self):
+        self.assertEqual(
+            JOB.available_log_line(16, 64, "extended"),
+            "Разных вариантов: 16 (Extended); максимум 64 — проверяется 16. "
+            "Одинаковые после перевода профили проверяются один раз.",
+        )
+        self.assertEqual(
+            JOB.available_log_line(86, 32, "safe"),
+            "Разных вариантов: 86 (Safe); максимум 32 — проверяется 32.",
+        )
 
     def test_manual_voice_mode_is_explained(self):
         self.parse("EVENT|VOICE_AUTO_MODE|manual|raw-reply")

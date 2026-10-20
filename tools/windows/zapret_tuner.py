@@ -778,8 +778,10 @@ def parameter_sweep_candidates(
     rank = 20
 
     if service == "discord-voice":
-        repeat_values = ("2", "3", "11")
-        range_values = ("<n3", "<n4")
+        # Only repeats and out-range: an applied Voice profile must keep its
+        # single fake:blob=discord_udp (apply-discord-nfqws2.sh validation).
+        repeat_values = ("2", "3", "4", "8", "11")
+        range_values = ("<n3", "<n4", "<n6")
         for repeats in repeat_values:
             add_sweep_candidate(
                 result,
@@ -810,8 +812,8 @@ def parameter_sweep_candidates(
             )
             rank += 1
         if level == "extended":
-            for repeats in ("2", "3", "6", "11"):
-                for out_range in ("<n2", "<n3", "<n4"):
+            for repeats in ("1", "2", "3", "4", "6", "8", "11", "15"):
+                for out_range in ("<n2", "<n3", "<n4", "<n6"):
                     changed = replace_lua_parameter(
                         native.args,
                         {"fake"},
@@ -1411,12 +1413,14 @@ def render_runner(
     voice_duration: int,
     http_timeout: int,
     voice_target: str = "",
+    voice_traffic: bool = False,
 ) -> str:
     if voice_target and not VOICE_TARGET_RE.fullmatch(voice_target):
         raise ValueError(f"invalid voice target: {voice_target!r}")
     rendered = template
     replacements = {
         "@@VOICE_TARGET@@": voice_target,
+        "@@VOICE_TRAFFIC@@": "1" if voice_traffic else "0",
         "@@SERVICE@@": service,
         "@@CLIENT_IP@@": client_ip,
         "@@VOICE_DURATION@@": str(voice_duration),

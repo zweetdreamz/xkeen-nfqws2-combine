@@ -388,8 +388,12 @@ xkeen -dscp
 вариации параметров файла для TCP-сервисов; для Voice остаётся прямой
 перевод. Отчёт записывает `source_file`.
 
-Автоматическая проверка Discord Voice (`--voice-auto` у
-`zapret_autotune_job.py`, флажок **Проверять Voice автоматически** в панели)
+Проверка Discord Voice по трафику клиента (`--voice-traffic` у
+`zapret_autotune_job.py`, режим **По трафику Discord** в панели) оценивает
+кандидатов по `EVENT|VOICE_TRAFFIC` диагностики: пользователь один раз
+заходит в голосовой канал, Discord сам переподключается.
+
+Проверка пакетом с роутера (`--voice-auto`, режим **Пакетом с роутера**)
 требует сохранённого голосового сервера
 `/opt/etc/xkeen-web/discord-voice-endpoint.json`. Его записывает задание после
 ручной Voice-проверки с ответом **Да** (из `EVENT|VOICE_ENDPOINT`
@@ -401,7 +405,7 @@ xkeen -dscp
 `TUNER_VERDICT_TIMEOUT` (300 с), профиль остаётся найденным, но
 неподтверждённым. Windows-тюнер проверяет Voice только
 вручную. Подробности —
-[`../tools/router/README.md`](../tools/router/README.md#автоматическая-проверка-discord-voice).
+[`../tools/router/README.md`](../tools/router/README.md#проверка-discord-voice-пакетом-с-роутера).
 
 Router-панель допускает максимум 64 кандидата. Повышать предел стоит только
 после неудачи короткой проверки: длительность растёт почти линейно.

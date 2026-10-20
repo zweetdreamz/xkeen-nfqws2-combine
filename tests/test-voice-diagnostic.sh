@@ -17,6 +17,10 @@ cat > "$MOCK_BIN/tcpdump" <<'MOCK'
 #!/bin/sh
 case "$*" in
   *"-ni br0"*)
+    if [ -n "${KD_LAN_CAPTURE:-}" ]; then
+      cat "$KD_LAN_CAPTURE"
+      exit 0
+    fi
     cat <<'LINES'
 1.0 IP 192.168.2.60.51000 > 162.159.130.234.50007: UDP, length 74
 1.1 IP 162.159.130.234.50007 > 192.168.2.60.51000: UDP, length 74
@@ -43,5 +47,37 @@ output="$(PATH="$MOCK_BIN:$PATH" KD_TUNER_TEST_ROOT="$ROOT" sh "$TARGET" 192.168
 # 35.214.1.2 sends more but never answered; the answering server is chosen.
 printf '%s\n' "$output" | grep -Fqx 'EVENT|VOICE_ENDPOINT|162.159.130.234|50007|3|1'
 printf '%s\n' "$output" | grep -Fqx 'EVENT|VOICE_OBSERVATION|9|1|0'
+# One discovery and a single answer: the client tries, nothing lasts.
+printf '%s\n' "$output" | grep -Fqx 'EVENT|VOICE_TRAFFIC|attempts'
+printf '%s\n' "$output" | grep -Fqx 'EVENT|VOICE_FLOW|51000|162.159.130.234|50007|3|1|0|1'
+
+# Shaped like a real session (Cloudflare voice server, port 19300): a new
+# flow starts with the 74-byte discovery and the server keeps answering
+# about once a second -> connected.
+awk 'BEGIN {
+  print "10.0 IP 192.168.2.60.63611 > 104.29.136.187.19300: UDP, length 74"
+  print "10.1 IP 104.29.136.187.19300 > 192.168.2.60.63611: UDP, length 74"
+  for (t = 11; t <= 21; t++) {
+    printf "%d.0 IP 192.168.2.60.63611 > 104.29.136.187.19300: UDP, length 60\n", t
+    printf "%d.1 IP 104.29.136.187.19300 > 192.168.2.60.63611: UDP, length 52\n", t
+  }
+}' > "$FIXTURE/connected.txt"
+output="$(PATH="$MOCK_BIN:$PATH" KD_TUNER_TEST_ROOT="$ROOT" KD_LAN_CAPTURE="$FIXTURE/connected.txt" sh "$TARGET" 192.168.2.60 5)"
+printf '%s\n' "$output" | grep -Fqx 'EVENT|VOICE_TRAFFIC|connected'
+
+# The same lasting flow without a discovery in this window existed before
+# the check, so it says nothing about the strategy under test.
+grep -v 'length 74' "$FIXTURE/connected.txt" > "$FIXTURE/established.txt"
+output="$(PATH="$MOCK_BIN:$PATH" KD_TUNER_TEST_ROOT="$ROOT" KD_LAN_CAPTURE="$FIXTURE/established.txt" sh "$TARGET" 192.168.2.60 5)"
+printf '%s\n' "$output" | grep -Fqx 'EVENT|VOICE_TRAFFIC|established'
+
+# A repeated attempt with a short answer burst stays "attempts", and no voice
+# traffic at all is "idle".
+head -n 8 "$FIXTURE/connected.txt" > "$FIXTURE/short.txt"
+output="$(PATH="$MOCK_BIN:$PATH" KD_TUNER_TEST_ROOT="$ROOT" KD_LAN_CAPTURE="$FIXTURE/short.txt" sh "$TARGET" 192.168.2.60 5)"
+printf '%s\n' "$output" | grep -Fqx 'EVENT|VOICE_TRAFFIC|attempts'
+printf '%s\n' '1.0 IP 192.168.2.60.53000 > 192.168.2.1.53: UDP, length 40' > "$FIXTURE/idle.txt"
+output="$(PATH="$MOCK_BIN:$PATH" KD_TUNER_TEST_ROOT="$ROOT" KD_LAN_CAPTURE="$FIXTURE/idle.txt" sh "$TARGET" 192.168.2.60 5)"
+printf '%s\n' "$output" | grep -Fqx 'EVENT|VOICE_TRAFFIC|idle'
 [ -z "$(find "$ROOT/opt/tmp" -mindepth 1)" ]
 echo "voice-diagnostic-tests-ok"

@@ -13,6 +13,10 @@ MIN_HTTP_SUCCESS="@@MIN_HTTP_SUCCESS@@"
 # Discord Voice auto check: "IPv4:port" of a voice server learned from a
 # confirmed session, or empty for manual checks only.
 VOICE_TARGET="@@VOICE_TARGET@@"
+# Discord Voice traffic check: "1" judges each candidate by the client's own
+# voice traffic (the user stays in a voice channel; Discord reconnects by
+# itself while voice fails), "0" otherwise.
+VOICE_TRAFFIC="@@VOICE_TRAFFIC@@"
 TEST_ROOT="${KD_TUNER_TEST_ROOT:-}"
 
 root_path() {
@@ -388,8 +392,42 @@ wait_voice_verdict() {
   fi
 }
 
+# Watches the client's voice traffic for VOICE_DURATION seconds with the
+# current nfqws2 process and prints the diagnostic's verdict on its last line:
+# connected | established | attempts | idle | unavailable.
+voice_traffic_window() {
+  voice_traffic_output="$TMP_ROOT/voice-traffic.txt"
+  if [ -f "$VOICE_DIAGNOSTIC" ]; then
+    sh "$VOICE_DIAGNOSTIC" "$CLIENT_IP" "$VOICE_DURATION" > "$voice_traffic_output" 2>&1 || true
+  else
+    emit "VOICE_DIAGNOSTIC_MISSING|$VOICE_DIAGNOSTIC" > "$voice_traffic_output"
+  fi
+  cat "$voice_traffic_output"
+  voice_traffic_state="$(sed -n 's/^EVENT|VOICE_TRAFFIC|//p' "$voice_traffic_output" | tail -n 1)"
+  rm -f "$voice_traffic_output"
+  [ -n "$voice_traffic_state" ] || voice_traffic_state=unavailable
+}
+
 test_voice_candidate() {
   candidate_number="$1"
+  if [ "$VOICE_TRAFFIC" = 1 ]; then
+    # No reconnect needed: Discord keeps reconnecting while voice fails, and
+    # every attempt goes through this candidate.
+    emit "VOICE_WATCH|$candidate_number|$VOICE_DURATION"
+    voice_traffic_window
+    emit "VOICE_TRAFFIC_RESULT|$candidate_number|$voice_traffic_state"
+    [ "$voice_traffic_state" = connected ] || return 1
+    emit "VOICE_VERDICT|$candidate_number"
+    wait_voice_verdict
+    case "$verdict" in
+      y|Y|yes|YES|да|ДА) return 0 ;;
+      timeout)
+        emit "VOICE_UNCONFIRMED|$candidate_number"
+        return 0
+        ;;
+    esac
+    return 1
+  fi
   if [ "$VOICE_MODE" = "auto" ]; then
     if ! voice_probe "candidate-$candidate_number"; then
       emit "VOICE_AUTO|$candidate_number|fail"
@@ -436,6 +474,14 @@ fi
 if [ "$SERVICE" = discord-voice ] && [ -n "$VOICE_TARGET" ]; then
   # Calibration 1: the strategy that is active right now.
   voice_probe active || true
+fi
+if [ "$SERVICE" = discord-voice ] && [ "$VOICE_TRAFFIC" = 1 ]; then
+  # Baseline: the client's voice traffic with the active strategy. "idle"
+  # means Discord is not in a voice channel; "connected"/"established" means
+  # voice already works and new candidates will see no new attempts.
+  emit "VOICE_WATCH|0|$VOICE_DURATION"
+  voice_traffic_window
+  emit "VOICE_TRAFFIC_RESULT|0|$voice_traffic_state"
 fi
 
 RUNTIME_PREPARED=1
