@@ -338,7 +338,9 @@ firewall_iptables >/dev/null 2>&1 || {
 }
 
 found=0
-while IFS='|' read -r candidate_number candidate_id encoded_args; do
+# Candidates are read on fd 3: stdin stays connected to the Windows tuner,
+# which sends each Discord Voice verdict over SSH.
+while IFS='|' read -r candidate_number candidate_id encoded_args <&3; do
   [ -n "$candidate_number" ] || continue
   emit "CANDIDATE|$candidate_number|$candidate_id"
 
@@ -365,7 +367,7 @@ while IFS='|' read -r candidate_number candidate_id encoded_args; do
     break
   fi
   sleep 1
-done < "$CANDIDATE_FILE"
+done 3< "$CANDIDATE_FILE"
 
 if [ "$found" -eq 0 ]; then
   emit "NONE"

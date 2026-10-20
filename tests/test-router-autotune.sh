@@ -306,4 +306,48 @@ assert state["source_origin"] == "downloaded-cache", state
 assert state["commit"] == "b" * 40, state
 PY
 [ "$(sha256sum "$ROOT/opt/etc/nfqws2/nfqws2.conf" | awk '{print $1}')" = "$config_hash_before" ]
+
+# Windows tuner path: there is no TUNER_VERDICT_FILE and each Voice verdict
+# arrives on the runner's stdin (over SSH). The answer to candidate 1 is "no",
+# to candidate 2 "yes". The verdict used to be read from the candidate list.
+cat > "$voice_dir/diagnose-discord-voice.sh" <<'EOF'
+#!/bin/sh
+echo 'EVENT|VOICE_OBSERVATION|15|12|1'
+EOF
+windows_runner="$FIXTURE/windows-runner.sh"
+python3 - "$SCRIPT_DIR/tools/windows" "$windows_runner" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import zapret_tuner as tuner
+template = (Path(sys.argv[1]) / "router-candidate-runner.sh").read_text(encoding="utf-8")
+source = tuner.SourceFile("general.bat", "", "a" * 40, "https://example.invalid/general.bat")
+first = tuner.known_candidate("discord-voice", [source])
+second = tuner.make_candidate(
+    service="discord-voice",
+    source=source,
+    family="second",
+    args=tuple(arg.replace("repeats=6", "repeats=11") for arg in first.args),
+    notes=(),
+    rank=1,
+)
+Path(sys.argv[2]).write_text(
+    tuner.render_runner(
+        template,
+        service="discord-voice",
+        candidates=[first, second],
+        client_ip="192.168.2.50",
+        voice_duration=10,
+        http_timeout=6,
+    ),
+    encoding="utf-8",
+)
+PY
+windows_output="$(
+  printf 'no\nyes\n' |
+    PATH="$MOCK_BIN:$PATH" KD_TUNER_TEST_ROOT="$ROOT" sh "$windows_runner"
+)"
+printf '%s\n' "$windows_output" | grep -Fq 'EVENT|CANDIDATE|2|'
+printf '%s\n' "$windows_output" | grep -Fq 'EVENT|FOUND|2|'
+[ "$(sha256sum "$ROOT/opt/etc/nfqws2/nfqws2.conf" | awk '{print $1}')" = "$config_hash_before" ]
 echo "router-autotune-tests-ok"
