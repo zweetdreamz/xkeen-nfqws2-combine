@@ -32,10 +32,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y busybox jq
           python -m pip install --upgrade pytest coverage
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
 
       - name: Run all test suites
         env:
           TEST_SHELL: ${{ matrix.shell }}
+          REQUIRE_PANEL_UI_TESTS: "1"
         run: sh tests/run-all.sh --coverage
 
   lint:

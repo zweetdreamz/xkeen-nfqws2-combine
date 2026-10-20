@@ -69,6 +69,8 @@ else
 fi
 
 run_suite test-browser-diagnostics.cjs node tests/test-browser-diagnostics.cjs
+# Skipped (exit 0) when Playwright is not installed; CI requires it.
+run_suite test-panel-ui.cjs node tests/test-panel-ui.cjs
 
 if [ -n "$failed" ]; then
   echo "Failed suites:$failed" >&2

@@ -1,0 +1,135 @@
+// Browser UI tests for the web panel (Chromium via Playwright).
+//
+// The page is served by tests/panel_mock_server.py with canned API answers;
+// nothing touches a router. Without Playwright the test is skipped (exit 0)
+// unless REQUIRE_PANEL_UI_TESTS=1, which CI sets.
+"use strict";
+
+const { spawn } = require("node:child_process");
+const path = require("node:path");
+const assert = require("node:assert/strict");
+
+function loadPlaywright() {
+  for (const name of [process.env.PLAYWRIGHT_MODULE, "playwright", "playwright-core"]) {
+    if (!name) continue;
+    try {
+      return require(name);
+    } catch (_) {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
+const playwright = loadPlaywright();
+if (!playwright) {
+  if (process.env.REQUIRE_PANEL_UI_TESTS === "1") {
+    console.error("playwright is required for the panel UI tests");
+    process.exit(1);
+  }
+  console.log("panel-ui-tests-skipped (playwright not installed)");
+  process.exit(0);
+}
+
+const PORT = 18000 + (process.pid % 1000);
+const BASE = `http://127.0.0.1:${PORT}`;
+
+function startServer() {
+  const server = spawn("python3", [path.join(__dirname, "panel_mock_server.py"), String(PORT)], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  return new Promise((resolve, reject) => {
+    server.on("error", reject);
+    server.stdout.on("data", (chunk) => {
+      if (String(chunk).includes("ready")) resolve(server);
+    });
+  });
+}
+
+async function setResponse(apiPath, body) {
+  const response = await fetch(`${BASE}/__mock/set`, {
+    method: "POST",
+    body: JSON.stringify({ path: apiPath, body }),
+  });
+  assert.equal(response.status, 200);
+}
+
+async function openPanel(browser, errors) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  page.on("pageerror", (error) => errors.push(String(error)));
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.goto(`${BASE}/`);
+  await page.waitForFunction(() => document.querySelector('[data-service="youtube"] .current').textContent !== "—");
+  return page;
+}
+
+async function finishXkeenAction(page) {
+  await page.click('[data-action="restart"]');
+  await page.waitForFunction(() => document.getElementById("log").textContent.includes("mock"));
+  // busy(false) runs in the finally block after the status refresh.
+  await page.waitForFunction(() => !document.querySelector('[data-action="restart"]').disabled);
+}
+
+async function main() {
+  const server = await startServer();
+  const launchOptions = {};
+  if (process.env.PLAYWRIGHT_CHROMIUM_PATH) {
+    launchOptions.executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
+  }
+  const browser = await playwright.chromium.launch(launchOptions);
+  const errors = [];
+  try {
+    // Three independent route cards with their current modes.
+    let page = await openPanel(browser, errors);
+    const cards = await page.$$eval(".service", (items) =>
+      items.map((item) => [item.dataset.service, item.querySelector(".current").textContent])
+    );
+    assert.deepEqual(cards, [
+      ["discord-tcp", "ZAPRET"],
+      ["discord-voice", "DIRECT"],
+      ["youtube", "VPN"],
+    ]);
+
+    // The LAN IPv4 field belongs to Discord Voice only.
+    await page.click('.tab[data-tab="autotune"]');
+    assert.equal(await page.isHidden("#clientIpField"), true);
+    await page.selectOption("#tunerService", "discord-voice");
+    assert.equal(await page.isVisible("#clientIpField"), true);
+
+    // busy() must not disable navigation.
+    await page.evaluate(() => busy(true));
+    assert.equal(await page.$eval('.tab[data-tab="control"]', (tab) => tab.disabled), false);
+    await page.evaluate(() => busy(false));
+
+    // Idle: after any operation the "stop" buttons stay disabled.
+    await page.click('.tab[data-tab="control"]');
+    await finishXkeenAction(page);
+    assert.equal(await page.$eval("#cancelTuner", (button) => button.disabled), true);
+    assert.equal(await page.$eval("#cancelDiagnostic", (button) => button.disabled), true);
+    await page.close();
+
+    // A running tuner keeps route buttons locked and its stop button usable.
+    await setResponse("/api/tuner/status", { ok: true, status: "running", active: true, service: "youtube" });
+    page = await openPanel(browser, errors);
+    await page.waitForFunction(() => !document.getElementById("cancelTuner").disabled);
+    // Any other operation ends with busy(false), e.g. a history refresh error.
+    await page.evaluate(() => { busy(true); busy(false); });
+    assert.equal(await page.$eval("#cancelTuner", (button) => button.disabled), false);
+    assert.equal(await page.$eval("#startTuner", (button) => button.disabled), true);
+    const modes = await page.$$eval(".mode", (buttons) => buttons.map((button) => button.disabled));
+    assert.ok(modes.every(Boolean), `mode buttons must stay disabled: ${modes}`);
+    await page.close();
+    await setResponse("/api/tuner/status", { ok: true, status: "idle", active: false });
+
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+    server.kill();
+  }
+  console.log("panel-ui-tests-ok");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
