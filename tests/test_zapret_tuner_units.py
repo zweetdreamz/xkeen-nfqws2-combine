@@ -1160,6 +1160,36 @@ class NetworkWrapperTests(unittest.TestCase):
                     TUNER.fetch_sources("o/r", "main")
 
 
+class SourceSelectionTests(unittest.TestCase):
+    def test_select_source_is_case_insensitive(self):
+        other = TUNER.SourceFile("general (ALT3).bat", SAMPLE, "def456", "u")
+        self.assertEqual(TUNER.select_source([SOURCE, other], "GENERAL (alt3).BAT"), [other])
+        with self.assertRaisesRegex(ValueError, "not found"):
+            TUNER.select_source([SOURCE], "general (ALT9).bat")
+
+    def test_build_candidates_without_builtin(self):
+        with_builtin = TUNER.build_candidates("discord-tcp", [SOURCE], "off")
+        without = TUNER.build_candidates("discord-tcp", [SOURCE], "off", include_builtin=False)
+        builtin = TUNER.known_candidate("discord-tcp", [SOURCE])
+        self.assertIn(builtin.args, [candidate.args for candidate in with_builtin])
+        self.assertNotIn(builtin.args, [candidate.args for candidate in without])
+        self.assertTrue(without)
+        self.assertTrue(all(candidate.source_name == SOURCE.name for candidate in without))
+
+    def test_source_services(self):
+        self.assertEqual(
+            TUNER.source_services(SOURCE), ["discord-tcp", "discord-voice", "youtube"]
+        )
+        empty = TUNER.SourceFile("general (EMPTY).bat", "@echo off\n", "0", "u")
+        self.assertEqual(TUNER.source_services(empty), [])
+
+    def test_source_name_pattern(self):
+        for name in ("general.bat", "general (ALT11).bat", "General_FAKE-2.BAT"):
+            self.assertTrue(TUNER.SOURCE_NAME_RE.fullmatch(name), name)
+        for name in ("service.bat", "general/../x.bat", "general;rm.bat", "general.cmd"):
+            self.assertFalse(TUNER.SOURCE_NAME_RE.fullmatch(name), name)
+
+
 class ReportTests(unittest.TestCase):
     def test_write_report(self):
         candidate = TUNER.known_candidate("discord-tcp", [SOURCE])
@@ -1169,6 +1199,7 @@ class ReportTests(unittest.TestCase):
             service="discord-tcp",
             router="192.168.2.1",
             search_seed=42,
+            source_file="general (ALT11).bat",
         )
         output = ["EVENT|PROBE_DETAIL|1|p|1|r|200|0.1|1|0|ok|u", "EVENT|FOUND|1|x"]
         with tempfile.TemporaryDirectory() as directory:
@@ -1186,6 +1217,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report["repository"], "o/r")
         self.assertEqual(report["router"], "192.168.2.1")
         self.assertEqual(report["search_seed"], 42)
+        self.assertEqual(report["source_file"], "general (ALT11).bat")
         self.assertEqual(report["candidate_count"], 2)
         self.assertEqual(report["found"]["candidate_id"], candidate.candidate_id)
         self.assertEqual(report["found"]["args"], list(candidate.args))
@@ -1196,7 +1228,7 @@ class ReportTests(unittest.TestCase):
     def test_write_report_without_found(self):
         args = argparse.Namespace(
             repository="o/r", ref="main", service="discord-voice",
-            router="r", search_seed=1,
+            router="r", search_seed=1, source_file=None,
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "report.json"
@@ -1205,6 +1237,7 @@ class ReportTests(unittest.TestCase):
             )
             report = json.loads(path.read_text(encoding="utf-8"))
         self.assertIsNone(report["found"])
+        self.assertIsNone(report["source_file"])
         self.assertEqual(report["verification"]["method"], "manual-duplex-voice")
 
 
@@ -1319,6 +1352,40 @@ class MainTests(unittest.TestCase):
         self.assertEqual(data["candidate_count"], 4)
         self.assertEqual(data["search_seed"], 7)
         self.assertIsNone(data["found"])
+
+    def test_plan_only_with_selected_source_file(self):
+        (self.sources / "general (ALT3).bat").write_text(SAMPLE, encoding="utf-8")
+        report = self.root / "plan.json"
+        code, stdout, _ = self.main(
+            "discord-voice", "--source-dir", str(self.sources), "--plan-only",
+            "--mix-level", "off", "--source-file", "general (alt3).bat",
+            "--client-ip", "192.168.2.60",
+            "--search-seed", "3", "--report", str(report),
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("BAT-файлов: 1", stdout)
+        data = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(data["source_file"], "general (alt3).bat")
+        # Only the translated ALT3 profile: the router built-in is skipped.
+        self.assertEqual(data["candidate_count"], 1)
+        self.assertNotIn("Flowseal ACTIVE_DISCORD_UDP", stdout)
+
+    def test_unknown_or_empty_source_file_returns_one(self):
+        code, _stdout, stderr = self.main(
+            "youtube", "--source-dir", str(self.sources), "--plan-only",
+            "--source-file", "general (missing).bat",
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("not found", stderr)
+        # Only the TCP/Google profile of the sample: nothing for Discord Voice.
+        voiceless = "@echo off\nstart winws.exe ^\n" + SAMPLE.splitlines()[4].removesuffix(" --new ^") + "\n"
+        (self.sources / "general (FAKE).bat").write_text(voiceless, encoding="utf-8")
+        code, _stdout, stderr = self.main(
+            "discord-voice", "--source-dir", str(self.sources), "--plan-only",
+            "--source-file", "general (FAKE).bat", "--client-ip", "192.168.2.60",
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("нет профиля", stderr)
 
     def test_plan_only_without_report(self):
         code, stdout, _ = self.main(

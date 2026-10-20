@@ -228,6 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--voice-duration", type=int, default=25)
     parser.add_argument("--client-ip")
     parser.add_argument("--source-dir", type=Path)
+    parser.add_argument("--source-file")
     return parser
 
 
@@ -246,6 +247,10 @@ def validate_args(args: argparse.Namespace) -> None:
         address = ipaddress.ip_address(args.client_ip)
         if address.version != 4 or not address.is_private:
             raise ValueError("client-ip must be a private LAN IPv4")
+    if args.source_file is not None and (
+        len(args.source_file) > 160 or not tuner.SOURCE_NAME_RE.fullmatch(args.source_file)
+    ):
+        raise ValueError("source-file must name one general*.bat file")
     if args.source_dir and not TEST_ROOT:
         raise ValueError("source-dir is allowed only in an isolated test root")
 
@@ -281,6 +286,7 @@ def make_report(
         "service": args.service,
         "router": "local-panel",
         "search_seed": args.search_seed,
+        "source_file": args.source_file,
         "candidate_count": len(candidates),
         "found": {
             "candidate_id": found.candidate_id,
@@ -403,6 +409,7 @@ def main() -> int:
             "mix_level": args.mix_level,
             "max_candidates": args.max_candidates,
             "search_seed": args.search_seed,
+            "source_file": args.source_file,
             "needs_voice_verdict": False,
             "result_available": False,
         },
@@ -440,15 +447,23 @@ def main() -> int:
                 tuner.DEFAULT_REF,
             )
             writer.write(source_origin="github")
+        if args.source_file:
+            try:
+                sources = tuner.select_source(sources, args.source_file)
+            except ValueError as error:
+                raise RuntimeError(str(error)) from error
         candidates = tuner.select_candidates(
             tuner.build_candidates(
                 args.service,
                 sources,
                 args.mix_level,
+                include_builtin=not args.source_file,
             ),
             args.max_candidates,
             args.search_seed,
         )
+        if not candidates and args.source_file:
+            raise RuntimeError(f"{args.source_file} has no {args.service} profile")
         if not candidates:
             raise RuntimeError("no safe candidates were generated")
         writer.write(

@@ -39,6 +39,8 @@ TOKEN_RE = re.compile(
     r"(?:=(?P<value>\"[^\"]*\"|[^\s^]+))?"
 )
 SAFE_TOKEN_RE = re.compile(r"^--[a-z0-9-]+=[A-Za-z0-9_@/.,:+<>=!-]+$")
+# Names accepted for cached and user-selected Flowseal strategy files.
+SOURCE_NAME_RE = re.compile(r"general[A-Za-z0-9 ()_.-]*\.bat", re.IGNORECASE)
 
 NATIVE_FAKE = (
     "--lua-desync=fake:blob=tls_clienthello:"
@@ -875,6 +877,16 @@ def parameter_sweep_candidates(
         )
         rank += 1
 
+    result.extend(source_sweep_candidates(exact))
+    return result
+
+
+def source_sweep_candidates(exact: Sequence[Candidate]) -> list[Candidate]:
+    """Sweep a few axes on up to four translated BAT profiles (TCP services).
+
+    Each family is represented once, so the sweep stays bounded.
+    """
+    result: list[Candidate] = []
     representative_bases: list[Candidate] = []
     represented_families: set[str] = set()
     for candidate in exact:
@@ -990,11 +1002,40 @@ def mixed_candidates(
     return result
 
 
+def select_source(sources: Sequence[SourceFile], name: str) -> list[SourceFile]:
+    """Return only the BAT file called ``name`` (case-insensitive).
+
+    Raises ValueError when the downloaded set has no such file.
+    """
+    wanted = name.casefold()
+    chosen = [source for source in sources if source.name.casefold() == wanted]
+    if not chosen:
+        raise ValueError(f"BAT file not found in the Flowseal set: {name}")
+    return chosen[:1]
+
+
+def source_services(source: SourceFile) -> list[str]:
+    """Services for which ``source`` yields at least one translated profile."""
+    return sorted(
+        service
+        for service in ("youtube", "discord-tcp", "discord-voice")
+        if build_candidates(service, [source], "off", include_builtin=False)
+    )
+
+
 def build_candidates(
     service: str,
     sources: Sequence[SourceFile],
     mix_level: str,
+    *,
+    include_builtin: bool = True,
 ) -> list[Candidate]:
+    """Translate, sweep and mix candidates for ``service``.
+
+    ``include_builtin=False`` leaves out the router-native known-good profile
+    and everything built on it (native sweeps and native/source mixes), so
+    that only profiles derived from ``sources`` are tested.
+    """
     by_source = {
         source.name: parse_profiles(source)
         for source in sources
@@ -1023,12 +1064,19 @@ def build_candidates(
                 if candidate:
                     exact.append(candidate)
 
-    candidates = [known_candidate(service, sources)]
-    candidates.extend(
-        parameter_sweep_candidates(service, exact, sources, mix_level)
-    )
-    candidates.extend(exact)
-    candidates.extend(mixed_candidates(service, exact, sources, mix_level))
+    if include_builtin:
+        candidates = [known_candidate(service, sources)]
+        candidates.extend(
+            parameter_sweep_candidates(service, exact, sources, mix_level)
+        )
+        candidates.extend(exact)
+        candidates.extend(mixed_candidates(service, exact, sources, mix_level))
+    else:
+        # Only what the selected BAT file defines: its translated profiles and,
+        # unless mixing is off, the per-source parameter sweep (TCP services).
+        candidates = list(exact)
+        if mix_level != "off" and service != "discord-voice":
+            candidates.extend(source_sweep_candidates(exact))
     unique: dict[tuple[str, ...], Candidate] = {}
     for candidate in sorted(candidates, key=lambda item: (item.rank, item.source_name)):
         unique.setdefault(candidate.args, candidate)
@@ -1166,7 +1214,7 @@ def read_source_cache(path: Path) -> tuple[list[SourceFile], str]:
         name, text = item.get("name"), item.get("text")
         sha, url = item.get("sha"), item.get("url")
         if (not isinstance(name, str) or len(name) > 160
-                or not re.fullmatch(r"general[A-Za-z0-9 ()_.-]*\.bat", name, re.I)
+                or not SOURCE_NAME_RE.fullmatch(name)
                 or name in names or not isinstance(text, str) or len(text.encode("utf-8")) > 262144
                 or not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha)
                 or not isinstance(url, str) or len(url) > 1000
@@ -1451,6 +1499,7 @@ def write_report(
         "service": args.service,
         "router": args.router,
         "search_seed": args.search_seed,
+        "source_file": args.source_file,
         "candidate_count": len(candidates),
         "found": dataclasses.asdict(found) if found else None,
         "remote_output": list(output),
@@ -1505,6 +1554,13 @@ def parser() -> argparse.ArgumentParser:
         help="read general*.bat from a local directory instead of GitHub",
     )
     result.add_argument(
+        "--source-file",
+        help=(
+            "test only profiles translated from this general*.bat "
+            "(for example \"general (ALT3).bat\"); the built-in profile is skipped"
+        ),
+    )
+    result.add_argument(
         "--plan-only",
         action="store_true",
         help="download, parse and list candidates without connecting to router",
@@ -1549,15 +1605,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             print(f"Получаю актуальные general*.bat из {args.repository}@{args.ref}...")
             sources, commit = fetch_sources(args.repository, args.ref)
-    except (OSError, RuntimeError, urllib.error.URLError) as error:
+        if args.source_file:
+            sources = select_source(sources, args.source_file)
+    except (OSError, RuntimeError, ValueError, urllib.error.URLError) as error:
         print(f"ERROR: не удалось получить стратегии: {error}", file=sys.stderr)
         return 1
 
     candidates = select_candidates(
-        build_candidates(args.service, sources, args.mix_level),
+        build_candidates(
+            args.service,
+            sources,
+            args.mix_level,
+            include_builtin=not args.source_file,
+        ),
         args.max_candidates,
         args.search_seed,
     )
+    if not candidates:
+        print(
+            f"ERROR: в {args.source_file} нет профиля для {args.service}.",
+            file=sys.stderr,
+        )
+        return 1
     print(
         f"Источник зафиксирован на commit {commit[:12]}; "
         f"BAT-файлов: {len(sources)}; кандидатов: {len(candidates)}; "

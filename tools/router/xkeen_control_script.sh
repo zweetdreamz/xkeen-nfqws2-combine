@@ -84,6 +84,8 @@ STATUS_ROUTE_KEYS = {
     "discord-voice": "discord_voice_route",
     "youtube": "youtube_route",
 }
+# Same pattern as zapret_tuner.SOURCE_NAME_RE: one Flowseal general*.bat file.
+SOURCE_FILE_NAME = re.compile(r"general[A-Za-z0-9 ()_.-]*\.bat", re.IGNORECASE)
 SAFE_TOKEN = re.compile(r"^--[a-z0-9-]+=[A-Za-z0-9_@/.,:+<>=!-]+$")
 SAFE_OPTIONS = {
     "filter-tcp",
@@ -199,7 +201,7 @@ input[type=file]::file-selector-button{margin-right:12px;padding:7px 12px;border
 .profile h3{font-size:15px}.profile .family{flex:1;min-height:40px;margin-top:4px;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
 .profile button{width:100%;padding:8px;margin-top:10px;font-size:13px;color:var(--red)}
 .tuner-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-.field{display:grid;gap:6px}.field label{color:var(--muted);font-size:13px;font-weight:600}
+.field{display:grid;gap:6px;align-content:start}.field-hint{color:var(--faint);font-size:12px}.field label{color:var(--muted);font-size:13px;font-weight:600}
 .field select,.field input{width:100%;padding:10px 12px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font:inherit;font-size:14px}
 .field select:hover,.field input:hover{border-color:var(--faint)}
 .tuner-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
@@ -304,6 +306,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
     <p class="hint">Актуальные general*.bat временно проверяются на роутере. Меняется только проверяемый профиль; остальные TCP/QUIC/UDP-профили сохраняются. Для TCP выполняются baseline и два прохода кандидата с проверкой API/CDN. Voice требует подтверждения звука.</p>
     <div class="tuner-grid">
       <div class="field"><label for="tunerService">Сервис</label><select id="tunerService"><option value="youtube">YouTube</option><option value="discord-tcp">Discord TCP</option><option value="discord-voice">Discord Voice</option></select></div>
+      <div class="field"><label for="tunerSource">BAT-файл Flowseal</label><select id="tunerSource"><option value="">Все файлы и встроенный профиль</option></select><div id="tunerSourceHint" class="field-hint">Выберите файл, чтобы проверить только его конфиг. Список появится после «Проверить обновление».</div></div>
       <div class="field"><label for="tunerMix">Глубина перебора</label><select id="tunerMix"><option value="safe">Safe — по одному параметру</option><option value="extended">Extended — плюс сочетания</option><option value="off">Только прямой перевод BAT</option></select></div>
       <div class="field"><label for="tunerMax">Максимум кандидатов</label><input id="tunerMax" type="number" min="1" max="64" value="32"></div>
       <div class="field"><label for="tunerSeed">Seed (пусто = новый случайный)</label><input id="tunerSeed" inputmode="numeric" pattern="[0-9]*" placeholder="например, 1732459012"></div>
@@ -383,15 +386,18 @@ async function refreshVersions(){const root=document.getElementById("profileVers
 async function applyVersion(service,id){if(!confirm("Применить версию "+serviceLabel[service]+" от выбранной даты?\n\nБудет создан focused snapshot и перезапущен только nfqws2."))return;busy(true);log("применение версии "+id,true);try{const d=await api("/api/profiles/apply/"+service+"/"+id,{method:"POST",headers:controlHeaders,body:"{}"});log(d.output||"версия применена")}catch(e){log("ошибка версии: "+e)}finally{busy(false);await refreshProfiles();await refreshVersions()}}
 function renderUpdate(d){const root=document.getElementById("updateInfo");root.textContent="";const title=document.createElement("b");title.className=d.status==="error"?"bad":"good";title.textContent=d.status==="up_to_date"?"Актуально":d.status==="downloaded"?"Новые стратегии скачаны":d.status==="error"?"Не удалось обновить":"Нажмите «Проверить обновление»";root.append(title);const detail=document.createElement("div");detail.className="version-meta";detail.textContent=d.error||((d.downloaded_commit?"Версия "+d.downloaded_commit.slice(0,12)+" · файлов: "+d.source_count:"")+(d.checked_utc?" · проверено "+fmtDate(d.checked_utc):""));root.append(detail)}
 async function refreshUpdates(){try{renderUpdate(await api("/api/updates"))}catch(e){document.getElementById("updateInfo").textContent="Ошибка: "+e}}
-async function checkUpdates(){const button=document.getElementById("checkUpdates");button.disabled=true;button.textContent="Проверяю и скачиваю…";try{const d=await api("/api/updates/check",{method:"POST",headers:controlHeaders,body:"{}"});renderUpdate(d);log(d.status==="up_to_date"?"Flowseal: актуально":"Flowseal: скачаны новые стратегии ("+d.source_count+" файлов)")}catch(e){renderUpdate({status:"error",error:String(e)});log("ошибка обновления Flowseal: "+e)}finally{button.disabled=false;button.textContent="Проверить обновление"}}
+async function checkUpdates(){const button=document.getElementById("checkUpdates");button.disabled=true;button.textContent="Проверяю и скачиваю…";try{const d=await api("/api/updates/check",{method:"POST",headers:controlHeaders,body:"{}"});renderUpdate(d);log(d.status==="up_to_date"?"Flowseal: актуально":"Flowseal: скачаны новые стратегии ("+d.source_count+" файлов)");await refreshTunerSources()}catch(e){renderUpdate({status:"error",error:String(e)});log("ошибка обновления Flowseal: "+e)}finally{button.disabled=false;button.textContent="Проверить обновление"}}
 function openTuner(service){document.querySelector('.tab[data-tab="autotune"]').click();document.getElementById("tunerService").value=service;tunerServiceChanged();document.getElementById("startTuner").focus();log("выбран подбор: "+serviceLabel[service]+"; запуск и применение остаются отдельными действиями",true)}
-function tunerServiceChanged(){document.getElementById("clientIpField").hidden=document.getElementById("tunerService").value!=="discord-voice"}
+let tunerSourceList=[];
+function renderTunerSources(){const select=document.getElementById("tunerSource"),service=document.getElementById("tunerService").value,previous=select.value;select.textContent="";const all=document.createElement("option");all.value="";all.textContent="Все файлы и встроенный профиль";select.append(all);tunerSourceList.forEach(item=>{const option=document.createElement("option"),supported=(item.services||[]).includes(service);option.value=item.name;option.textContent=item.name+(supported?"":" — нет профиля для "+serviceLabel[service]);option.disabled=!supported;select.append(option)});const keep=tunerSourceList.find(item=>item.name===previous&&(item.services||[]).includes(service));select.value=keep?previous:""}
+async function refreshTunerSources(){const hint=document.getElementById("tunerSourceHint");try{const d=await api("/api/tuner/sources");tunerSourceList=d.sources||[];renderTunerSources();hint.textContent=d.status==="ready"?"Только выбранный файл: его профили без встроенного; Safe/Extended добавляют вариации параметров этого файла. Commit "+d.commit.slice(0,12)+".":d.status==="error"?"Список файлов недоступен: "+d.error:"Список файлов появится после «Проверить обновление»."}catch(e){hint.textContent="Список файлов недоступен: "+e}}
+function tunerServiceChanged(){document.getElementById("clientIpField").hidden=document.getElementById("tunerService").value!=="discord-voice";renderTunerSources()}
 function tunerControls(active){document.getElementById("startTuner").disabled=active;document.getElementById("cancelTuner").disabled=!active;document.querySelectorAll("[data-action],.mode").forEach(b=>b.disabled=active)}
 function tunerStateLabel(state){return ({idle:"Задание не запускалось",preparing:"Получение и разбор стратегий…",running:"Проверка кандидатов…",voice_window:"Окно проверки Discord Voice…",awaiting_voice:"Ожидается ваш ответ",cancelling:"Остановка и восстановление nfqws2…",found:"Найден проходной профиль",none:"Проходной профиль не найден",cancelled:"Подбор остановлен, nfqws2 восстановлен",error:"Ошибка подбора"})[state]||state}
 function renderTuner(d){
   const state=d.status||"idle",active=!!d.active||activeTunerStates.has(state);tunerControls(active);
   document.getElementById("tunerStatus").textContent=tunerStateLabel(state)+(d.error?": "+d.error:"");
-  document.getElementById("tunerCommit").textContent=[d.commit?d.commit.slice(0,12):"",d.search_seed===undefined?"":("seed "+d.search_seed)].filter(Boolean).join(" · ");
+  document.getElementById("tunerCommit").textContent=[d.source_file||"",d.commit?d.commit.slice(0,12):"",d.search_seed===undefined?"":("seed "+d.search_seed)].filter(Boolean).join(" · ");
   document.getElementById("tunerProgress").textContent=d.candidate_count?("кандидат "+(d.current_candidate||0)+" из "+d.candidate_count):"—";
   const probe=d.last_probe_detail;document.getElementById("tunerProbe").textContent=probe?([probe.phase,"проход "+probe.round,probe.role,probe.http_code,probe.status,probe.seconds+" с",probe.bytes+" B"].join(" · ")):"";
   const base=d.baseline_result,suite=d.last_suite_result;document.getElementById("tunerVerification").textContent=(base?"Исходный профиль: "+base.verdict+" ("+base.successes+"/"+base.total+"). ":"")+(suite?"Кандидат "+suite.candidate+": "+suite.phase+" · "+suite.verdict+". ":"")+(d.service==="discord-voice"?"Voice: требуется подтверждение звука; UDP-пакеты сами по себе не доказывают качество голоса.":"Победитель должен пройти два HTTP-прохода. QUIC и воспроизведение видео не подтверждаются.");
@@ -403,11 +409,11 @@ function renderTuner(d){
 }
 async function refreshTuner(){try{renderTuner(await api("/api/tuner/status"))}catch(e){document.getElementById("tunerStatus").textContent="Ошибка статуса: "+e}}
 async function startTuner(){
-  const service=document.getElementById("tunerService").value,max=Number(document.getElementById("tunerMax").value),mix=document.getElementById("tunerMix").value,clientIp=document.getElementById("tunerClientIp").value.trim(),searchSeed=document.getElementById("tunerSeed").value.trim();
+  const service=document.getElementById("tunerService").value,max=Number(document.getElementById("tunerMax").value),mix=document.getElementById("tunerMix").value,clientIp=document.getElementById("tunerClientIp").value.trim(),searchSeed=document.getElementById("tunerSeed").value.trim(),sourceFile=document.getElementById("tunerSource").value;
   if(service==="discord-voice"&&!clientIp){log("для Discord Voice укажите LAN IPv4 компьютера");return}
-  if(!confirm("Начать подбор для "+serviceLabel[service]+"?\n\nТолько nfqws2 будет временно перезапускаться. Xkeen останется без изменений."))return;
+  if(!confirm("Начать подбор для "+serviceLabel[service]+(sourceFile?" из "+sourceFile:"")+"?\n\nТолько nfqws2 будет временно перезапускаться. Xkeen останется без изменений."))return;
   document.getElementById("tunerFound").classList.remove("visible");tunerControls(true);log("автоподбор: "+service,true);
-  try{const d=await api("/api/tuner/start",{method:"POST",headers:controlHeaders,body:JSON.stringify({service:service,mix_level:mix,max_candidates:max,client_ip:clientIp,search_seed:searchSeed})});renderTuner(d)}
+  try{const d=await api("/api/tuner/start",{method:"POST",headers:controlHeaders,body:JSON.stringify({service:service,mix_level:mix,max_candidates:max,client_ip:clientIp,search_seed:searchSeed,source_file:sourceFile})});renderTuner(d)}
   catch(e){log("не удалось начать подбор: "+e);tunerControls(false)}
 }
 async function cancelTuner(){if(!confirm("Остановить подбор? Временный процесс будет завершён, штатный nfqws2 восстановлен."))return;try{renderTuner(await api("/api/tuner/cancel",{method:"POST",headers:controlHeaders,body:"{}"}))}catch(e){log("ошибка остановки: "+e)}}
@@ -420,7 +426,7 @@ document.getElementById("tunerService").addEventListener("change",tunerServiceCh
 document.getElementById("refreshHistory").addEventListener("click",refreshHistory);document.getElementById("refreshVersions").addEventListener("click",refreshVersions);document.getElementById("checkUpdates").addEventListener("click",checkUpdates);document.querySelectorAll(".open-tuner").forEach(b=>b.addEventListener("click",()=>openTuner(b.dataset.tunerService)));
 document.getElementById("openDiagnostics").addEventListener("click",()=>document.querySelector('.tab[data-tab="diagnostics"]').click());
 document.querySelectorAll(".diag-start").forEach(b=>b.addEventListener("click",()=>startDiagnostic(b.dataset.diagKind)));document.getElementById("cancelDiagnostic").addEventListener("click",cancelDiagnostic);
-log("панель готова",true);tunerServiceChanged();refresh();refreshProfiles();refreshVersions();refreshHistory();refreshUpdates();refreshTuner();refreshDiagnostic();resumeRouteJob();
+log("панель готова",true);tunerServiceChanged();refresh();refreshProfiles();refreshVersions();refreshHistory();refreshUpdates();refreshTunerSources();refreshTuner();refreshDiagnostic();resumeRouteJob();
 </script></body></html>"""
 
 
@@ -1592,10 +1598,30 @@ def tuner_status():
     return payload
 
 
+def tuner_sources():
+    """List the downloaded Flowseal BAT files and the services each one covers."""
+    try:
+        module = flowseal_source_module()
+        sources, commit = module.read_source_cache(FLOWSEAL_SOURCE_CACHE)
+    except FileNotFoundError:
+        return {"ok": True, "status": "never_downloaded", "commit": "", "sources": []}
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {"ok": True, "status": "error", "error": str(exc), "commit": "", "sources": []}
+    return {
+        "ok": True,
+        "status": "ready",
+        "commit": commit,
+        "sources": [
+            {"name": source.name, "services": module.source_services(source)}
+            for source in sorted(sources, key=lambda item: item.name.casefold())
+        ],
+    }
+
+
 def validate_tuner_request(body):
     if not isinstance(body, dict):
         raise ValueError("ожидается JSON-объект")
-    if set(body) - {"service", "mix_level", "max_candidates", "client_ip", "search_seed"}:
+    if set(body) - {"service", "mix_level", "max_candidates", "client_ip", "search_seed", "source_file"}:
         raise ValueError("неизвестные параметры подбора")
     service = body.get("service")
     if service not in SERVICES:
@@ -1629,12 +1655,20 @@ def validate_tuner_request(body):
         or not 0 <= search_seed <= 4294967295
     ):
         raise ValueError("seed должен быть целым числом от 0 до 4294967295")
+    source_file = body.get("source_file") or None
+    if source_file is not None and (
+        not isinstance(source_file, str)
+        or len(source_file) > 160
+        or not SOURCE_FILE_NAME.fullmatch(source_file)
+    ):
+        raise ValueError("файл стратегии должен быть одним general*.bat")
     return {
         "service": service,
         "mix_level": mix_level,
         "max_candidates": maximum,
         "client_ip": client_ip,
         "search_seed": search_seed,
+        "source_file": source_file,
     }
 
 
@@ -1697,6 +1731,8 @@ def start_tuner_job(settings):
     ]
     if settings["client_ip"]:
         command.extend(["--client-ip", settings["client_ip"]])
+    if settings.get("source_file"):
+        command.extend(["--source-file", settings["source_file"]])
     environment = command_env()
     environment["PYTHONUNBUFFERED"] = "1"
     with (TUNER_JOB_DIR / "process.log").open("ab", buffering=0) as output:
@@ -2019,6 +2055,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/tuner/status":
             self.send_json(200, tuner_status())
+            return
+        if self.path == "/api/tuner/sources":
+            self.send_json(200, tuner_sources())
             return
         if self.path == "/api/route/status":
             self.send_json(200, route_status())

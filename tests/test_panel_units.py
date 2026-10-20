@@ -546,6 +546,7 @@ class TunerRequestTests(PanelTestCase):
                 "max_candidates": 32,
                 "client_ip": "",
                 "search_seed": 777,
+                "source_file": None,
             },
         )
 
@@ -567,11 +568,24 @@ class TunerRequestTests(PanelTestCase):
                 "max_candidates": 64,
                 "client_ip": "192.168.2.10",
                 "search_seed": 4294967295,
+                "source_file": None,
             },
         )
         for mix in ("off", "safe", "extended"):
             self.assertEqual(self.validate({"service": "discord-tcp", "mix_level": mix, "search_seed": 0})["mix_level"], mix)
         self.assertEqual(self.validate({"service": "youtube", "max_candidates": 1, "search_seed": 5})["max_candidates"], 1)
+
+    def test_source_file(self):
+        body = {"service": "youtube", "search_seed": 1}
+        self.assertEqual(
+            self.validate({**body, "source_file": "general (ALT3).bat"})["source_file"],
+            "general (ALT3).bat",
+        )
+        self.assertIsNone(self.validate({**body, "source_file": ""})["source_file"])
+        self.assertIsNone(self.validate({**body, "source_file": None})["source_file"])
+        for bad in ("service.bat", "../general.bat", "general;x.bat", "general" + "a" * 160 + ".bat", 5, ["general.bat"]):
+            with self.subTest(bad=bad):
+                self.assertRejected("general\\*\\.bat", {**body, "source_file": bad})
 
     def test_empty_seed_is_randomized(self):
         with mock.patch.object(self.ns["secrets"], "randbits", return_value=9):
@@ -1367,6 +1381,79 @@ class TunerAndDiagnosticJobTests(PanelTestCase):
         with mock.patch.dict(self.ns, {"tuner_active": lambda: True}):
             with self.assertRaisesRegex(RuntimeError, "подбор уже выполняется"):
                 self.ns["start_tuner_job"](settings)
+
+
+class TunerSourceTests(PanelTestCase):
+    def setUp(self):
+        super().setUp()
+        self.patch(
+            FLOWSEAL_SOURCE_CACHE=self.root / "flowseal-sources.json",
+            TUNER_JOB_DIR=self.root / "tuner",
+            TUNER_PID=self.root / "tuner" / "panel-launch.pid",
+            TUNER_STATE=self.root / "tuner" / "state.json",
+        )
+
+    def test_sources_before_download(self):
+        self.assertEqual(
+            self.ns["tuner_sources"](),
+            {"ok": True, "status": "never_downloaded", "commit": "", "sources": []},
+        )
+
+    def test_sources_lists_services_per_file(self):
+        module = mock.Mock()
+        files = [mock.Mock(), mock.Mock()]
+        files[0].name, files[1].name = "general (ALT3).bat", "General.bat"
+        module.read_source_cache.return_value = (files, "c" * 40)
+        module.source_services.side_effect = lambda source: (
+            ["discord-tcp", "youtube"] if source.name == "General.bat" else ["discord-voice"]
+        )
+        with mock.patch.dict(self.ns, {"flowseal_source_module": lambda: module}):
+            payload = self.ns["tuner_sources"]()
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["commit"], "c" * 40)
+        self.assertEqual(
+            payload["sources"],
+            [
+                {"name": "general (ALT3).bat", "services": ["discord-voice"]},
+                {"name": "General.bat", "services": ["discord-tcp", "youtube"]},
+            ],
+        )
+
+    def test_sources_report_corrupt_cache(self):
+        module = mock.Mock()
+        module.read_source_cache.side_effect = RuntimeError("invalid Flowseal cache")
+        with mock.patch.dict(self.ns, {"flowseal_source_module": lambda: module}):
+            payload = self.ns["tuner_sources"]()
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["sources"], [])
+        self.assertIn("invalid Flowseal cache", payload["error"])
+
+    def test_start_tuner_job_passes_selected_source_file(self):
+        (self.root / "tuner").mkdir()
+        status = {"ok": True, "code": 0, "output": "discord_voice_route=zapret\n"}
+        settings = {
+            "service": "discord-voice",
+            "mix_level": "off",
+            "max_candidates": 8,
+            "client_ip": "192.168.2.60",
+            "search_seed": 5,
+            "source_file": "general (ALT3).bat",
+        }
+        process = mock.Mock(pid=4321)
+        with mock.patch.dict(self.ns, {"tuner_active": lambda: False, "run_command": lambda *_a, **_k: status}), \
+                mock.patch.object(self.ns["subprocess"], "Popen", return_value=process) as popen, \
+                mock.patch.object(self.ns["threading"], "Thread"):
+            self.assertEqual(self.ns["start_tuner_job"](settings), 4321)
+        command = popen.call_args.args[0]
+        self.assertEqual(command[command.index("--service") + 1], "discord-voice")
+        self.assertEqual(command[command.index("--client-ip") + 1], "192.168.2.60")
+        self.assertEqual(command[-2:], ["--source-file", "general (ALT3).bat"])
+        # Without a file the option is not passed at all.
+        with mock.patch.dict(self.ns, {"tuner_active": lambda: False, "run_command": lambda *_a, **_k: status}), \
+                mock.patch.object(self.ns["subprocess"], "Popen", return_value=process) as popen, \
+                mock.patch.object(self.ns["threading"], "Thread"):
+            self.ns["start_tuner_job"]({**settings, "source_file": None})
+        self.assertNotIn("--source-file", popen.call_args.args[0])
 
 
 class ProfileStoreTests(PanelTestCase):
