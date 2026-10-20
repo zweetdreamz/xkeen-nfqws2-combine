@@ -34,6 +34,7 @@ NFQWS_CONFIG_LOGICAL = "/opt/etc/nfqws2/nfqws2.conf"
 DISCORD_LIST_LOGICAL = "/opt/etc/nfqws2/lists/user.list"
 YOUTUBE_LIST_LOGICAL = "/opt/etc/nfqws2/lists/youtube.list"
 XRAY_ROUTING_LOGICAL = "/opt/etc/xray/configs/05_routing.json"
+XRAY_CONFIG_DIR_LOGICAL = "/opt/etc/xray/configs"
 PROJECT_LOCK_LOGICAL = "/opt/tmp/keenetic-discord-nfqws2.lock"
 STATE_LIMIT = 512 * 1024
 STANDARD_WORKERS = 4
@@ -251,6 +252,31 @@ def process_ids(name: str) -> list[int]:
     return [int(value) for value in result["output"].split() if value.isdigit()]
 
 
+def xray_upgrade_findings(files: dict[str, str]) -> list[str]:
+    """Settings that Xray 26.10+ refuses to load, by config file name.
+
+    - any outbound "proxySettings" (removed; sockopt.dialerProxy replaces it);
+    - "addressPortStrategy" in the sockopt of a freedom outbound.
+    """
+    findings = []
+    for name, text in sorted(files.items()):
+        if re.search(r'"proxySettings"\s*:', text):
+            findings.append(f"{name}: proxySettings → sockopt.dialerProxy")
+        try:
+            data = json.loads(text)
+        except ValueError:
+            continue
+        outbounds = data.get("outbounds", []) if isinstance(data, dict) else []
+        for outbound in outbounds if isinstance(outbounds, list) else []:
+            if not isinstance(outbound, dict) or outbound.get("protocol") != "freedom":
+                continue
+            stream = outbound.get("streamSettings")
+            sockopt = stream.get("sockopt") if isinstance(stream, dict) else None
+            if isinstance(sockopt, dict) and "addressPortStrategy" in sockopt:
+                findings.append(f"{name}: freedom {outbound.get('tag', '?')} sockopt.addressPortStrategy")
+    return findings
+
+
 def voice_profile_active(config: str) -> bool:
     """True when nfqws2 has a Discord Voice profile (built-in or imported).
 
@@ -326,6 +352,21 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
         add("Xray routing", "error" if missing else "ok", "missing: " + ", ".join(missing) if missing else "service-direct rules согласованы")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         add("Xray routing", "error", str(exc))
+
+    config_dir = root_path(XRAY_CONFIG_DIR_LOGICAL)
+    if config_dir.is_dir():
+        files = {}
+        for path in sorted(config_dir.glob("*.json")):
+            try:
+                files[path.name] = safe_read(path)
+            except (OSError, ValueError):
+                continue
+        findings = xray_upgrade_findings(files)
+        add(
+            "Xray 26.10+ совместимость",
+            "error" if findings else "ok",
+            "; ".join(findings) if findings else "устаревших полей нет",
+        )
 
     try:
         discord_list = safe_read(root_path(DISCORD_LIST_LOGICAL))

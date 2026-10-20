@@ -127,6 +127,38 @@ class ParseRoutesTests(DiagnosticsUnitBase):
                 self.assertEqual(self.module.parse_routes(text), ("unknown", "unknown", "unknown"))
 
 
+class XrayUpgradeTests(DiagnosticsUnitBase):
+    def test_clean_configs(self):
+        files = {
+            "04_outbounds.json": json.dumps({"outbounds": [
+                {"tag": "direct", "protocol": "freedom", "streamSettings": {"sockopt": {"mark": 255}}},
+                {"tag": "vless", "protocol": "vless", "streamSettings": {"sockopt": {"dialerProxy": "x"}}},
+            ]}),
+            "05_routing.json": "// comment makes this JSONC\n{}",
+        }
+        self.assertEqual(self.module.xray_upgrade_findings(files), [])
+
+    def test_removed_and_fatal_settings(self):
+        files = {
+            "04_outbounds.json": json.dumps({"outbounds": [
+                {"tag": "direct", "protocol": "freedom",
+                 "streamSettings": {"sockopt": {"addressPortStrategy": "SrvPortOnly"}}},
+                {"tag": "chain", "protocol": "vless", "proxySettings": {"tag": "direct"}},
+                "junk",
+            ]}),
+            "06_jsonc.json": '// JSONC\n{"outbounds": [{"proxySettings": {}}]}',
+            "07_list.json": "[]",
+        }
+        self.assertEqual(
+            self.module.xray_upgrade_findings(files),
+            [
+                "04_outbounds.json: proxySettings → sockopt.dialerProxy",
+                "04_outbounds.json: freedom direct sockopt.addressPortStrategy",
+                "06_jsonc.json: proxySettings → sockopt.dialerProxy",
+            ],
+        )
+
+
 class RouteConsistencyTests(DiagnosticsUnitBase):
     def test_vless_mode_does_not_require_direct_tags(self):
         config = "# Active routes: Discord=vless, YouTube=vless."
@@ -501,6 +533,7 @@ class RunHealthTests(DiagnosticsUnitBase):
                 "Discord hostlist",
                 "YouTube hostlist",
                 "Xray routing",
+                "Xray 26.10+ совместимость",
                 "YouTube route",
                 "Discord TCP route",
                 "Discord Voice route",
@@ -589,6 +622,18 @@ class RunHealthTests(DiagnosticsUnitBase):
         self.assertEqual(by_name["Discord TCP route"]["status"], "error")
         # The Voice profile is missing from the config while its route is zapret.
         self.assertEqual(by_name["Discord Voice route"]["status"], "error")
+
+    def test_xray_upgrade_check_reports_removed_settings(self):
+        build_healthy_tree(self.tmp, self.module)
+        write_file(
+            self.tmp,
+            "/opt/etc/xray/configs/04_outbounds.json",
+            json.dumps({"outbounds": [{"tag": "a", "protocol": "vless", "proxySettings": {"tag": "b"}}]}),
+        )
+        checks, _writer = self.run_health(healthy_run())
+        by_name = {check["name"]: check for check in checks}
+        self.assertEqual(by_name["Xray 26.10+ совместимость"]["status"], "error")
+        self.assertIn("04_outbounds.json: proxySettings", by_name["Xray 26.10+ совместимость"]["detail"])
 
     def test_vless_routes_need_no_direct_tags(self):
         build_healthy_tree(self.tmp, self.module)
@@ -716,8 +761,8 @@ class MainTests(DiagnosticsUnitBase):
             self.assertEqual(self.module.main(["--kind", "health", "--job-id", self.JOB_ID]), 0)
         state = self.state()
         self.assertEqual(state["status"], "completed")
-        self.assertEqual(len(state["results"]), 19)
-        self.assertEqual(state["summary"], {"ok": 19, "warn": 0, "error": 0, "unsupported": 0, "likely_blocked": 0})
+        self.assertEqual(len(state["results"]), 20)
+        self.assertEqual(state["summary"], {"ok": 20, "warn": 0, "error": 0, "unsupported": 0, "likely_blocked": 0})
         if os.name != "nt":
             self.assertEqual(self.state_path.stat().st_mode & 0o777, 0o600)
 
