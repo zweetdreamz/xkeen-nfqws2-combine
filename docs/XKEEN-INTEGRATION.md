@@ -6,9 +6,12 @@ XKeen/Xray/Mihomo. Путь пакета отдельно разобран в
 
 ## Три режима сервиса
 
+Режим выбирается отдельно для трёх сервисов: Discord TCP (домены Discord,
+TCP/TLS и QUIC), Discord Voice (Voice/STUN UDP-порты) и YouTube.
+
 ### VLESS
 
-XKeen отправляет Discord или YouTube в существующий proxy outbound. Домашний
+XKeen отправляет сервис в существующий proxy outbound. Домашний
 WAN видит соединение к proxy-серверу, поэтому локальный nfqws2 не может
 обрабатывать исходный TLS/QUIC сервиса.
 
@@ -95,11 +98,26 @@ policy routing читается из runtime-hook, `ip rule` и Keenetic policy.
 6. проверяет результат через `xkeen -xtest`;
 7. закрывает Xray JSON до `0600`.
 
-Discord переносит только доменную категорию:
+Discord TCP переносит только доменную категорию:
 
 ```text
 ext:geosite_v2fly.dat:discord
 ```
+
+Discord Voice — отдельное правило по UDP-портам:
+
+```text
+3478-3481,5349,19294-19344,50000-50100
+```
+
+С `--wide-udp` последний диапазон — `50000-65535`.
+
+Маршруты независимы. Доменное правило ведёт в `discord-direct` при Discord
+TCP = `direct`/`zapret` и в proxy outbound при `vless`. Правило UDP-портов
+создаётся только при Voice = `direct`/`zapret`; при `vless` его нет, и голос
+идёт по обычной proxy-маршрутизации XKeen, как в прежнем режиме Discord VPN.
+Outbound `discord-direct` существует, если хотя бы один маршрут Discord не
+`vless`.
 
 `ext:zkeenip.dat:discord` удаляется из управляемой маршрутизации. В проверенной
 базе эта категория содержит общие диапазоны Cloudflare и Google, поэтому
@@ -121,7 +139,9 @@ multi-WAN/PBR-схемы.
 
 ## Mihomo
 
-Скрипт добавляет управляемые Discord/YouTube `DIRECT` rules в начало списка и
+Скрипт добавляет управляемые `DIRECT` rules в начало списка: домены Discord
+при Discord TCP ≠ `vless`, UDP-порты Voice при Discord Voice ≠ `vless`, домены
+YouTube при YouTube ≠ `vless`. Затем
 запускает `xkeen -mtest`. YAML пересобирается через `yq`, поэтому формат и
 комментарии могут нормализоваться; baseline хранит исходный файл.
 
@@ -165,7 +185,12 @@ sh set-zapret-mode.sh both --core auto --wan-interface eth3 --yes-router
 
 ```sh
 sh set-service-route.sh youtube direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-tcp zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-voice vpn --core auto --wan-interface eth3 --yes-router
 ```
+
+`discord` вместо `discord-tcp`/`discord-voice` переключает оба маршрута
+Discord. Режимы остальных сервисов сохраняются.
 
 Откат:
 

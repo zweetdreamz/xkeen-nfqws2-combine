@@ -16,7 +16,7 @@ TCP/Voice, выбор BAT-файла в автоподборе, проверка
 | Область | Результат |
 |---|---|
 | Тесты | 423 Python-теста (было 49), shell-тесты на все 27 комбинаций маршрутов, JS-тест |
-| Покрытие Python (branch) | 91% всего: панель 81%, диагностика 98%, автоподбор 99%, тюнер 97%, dat-reader 98% |
+| Покрытие Python (branch) | 93% всего: панель 85%, диагностика 98%, автоподбор 97%, тюнер 97%, dat-reader 98% |
 | Запуск | `sh tests/run-all.sh [--coverage]`, `TEST_SHELL="busybox sh"` |
 | CI | GitHub Actions: dash и busybox, shellcheck (warning), ruff (pyflakes, bugbear) |
 | Рефакторинг | общие помощники заданий панели, установка Discord UDP blob, удалён мёртвый код, чистые shellcheck и ruff |

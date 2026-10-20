@@ -59,6 +59,9 @@ for test_script in tests/test-*.sh; do
 done
 
 if [ "$coverage" -eq 1 ]; then
+  # coverage.py only measures source directories that exist at start-up;
+  # tests/panel_loader.py writes the extracted panel app there.
+  mkdir -p tests/.generated
   run_suite pytest "$PYTHON" -m coverage run -m pytest -q tests
   "$PYTHON" -m coverage report || true
 else

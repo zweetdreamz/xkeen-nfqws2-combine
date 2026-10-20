@@ -1,6 +1,12 @@
 # XKeen + nfqws2 для Discord и YouTube
 
-Проект позволяет независимо выбирать маршрут для двух сервисов:
+Проект позволяет независимо выбирать маршрут для трёх сервисов:
+
+- **Discord TCP** — домены Discord: TCP/TLS и QUIC;
+- **Discord Voice** — Voice/STUN UDP-порты Discord;
+- **YouTube**.
+
+Для каждого доступны три режима:
 
 - `Direct`: обычный WAN без nfqws2;
 - `Zapret`: обычный WAN с обработкой nfqws2;
@@ -25,7 +31,7 @@
 | XKeen | 2.0, Xray 26.7.28, режим Hybrid |
 | nfqws2 | `nfqws2-keenetic 1.3.1`, ядро `v1.0.5.2`, очередь 300, WAN `eth3` |
 | Управляющий скрипт | `3.0.0` |
-| Активный режим | `both`: Discord и YouTube через DIRECT + nfqws2 |
+| Активный режим | `both`: Discord TCP/Voice и YouTube через DIRECT + nfqws2 |
 | Web-панель | `http://192.168.2.1:8088`, только LAN |
 | IPv6 nfqws2 | выключен: рабочего IPv6 WAN-маршрута нет |
 | Откат | baseline и последний pre-apply присутствуют |
@@ -49,7 +55,11 @@ sh apply-discord-nfqws2.sh --status
 sh apply-discord-nfqws2.sh --show-snapshots
 ```
 
-Выбрать один из четырёх режимов:
+В `--status` маршруты видны по отдельности: `discord_tcp_route=`,
+`discord_voice_route=` и `youtube_route=`. Прежний `discord_route=` сохранён:
+он равен общему значению или `mixed`, если TCP и Voice различаются.
+
+Выбрать один из четырёх preset (Discord в них — сразу TCP и Voice):
 
 ```sh
 # Discord → zapret, YouTube → VLESS
@@ -66,17 +76,31 @@ sh set-zapret-mode.sh vless --core auto --wan-interface eth3 --yes-router
 ```
 
 Эти четыре preset покрывают комбинации `Zapret/VPN`. Для одного сервиса
-доступны все три режима; второй сервис сохраняет своё текущее состояние:
+доступны все три режима; остальные сервисы сохраняют текущее состояние:
 
 ```sh
-sh set-service-route.sh discord direct --core auto --wan-interface eth3 --yes-router
-sh set-service-route.sh discord zapret --core auto --wan-interface eth3 --yes-router
-sh set-service-route.sh discord vpn    --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-tcp direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-tcp zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-tcp vpn    --core auto --wan-interface eth3 --yes-router
+
+sh set-service-route.sh discord-voice direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-voice zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-voice vpn    --core auto --wan-interface eth3 --yes-router
 
 sh set-service-route.sh youtube direct --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh youtube zapret --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-router
 ```
+
+`discord` вместо `discord-tcp`/`discord-voice` переключает оба маршрута
+Discord сразу:
+
+```sh
+sh set-service-route.sh discord zapret --core auto --wan-interface eth3 --yes-router
+```
+
+После обновления скриптов повторный apply не нужен: старая запись
+`Discord=X` в `nfqws2.conf` читается как одинаковый X для TCP и Voice.
 
 Каждое применение:
 
@@ -185,11 +209,21 @@ rank 200+ остаются во второй очереди. Seed сохраня
 следующего подбора. Если скачанная версия последняя, показывает **Актуально**.
 Запуск подбора и применение найденного профиля остаются отдельными действиями.
 
+Чтобы быстро проверить готовый конфиг Flowseal, выберите в поле
+**BAT-файл Flowseal** один файл. Тогда проверяются только его переведённые
+профили — без встроенного профиля роутера и смешивания. `Safe`/`Extended`
+добавляют лишь вариации параметров этого файла для YouTube и Discord TCP. В
+Windows-тюнере то же делает `--source-file "general (ALT3).bat"`.
+
+Подбор требует маршрута `Zapret` именно у подбираемого сервиса: Discord TCP,
+Discord Voice или YouTube.
+
 ## Локальная web-панель
 
 [`tools/router/xkeen_control_script.sh`](tools/router/xkeen_control_script.sh)
 создаёт single-page панель управления XKeen и маршрутами
-`Direct / Zapret / VPN` для обоих сервисов. Вкладка **Автоподбор** перебирает
+`Direct / Zapret / VPN` для трёх сервисов: Discord TCP, Discord Voice и
+YouTube — у каждого своя карточка. Вкладка **Автоподбор** перебирает
 актуальные Flowseal-профили на роутере, а **Импорт профиля** принимает отчёт
 Windows-тюнера. Смена маршрута выполняется фоновым заданием: краткий разрыв
 LAN-соединения при перезапуске Xray не теряет результат, а после повторного
@@ -198,7 +232,8 @@ LAN-соединения при перезапуске Xray не теряет р
 этих операциях не останавливается и не перезапускается.
 
 Для полного apply панель показывает этапы, сохраняет постоянную историю по
-дате и позволяет откатиться к snapshot до выбранной операции. После успеха
+дате и позволяет откатиться к snapshot до выбранной операции. История и
+проверка после apply показывают все три маршрута. После успеха
 она проверяет процессы/конфиги; браузерные HTTP/TLS-пробы запускаются отдельно
 во вкладке «Диагностика». QUIC и
 Discord Voice остаются ручными проверками. Импортированные профили также
@@ -219,8 +254,8 @@ LAN-устройства. Проверка состояния служб ост�
 
 ## Что именно настраивается
 
-- отдельные правила Xray/Mihomo для Discord и YouTube;
-- разные hostlist и nfqws2-профили двух сервисов;
+- отдельные правила Xray/Mihomo для Discord TCP, Discord Voice и YouTube;
+- разные hostlist и nfqws2-профили сервисов;
 - TCP/TLS, QUIC и Discord Voice/STUN;
 - узкий UDP-диапазон по умолчанию и явный `--wide-udp`;
 - WAN, core и при необходимости direct mark;
@@ -231,8 +266,13 @@ YouTube DIRECT выбирается только по доменным кате�
 `ext:zkeenip.dat:youtube` и Google IP-категории остаются через VLESS: это
 уменьшает риск отправить напрямую посторонний Google-трафик.
 
-Discord DIRECT выбирается по доменной категории
-`ext:geosite_v2fly.dat:discord` и отдельному правилу voice-портов.
+Discord TCP выбирается по доменной категории
+`ext:geosite_v2fly.dat:discord`; в nfqws2 ему соответствуют hostlist
+`user.list`, `NFQWS_ARGS` и `TCP_PORTS`. Discord Voice — отдельное правило
+UDP-портов `3478-3481,5349,19294-19344,50000-50100`; в nfqws2 —
+`NFQWS_ARGS_UDP`, `UDP_PORTS` и blob `discord_udp`. Маршруты меняются
+независимо. При Voice = VPN правило UDP-портов не создаётся, и голос идёт по
+обычной proxy-маршрутизации XKeen.
 `ext:zkeenip.dat:discord` намеренно не используется: эта IP-категория включает
 общие сети Cloudflare и Google и может ошибочно вывести из VLESS посторонний
 трафик. Обычный список доменов нужен nfqws2, который Xray `.dat` не читает.
@@ -258,11 +298,48 @@ Discord DIRECT выбирается по доменной категории
   и трёхрежимные переключатели сервисов.
 - [`tools/dat-reader/README.md`](tools/dat-reader/README.md) — просмотр
   категорий и доменов внутри бинарных баз Xray/V2Ray `.dat`.
+- [`docs/CODE-REVIEW.md`](docs/CODE-REVIEW.md) — итоги ревью кода, найденные
+  ошибки поведения и совместимость с nfqws2-keenetic 1.3.1 / Xray 26.10.17.
+
+## Разработка и тесты
+
+Все наборы тестов — shell, Python (pytest) и JavaScript — запускаются одной
+командой из корня проекта:
+
+```sh
+sh tests/run-all.sh
+sh tests/run-all.sh --coverage
+```
+
+`--coverage` дополнительно печатает branch coverage Python-кода (сейчас около
+93%). Shell-тесты выполняются оболочкой из `TEST_SHELL`; ближе всего к Entware
+на роутере:
+
+```sh
+TEST_SHELL="busybox sh" sh tests/run-all.sh
+```
+
+`test-routing-modes.sh` нужны штатные blobs nfqws2. На роутере они берутся из
+`/opt`, в остальных случаях — из `NFQWS_TEST_BLOB_SOURCE`, иначе `run-all.sh`
+скачивает их через `tests/fetch-nfqws2-blobs.sh`: закреплённый commit
+zapret2 и проверка SHA-256. Отдельно:
+
+```sh
+sh tests/fetch-nfqws2-blobs.sh /tmp/nfqws2-blobs
+NFQWS_TEST_BLOB_SOURCE=/tmp/nfqws2-blobs sh tests/test-routing-modes.sh
+```
+
+Нужны `jq`, `sha256sum`, `curl` (для загрузки blobs), `python3` с `pytest`
+(и `coverage` для `--coverage`) и `node`.
+
+CI [`.github/workflows/tests.yml`](.github/workflows/tests.yml) прогоняет
+`run-all.sh --coverage` под `dash` и `busybox sh`, а также `shellcheck`
+(уровень warning) и `ruff`.
 
 ## Ограничения
 
-- Discord Voice до распознавания L7 выбирается по UDP-портам; на тех же портах
-  может оказаться другой трафик.
+- Маршрут Discord Voice по-прежнему выбирается по UDP-портам, а не по L7; на
+  тех же портах может оказаться другой трафик.
 - `--wide-udp` расширяет прямой маршрут до `50000-65535`; без результатов
   диагностики его включать не следует.
 - Стратегии Flowseal работают через WinDivert/winws, а роутер — через

@@ -9,8 +9,8 @@ LAN → XKeen/Xray → VLESS
                  ↘ service-direct → [NFQUEUE/nfqws2] → WAN
 ```
 
-Discord и YouTube переключаются независимо между `direct`, `zapret` и
-`vless`. Скрипт не должен без отдельного
+Discord TCP, Discord Voice и YouTube переключаются независимо между
+`direct`, `zapret` и `vless`. Скрипт не должен без отдельного
 решения пользователя менять DNS, `proxy_router`, DSCP, IPv6 XKeen, общие
 policy marks или hardware offload.
 
@@ -32,10 +32,11 @@ policy marks или hardware offload.
 Discord:
 
 - Xray использует `discord-direct`;
-- DIRECT выбирает `ext:geosite_v2fly.dat:discord`;
+- Discord TCP (TCP/TLS и QUIC) выбирает `ext:geosite_v2fly.dat:discord`;
 - `ext:zkeenip.dat:discord` не используется из-за пересечения с общими
   сетями Cloudflare и Google;
-- Voice дополнительно выбирается по UDP-портам;
+- Discord Voice — отдельный маршрут по UDP-портам
+  `3478-3481,5349,19294-19344,50000-50100`;
 - живой тест видел `discord.media` на портах `19300`, `19305`, `19308`,
   прямой WAN и ответы клиенту.
 
@@ -61,6 +62,8 @@ sh set-zapret-mode.sh both    --core auto --wan-interface eth3 --yes-router
 sh set-zapret-mode.sh vless   --core auto --wan-interface eth3 --yes-router
 ```
 
+В preset «Discord» означает сразу Discord TCP и Discord Voice.
+
 | Preset | Discord | YouTube |
 |---|---|---|
 | `discord` | zapret | VLESS |
@@ -72,14 +75,27 @@ sh set-zapret-mode.sh vless   --core auto --wan-interface eth3 --yes-router
 в любой из трёх режимов:
 
 ```sh
-sh set-service-route.sh discord direct --core auto --wan-interface eth3 --yes-router
-sh set-service-route.sh discord zapret --core auto --wan-interface eth3 --yes-router
-sh set-service-route.sh discord vpn    --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-tcp direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-tcp zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-tcp vpn    --core auto --wan-interface eth3 --yes-router
+
+sh set-service-route.sh discord-voice direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-voice zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-voice vpn    --core auto --wan-interface eth3 --yes-router
 
 sh set-service-route.sh youtube direct --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh youtube zapret --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-router
 ```
+
+`SERVICE` — `discord-tcp`, `discord-voice`, `discord` (оба маршрута Discord)
+или `youtube`.
+
+| Сервис | Core route | nfqws2 |
+|---|---|---|
+| Discord TCP | доменное правило `ext:geosite_v2fly.dat:discord` | hostlist `user.list`, `NFQWS_ARGS`, `TCP_PORTS` |
+| Discord Voice | правило UDP-портов Voice/STUN | `NFQWS_ARGS_UDP`, `UDP_PORTS`, blob `discord_udp` |
+| YouTube | доменные правила YouTube | `youtube.list` в `NFQWS_ARGS_CUSTOM` |
 
 | Режим | Core route | nfqws2 сервиса |
 |---|---|---|
@@ -87,16 +103,36 @@ sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-ro
 | `zapret` | service-direct | включён |
 | `vpn` / `vless` | proxy outbound | выключен |
 
-Wrapper сначала читает `--status` и сохраняет режим второго сервиса. Если
+При Voice = `vpn` правило UDP-портов Discord не создаётся: голос идёт по
+обычной proxy-маршрутизации XKeen, как в прежнем Discord VPN. Outbound
+`discord-direct` существует, если хотя бы один маршрут Discord не `vpn`.
+
+Wrapper сначала читает `--status` и сохраняет режимы остальных сервисов. Если
 состояние определить нельзя, он завершится без изменений.
 
 Низкоуровневый эквивалент:
 
 ```text
---discord-route direct|zapret|vless
+--discord-tcp-route direct|zapret|vless
+--discord-voice-route direct|zapret|vless
+--discord-route direct|zapret|vless      сокращение: оба маршрута Discord
 --youtube-route direct|zapret|vless
 --proxy-outbound TAG
 ```
+
+`--status` печатает `discord_tcp_route=`, `discord_voice_route=` и
+`youtube_route=`. Поле `discord_route=` оставлено для старых читателей: оно
+равно общему значению или `mixed`, если маршруты TCP и Voice различаются.
+
+Применённые маршруты записываются в `nfqws2.conf`:
+
+```text
+# Active routes: DiscordTCP=X, DiscordVoice=Y, YouTube=Z.
+```
+
+Прежняя строка `Discord=X, YouTube=Y.` по-прежнему читается: X относится к
+обоим маршрутам Discord. Поэтому после обновления скриптов повторный apply не
+нужен.
 
 `--proxy-outbound` обычно не нужен: Xray proxy tag определяется из исходных
 правил.
@@ -280,6 +316,9 @@ xkeen -dscp
 4. При ухудшении выполнить `sh rollback-last-change.sh`.
 5. Постоянный результат внести в генератор и прогнать тесты.
 
+Подбор требует маршрута `Zapret` у подбираемого сервиса (`discord-tcp`,
+`discord-voice` или `youtube`).
+
 Временный перебор доступен:
 
 - во вкладке **Автоподбор** панели `http://192.168.2.1:8088`;
@@ -310,6 +349,14 @@ xkeen -dscp
 отчёте; одинаковые seed, Flowseal commit, `mix-level` и лимит воспроизводят
 тот же путь.
 
+Один BAT-файл можно выбрать полем **BAT-файл Flowseal** панели (список из
+скачанного набора, `GET /api/tuner/sources`), `--source-file` Windows-тюнера
+или `--source-file` в `zapret_autotune_job.py`. Имя сравнивается без учёта
+регистра. Тогда проверяются только переведённые профили этого файла: без
+встроенного профиля и смешивания. `safe`/`extended` добавляют только
+вариации параметров файла для TCP-сервисов; для Voice остаётся прямой
+перевод. Отчёт записывает `source_file`.
+
 Router-панель допускает максимум 64 кандидата. Повышать предел стоит только
 после неудачи короткой проверки: длительность растёт почти линейно.
 
@@ -318,7 +365,7 @@ Router-панель допускает максимум 64 кандидата. �
 ```text
 apply-discord-nfqws2.sh       генератор, apply, snapshots и rollback
 set-zapret-mode.sh            четыре режима
-set-service-route.sh           direct/zapret/vpn для одного сервиса
+set-service-route.sh          direct/zapret/vpn для одного сервиса
 apply-youtube-nfqws2.sh       launcher режима YouTube-only
 rollback-last-change.sh       последний pre-apply
 rollback-to-baseline.sh       исходный baseline
@@ -330,7 +377,8 @@ tools/windows/                временный подбор стратегий
 
 ## Остаточные ограничения
 
-- Voice DIRECT частично опирается на порты и может захватить другой UDP.
+- Маршрут Discord Voice по-прежнему выбирается по UDP-портам и может
+  захватить другой UDP.
 - YouTube IP-категории намеренно не выводятся из VLESS.
 - WinDivert/winws и NFQUEUE/nfqws2 имеют разные модели; перенос стратегий
   требует адаптации.

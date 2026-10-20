@@ -114,8 +114,10 @@ IP-категории `zkeenip:youtube` и `zkeenip:google` остаются в 
 сознательный компромисс: меньше шанс вывести напрямую весь Google-трафик,
 но поток без распознанного домена может остаться в proxy.
 
-Для Discord DIRECT/Zapret выбирается по
-`ext:geosite_v2fly.dat:discord` и voice-портам. `zkeenip:discord` удаляется
+Discord разделён на два независимых маршрута: Discord TCP выбирается по
+`ext:geosite_v2fly.dat:discord` (TCP/TLS и QUIC, hostlist `user.list`),
+Discord Voice — по voice-портам (`NFQWS_ARGS_UDP`). У каждого свой режим
+Direct/Zapret/VPN. `zkeenip:discord` удаляется
 из Xray: категория включает общие сети Cloudflare/Google и может затронуть
 ChatGPT/OpenAI.
 

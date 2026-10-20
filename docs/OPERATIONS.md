@@ -23,6 +23,10 @@ sh scripts/diagnose-xkeen-router.sh
 что общая CDN/IP-категория снова попала в Xray и может затронуть ChatGPT,
 OpenAI и другой трафик Cloudflare/Google.
 
+`--status` показывает маршруты по отдельности: `discord_tcp_route=`,
+`discord_voice_route=`, `youtube_route=`. `discord_route=` сохранён для
+совместимости и равен `mixed`, если маршруты TCP и Voice различаются.
+
 Проверенное 15.08.2026 состояние:
 
 - активен режим `both`;
@@ -48,7 +52,7 @@ sh set-zapret-mode.sh both    --core auto --wan-interface eth3 --yes-router
 sh set-zapret-mode.sh vless   --core auto --wan-interface eth3 --yes-router
 ```
 
-Значение режимов:
+Значение режимов (Discord — сразу TCP и Voice):
 
 | Режим | Discord | YouTube |
 |---|---|---|
@@ -60,12 +64,20 @@ sh set-zapret-mode.sh vless   --core auto --wan-interface eth3 --yes-router
 Любой `apply` создаёт `latest-preapply` и автоматически возвращает его при
 ошибке.
 
-Для точечного переключения одного сервиса доступны три режима:
+Для точечного переключения одного сервиса доступны три режима. Discord
+разделён на два независимых маршрута: `discord-tcp` (домены Discord, TCP/TLS
+и QUIC) и `discord-voice` (Voice/STUN UDP-порты); `discord` переключает оба:
 
 ```sh
-sh set-service-route.sh discord direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-tcp direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-tcp zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-tcp vpn    --core auto --wan-interface eth3 --yes-router
+
+sh set-service-route.sh discord-voice direct --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-voice zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh discord-voice vpn    --core auto --wan-interface eth3 --yes-router
+
 sh set-service-route.sh discord zapret --core auto --wan-interface eth3 --yes-router
-sh set-service-route.sh discord vpn    --core auto --wan-interface eth3 --yes-router
 
 sh set-service-route.sh youtube direct --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh youtube zapret --core auto --wan-interface eth3 --yes-router
@@ -74,7 +86,14 @@ sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-ro
 
 `direct` и `zapret` используют один service-direct маршрут, но в `direct`
 nfqws2-профиль сервиса выключен. `vpn` — понятный alias внутреннего режима
-`vless`. Wrapper читает и сохраняет режим второго сервиса.
+`vless`. Wrapper читает и сохраняет режимы остальных сервисов. При Voice =
+`vpn` правило UDP-портов Discord не создаётся, и голос идёт по обычной
+proxy-маршрутизации XKeen.
+
+После обновления скриптов повторный apply не нужен: старая строка
+`# Active routes: Discord=X, YouTube=Y.` в `nfqws2.conf` читается как X для
+TCP и Voice. Новый apply записывает
+`# Active routes: DiscordTCP=X, DiscordVoice=Y, YouTube=Z.`
 
 ## 3. Откат
 
@@ -221,7 +240,8 @@ TCP/TLS и HTTP-проверка подтверждены. Наличие QUIC-�
 http://192.168.2.1:8088
 ```
 
-Сервис заранее должен находиться в `Zapret`. YouTube и Discord TCP
+Подбираемый сервис (Discord TCP, Discord Voice или YouTube) заранее должен
+находиться в `Zapret`. YouTube и Discord TCP
 проверяются HTTP-пробами автоматически. Для Discord Voice укажите LAN IPv4
 компьютера, переподключайтесь к voice-каналу по подсказке и отвечайте
 **Да/Нет**.
@@ -247,6 +267,17 @@ http://192.168.2.1:8088
 ограниченные сочетания и имеет смысл после неудачи `Safe`. Значение
 `Максимум кандидатов` ограничено 64; его увеличение линейно удлиняет тест.
 Полного перебора всех параметров нет.
+
+Поле **BAT-файл Flowseal** ограничивает подбор одним файлом из скачанного
+набора; список появляется после **Проверить обновление**, файлы без профиля
+для выбранного сервиса недоступны. Проверяются только переведённые профили
+этого файла, без встроенного профиля роутера и смешивания. `Safe`/`Extended`
+добавляют вариации параметров файла только для TCP-сервисов; для Voice — лишь
+переведённые профили. С Windows то же самое:
+
+```text
+tools\windows\tune-discord-tcp.bat --source-file "general (ALT3).bat"
+```
 
 Для запуска с Windows по-прежнему доступны:
 
@@ -287,6 +318,9 @@ sh apply-discord-nfqws2.sh --rollback-import --yes-router
 процессы и согласованность конфигов. HTTP/TLS-пробы с LAN-устройства доступны
 отдельно во вкладке «Диагностика». QUIC и Discord Voice проверяются вручную.
 
+Проверка после apply в панели и **Проверить роутер** во вкладке
+«Диагностика» сверяют маршруты Discord TCP и Discord Voice по отдельности.
+
 ## 8. WAN, mark и IPv6
 
 - `--wan-interface eth3` фиксирует текущий WAN.
@@ -321,10 +355,23 @@ sh /opt/etc/nfqws2-update-backups/20261020-220034-1.2.4/rollback.sh
 | Симптом | Что проверить |
 |---|---|
 | После reboot ничего не работает | Смонтирован ли `/opt`, затем статусы двух служб |
-| Сайт Discord есть, voice нет | Hybrid/TProxy, voice-порты, reconnect-диагностику |
+| Сайт Discord есть, voice нет | `discord_voice_route`, Hybrid/TProxy, voice-порты, reconnect-диагностику |
 | YouTube открывается, видео нет | TLS/QUIC отдельно, hostlist, NFQUEUE counters |
 | nfqws2 запущен, эффекта нет | `ISP_INTERFACE`, mangle rules, hardware offload |
 | После эксперимента стало хуже | `sh rollback-last-change.sh` |
 
 Предупреждение о неподдерживаемом `seccomp` допустимо, если nfqws2 после него
 остаётся в состоянии `running`.
+
+## 10. Тесты проекта
+
+Все наборы тестов (shell, Python, JavaScript) запускаются одной командой:
+
+```sh
+sh tests/run-all.sh
+sh tests/run-all.sh --coverage
+TEST_SHELL="busybox sh" sh tests/run-all.sh
+```
+
+Подробности и зависимости — в разделе «Разработка и тесты»
+[`README.md`](../README.md#разработка-и-тесты).
