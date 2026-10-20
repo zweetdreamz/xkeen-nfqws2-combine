@@ -127,14 +127,16 @@ def release_project_lock(lock: Path | None) -> None:
 
 
 ROUTE_VALUES = {"direct", "zapret", "vless"}
+TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"unmanaged"}
 
 
 def parse_active_routes(text: str) -> dict[str, str] | None:
     """Read the "# Active routes:" line written by apply-discord-nfqws2.sh.
 
-    Returns {"discord-tcp", "discord-voice", "youtube"} -> route, or None when
-    the line is missing or malformed. The legacy line "Discord=X, YouTube=Y."
-    written before the TCP/Voice split applies X to both Discord routes.
+    Returns {"discord-tcp", "discord-voice", "youtube", "telegram"} -> route,
+    or None when the line is missing or malformed. The legacy line
+    "Discord=X, YouTube=Y." written before the TCP/Voice split applies X to
+    both Discord routes. Lines without Telegram predate it: "unmanaged".
     """
     match = re.search(r"^# Active routes: (.+)\.$", text, re.MULTILINE)
     if not match:
@@ -142,20 +144,24 @@ def parse_active_routes(text: str) -> dict[str, str] | None:
     values = {}
     for pair in match.group(1).split(", "):
         key, separator, value = pair.partition("=")
-        if not separator or value not in ROUTE_VALUES:
+        allowed = TELEGRAM_ROUTE_VALUES if key == "Telegram" else ROUTE_VALUES
+        if not separator or value not in allowed:
             return None
         values[key] = value
+    telegram = values.pop("Telegram", "unmanaged")
     if set(values) == {"DiscordTCP", "DiscordVoice", "YouTube"}:
         return {
             "discord-tcp": values["DiscordTCP"],
             "discord-voice": values["DiscordVoice"],
             "youtube": values["YouTube"],
+            "telegram": telegram,
         }
     if set(values) == {"Discord", "YouTube"}:
         return {
             "discord-tcp": values["Discord"],
             "discord-voice": values["Discord"],
             "youtube": values["YouTube"],
+            "telegram": telegram,
         }
     return None
 

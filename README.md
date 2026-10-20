@@ -56,7 +56,7 @@ sh apply-discord-nfqws2.sh --show-snapshots
 ```
 
 В `--status` маршруты видны по отдельности: `discord_tcp_route=`,
-`discord_voice_route=` и `youtube_route=`. Прежний `discord_route=` сохранён:
+`discord_voice_route=`, `youtube_route=` и `telegram_route=`. Прежний `discord_route=` сохранён:
 он равен общему значению или `mixed`, если TCP и Voice различаются.
 Настройки Discord UDP видны как `udp_strategy=flowseal|legacy` и
 `udp_range=narrow|wide`.
@@ -92,6 +92,15 @@ sh set-service-route.sh discord-voice vpn    --core auto --wan-interface eth3 --
 sh set-service-route.sh youtube direct --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh youtube zapret --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-router
+```
+
+Telegram — четвёртый сервис, по умолчанию не управляется (`unmanaged`).
+Включается так же, без настройки клиентов; подробности и ограничения — в
+[docs/TELEGRAM.md](docs/TELEGRAM.md):
+
+```sh
+sh set-service-route.sh telegram zapret    --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh telegram unmanaged --core auto --wan-interface eth3 --yes-router
 ```
 
 `discord` вместо `discord-tcp`/`discord-voice` переключает оба маршрута
@@ -265,7 +274,7 @@ LAN-соединения при перезапуске Xray не теряет р
 
 Для полного apply панель показывает этапы, сохраняет постоянную историю по
 дате и позволяет откатиться к snapshot до выбранной операции. История и
-проверка после apply показывают все три маршрута. После успеха
+проверка после apply показывают все маршруты, включая Telegram. После успеха
 она проверяет процессы/конфиги; браузерные HTTP/TLS-пробы запускаются отдельно
 во вкладке «Диагностика». QUIC и
 Discord Voice остаются ручными проверками. Импортированные профили также

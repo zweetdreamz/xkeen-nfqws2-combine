@@ -1,4 +1,4 @@
-# Стратегии Discord и YouTube
+# Стратегии Discord, YouTube и Telegram
 
 Проект использует идеи
 [`Flowseal/zapret-discord-youtube`](https://github.com/Flowseal/zapret-discord-youtube),
@@ -188,3 +188,10 @@ Voice out-range: <n2, <n3, <n4
 - nfqws2 видит WAN `POSTROUTING`;
 - hardware offload не обходит нужный Netfilter-путь;
 - при IPv6 существует согласованный рабочий WAN route.
+
+## Telegram
+
+Профили Telegram включаются только в режиме `zapret` и описаны в
+[TELEGRAM.md](TELEGRAM.md): TLS-профиль сайта/CDN повторяет TCP-профиль
+YouTube, MTProto-профиль (`--filter-l7=mtproto --payload=mtproto_initial`
+по ipset сетей Telegram) — непроверенная отправная точка.

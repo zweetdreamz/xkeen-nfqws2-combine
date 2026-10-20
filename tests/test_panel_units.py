@@ -130,6 +130,7 @@ class ParsingHelpersTests(PanelTestCase):
         text = (
             "discord_route=zapret\n"
             "youtube_route=vless\n"
+            "telegram_route=unmanaged\n"
             "xkeen_runtime=running\n"
             "nfqws_runtime=stopped\n"
             "script_version=6.4=beta\n"
@@ -142,6 +143,7 @@ class ParsingHelpersTests(PanelTestCase):
             {
                 "discord_route": "zapret",
                 "youtube_route": "vless",
+                "telegram_route": "unmanaged",
                 "xkeen_runtime": "running",
                 "nfqws_runtime": "stopped",
                 "script_version": "6.4=beta",
@@ -268,13 +270,18 @@ class ParsingHelpersTests(PanelTestCase):
 
     def test_validate_route(self):
         validate = self.ns["validate_route"]
-        for service in ("discord-tcp", "discord-voice", "discord", "youtube"):
+        for service in ("discord-tcp", "discord-voice", "discord", "youtube", "telegram"):
             for mode in ("direct", "zapret", "vpn"):
                 self.assertEqual(validate(service, mode), (service, mode))
+        self.assertEqual(validate("telegram", "unmanaged"), ("telegram", "unmanaged"))
         with self.assertRaisesRegex(ValueError, "неподдерживаемый сервис"):
             validate("discord-video", "direct")
         with self.assertRaisesRegex(ValueError, "неподдерживаемый маршрут"):
             validate("youtube", "vless")
+        for service in ("discord-tcp", "discord-voice", "discord", "youtube"):
+            with self.subTest(service=service):
+                with self.assertRaisesRegex(ValueError, "неподдерживаемый маршрут"):
+                    validate(service, "unmanaged")
 
     def test_history_path(self):
         self.patch(ROUTE_HISTORY_DIR=self.root / "history")
@@ -691,7 +698,12 @@ class FileHelperTests(PanelTestCase):
     def test_current_routes_fast(self):
         config = self.root / "nfqws2.conf"
         self.patch(NFQWS_CONFIG=config)
-        unknown = {"discord-tcp": "unknown", "discord-voice": "unknown", "youtube": "unknown"}
+        unknown = {
+            "discord-tcp": "unknown",
+            "discord-voice": "unknown",
+            "youtube": "unknown",
+            "telegram": "unknown",
+        }
         self.assertEqual(self.ns["current_routes_fast"](), unknown)
         config.write_text("# nothing here\n", encoding="utf-8")
         self.assertEqual(self.ns["current_routes_fast"](), unknown)
@@ -703,7 +715,7 @@ class FileHelperTests(PanelTestCase):
         )
         self.assertEqual(
             self.ns["current_routes_fast"](),
-            {"discord-tcp": "zapret", "discord-voice": "zapret", "youtube": "vless"},
+            {"discord-tcp": "zapret", "discord-voice": "zapret", "youtube": "vless", "telegram": "unmanaged"},
         )
         config.write_text(
             "# Active routes: DiscordTCP=direct, DiscordVoice=zapret, YouTube=vless.\n",
@@ -711,8 +723,24 @@ class FileHelperTests(PanelTestCase):
         )
         self.assertEqual(
             self.ns["current_routes_fast"](),
-            {"discord-tcp": "direct", "discord-voice": "zapret", "youtube": "vless"},
+            {"discord-tcp": "direct", "discord-voice": "zapret", "youtube": "vless", "telegram": "unmanaged"},
         )
+        config.write_text(
+            "# Active routes: DiscordTCP=direct, DiscordVoice=zapret, YouTube=vless, Telegram=zapret.\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.ns["current_routes_fast"]()["telegram"], "zapret")
+        # Only Telegram may be unmanaged.
+        config.write_text(
+            "# Active routes: DiscordTCP=unmanaged, DiscordVoice=zapret, YouTube=vless, Telegram=direct.\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.ns["current_routes_fast"](), unknown)
+        config.write_text(
+            "# Active routes: DiscordTCP=direct, DiscordVoice=zapret, YouTube=vless, Telegram=proxy.\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.ns["current_routes_fast"](), unknown)
         config.write_text("# Active routes: DiscordTCP=direct, YouTube=vless.\n", encoding="utf-8")
         self.assertEqual(self.ns["current_routes_fast"](), unknown)
         config.write_text("  # Active routes: Discord=direct, YouTube=direct.\n", encoding="utf-8")
@@ -1189,7 +1217,7 @@ class RouteJobTests(PanelTestCase):
                 self.assertEqual(state["snapshot"], str(snapshot))
                 self.assertEqual(
                     state["after_routes"],
-                    {"discord-tcp": "vless", "discord-voice": "vless", "youtube": "direct"},
+                    {"discord-tcp": "vless", "discord-voice": "vless", "youtube": "direct", "telegram": "unmanaged"},
                 )
                 self.assertIn("started_utc", state)
                 history = self.ns["read_history_item"](self.JOB_ID)
@@ -1810,11 +1838,11 @@ class ConfigHealthTests(PanelTestCase):
         self.assertTrue(health["all_ok"], health)
         self.assertEqual(
             health["routes"],
-            {"discord-tcp": "zapret", "discord-voice": "zapret", "youtube": "direct"},
+            {"discord-tcp": "zapret", "discord-voice": "zapret", "youtube": "direct", "telegram": "unmanaged"},
         )
         self.assertEqual(
             [check["name"] for check in health["checks"]],
-            ["Xray", "nfqws2", "YouTube route", "Discord TCP route", "Discord Voice route"],
+            ["Xray", "nfqws2", "YouTube route", "Discord TCP route", "Discord Voice route", "Telegram route"],
         )
 
     def test_discord_voice_route_is_checked_separately(self):
@@ -1833,6 +1861,39 @@ class ConfigHealthTests(PanelTestCase):
         self.assertFalse(checks["Discord Voice route"]["ok"])
         self.assertEqual(checks["Discord Voice route"]["detail"], "route=zapret, nfqws=off")
 
+    def telegram_checks(self, route, rules, profile):
+        self.ns["NFQWS_CONFIG"].write_text(
+            f"# Active routes: DiscordTCP=vless, DiscordVoice=vless, YouTube=vless, Telegram={route}.\n"
+            + ("--hostlist=/opt/etc/nfqws2/lists/telegram.list\n" if profile else ""),
+            encoding="utf-8",
+        )
+        self.ns["XRAY_ROUTING"].write_text(json.dumps({"routing": {"rules": rules}}), encoding="utf-8")
+        with mock.patch.dict(self.ns, {"run_command": lambda *_a, **_k: {"ok": True, "code": 0, "output": "1"}}):
+            return {check["name"]: check for check in self.ns["config_health"]()["checks"]}["Telegram route"]
+
+    def test_telegram_route_is_checked(self):
+        managed = lambda outbound: [  # noqa: E731
+            {"ruleTag": "kdn-telegram", "outboundTag": outbound, "domain": ["ext:geosite_v2fly.dat:telegram"]},
+            {"ruleTag": "kdn-telegram", "outboundTag": outbound, "ip": ["ext:geoip_v2fly.dat:telegram"]},
+        ]
+        user_rule = {"outboundTag": "direct", "domain": ["domain:t.me"]}
+        cases = (
+            ("unmanaged", [user_rule], False, True),
+            ("unmanaged", managed("telegram-direct"), False, False),
+            ("unmanaged", [], True, False),
+            ("direct", managed("telegram-direct"), False, True),
+            ("direct", managed("telegram-direct"), True, False),
+            ("zapret", managed("telegram-direct"), True, True),
+            ("zapret", managed("telegram-direct"), False, False),
+            ("zapret", managed("telegram-direct")[:1], True, False),
+            ("vless", managed("vless-reality"), False, True),
+            ("vless", managed("telegram-direct"), False, False),
+            ("direct", managed("vless-reality"), False, False),
+        )
+        for route, rules, profile, expected in cases:
+            with self.subTest(route=route, rules=len(rules), profile=profile):
+                self.assertEqual(self.telegram_checks(route, rules, profile)["ok"], expected)
+
     def test_missing_files_and_processes_fail(self):
         with mock.patch.dict(self.ns, {"run_command": lambda *_a, **_k: {"ok": False, "code": 1, "output": ""}}):
             health = self.ns["config_health"]()
@@ -1848,6 +1909,7 @@ class ConfigHealthTests(PanelTestCase):
                 "YouTube route",
                 "Discord TCP route",
                 "Discord Voice route",
+                "Telegram route",
             ],
         )
         self.assertFalse(any(check["ok"] for check in checks.values()))
@@ -2108,7 +2170,7 @@ class HttpLayerTests(unittest.TestCase):
     def test_route_post_with_unknown_mode_or_service_is_404(self):
         starter = mock.Mock(side_effect=AssertionError("must not start"))
         with mock.patch.dict(self.ns, {"start_route_job": starter}):
-            for path in ("/api/route/discord/custom", "/api/route/discord/vless", "/api/route/telegram/vpn"):
+            for path in ("/api/route/discord/custom", "/api/route/discord/vless", "/api/route/whatsapp/vpn"):
                 with self.subTest(path=path):
                     response, data = self.post(path)
                     self.assertJsonError(response, data, 404, "unknown action")

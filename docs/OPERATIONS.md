@@ -24,7 +24,7 @@ sh scripts/diagnose-xkeen-router.sh
 OpenAI и другой трафик Cloudflare/Google.
 
 `--status` показывает маршруты по отдельности: `discord_tcp_route=`,
-`discord_voice_route=`, `youtube_route=`. `discord_route=` сохранён для
+`discord_voice_route=`, `youtube_route=`, `telegram_route=`. `discord_route=` сохранён для
 совместимости и равен `mixed`, если маршруты TCP и Voice различаются.
 `udp_strategy=flowseal|legacy` и `udp_range=narrow|wide` — записанные
 настройки Discord UDP (`unknown`, если `nfqws2.conf` нет).
@@ -84,6 +84,9 @@ sh set-service-route.sh discord zapret --core auto --wan-interface eth3 --yes-ro
 sh set-service-route.sh youtube direct --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh youtube zapret --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-router
+
+sh set-service-route.sh telegram zapret    --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh telegram unmanaged --core auto --wan-interface eth3 --yes-router
 ```
 
 `direct` и `zapret` используют один service-direct маршрут, но в `direct`

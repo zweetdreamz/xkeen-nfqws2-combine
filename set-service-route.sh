@@ -11,9 +11,12 @@ Usage:
   sh set-service-route.sh discord-voice direct|zapret|vpn --yes-router [apply options]
   sh set-service-route.sh discord       direct|zapret|vpn --yes-router [apply options]
   sh set-service-route.sh youtube       direct|zapret|vpn --yes-router [apply options]
+  sh set-service-route.sh telegram      direct|zapret|vpn|unmanaged --yes-router [apply options]
 
 discord-tcp covers Discord domains (TCP/TLS and QUIC), discord-voice covers
-Discord Voice/STUN UDP ports, and discord switches both at once.
+Discord Voice/STUN UDP ports, and discord switches both at once. telegram
+covers Telegram domains and DC networks; "unmanaged" removes the project's
+Telegram rules and leaves Telegram to the user's own routing.
 
 The routes of the other services and the Discord UDP settings (--wide-udp,
 --udp-strategy) are read from the current managed state and preserved; pass
@@ -36,9 +39,9 @@ requested_mode="$2"
 shift 2
 
 case "$service" in
-  discord|discord-tcp|discord-voice|youtube) ;;
+  discord|discord-tcp|discord-voice|youtube|telegram) ;;
   *)
-    echo "ERROR: service must be discord-tcp, discord-voice, discord or youtube." >&2
+    echo "ERROR: service must be discord-tcp, discord-voice, discord, youtube or telegram." >&2
     usage >&2
     exit 2
     ;;
@@ -47,6 +50,13 @@ esac
 case "$requested_mode" in
   direct|zapret) route_mode="$requested_mode" ;;
   vpn|vless) route_mode="vless" ;;
+  unmanaged|off)
+    [ "$service" = "telegram" ] || {
+      echo "ERROR: only telegram can be unmanaged." >&2
+      exit 2
+    }
+    route_mode="unmanaged"
+    ;;
   *)
     echo "ERROR: mode must be direct, zapret or vpn." >&2
     usage >&2
@@ -74,14 +84,20 @@ require_route() {
 current_discord_tcp="$(status_value discord_tcp_route)"
 current_discord_voice="$(status_value discord_voice_route)"
 current_youtube="$(status_value youtube_route)"
+current_telegram="$(status_value telegram_route)"
 
 require_route "Discord TCP" "$current_discord_tcp"
 require_route "Discord Voice" "$current_discord_voice"
 require_route "YouTube" "$current_youtube"
+case "$current_telegram" in
+  direct|zapret|vless|unmanaged) ;;
+  *) current_telegram="unmanaged" ;;
+esac
 
 next_discord_tcp="$current_discord_tcp"
 next_discord_voice="$current_discord_voice"
 next_youtube="$current_youtube"
+next_telegram="$current_telegram"
 case "$service" in
   discord)
     next_discord_tcp="$route_mode"
@@ -90,6 +106,7 @@ case "$service" in
   discord-tcp) next_discord_tcp="$route_mode" ;;
   discord-voice) next_discord_voice="$route_mode" ;;
   youtube) next_youtube="$route_mode" ;;
+  telegram) next_telegram="$route_mode" ;;
 esac
 
 # Keep the current Discord UDP settings unless the caller overrides them:
@@ -103,10 +120,11 @@ case "$current_udp_strategy" in
   flowseal|legacy) set -- --udp-strategy "$current_udp_strategy" "$@" ;;
 esac
 
-echo "Service routes: Discord TCP=$next_discord_tcp, Discord Voice=$next_discord_voice, YouTube=$next_youtube"
+echo "Service routes: Discord TCP=$next_discord_tcp, Discord Voice=$next_discord_voice, YouTube=$next_youtube, Telegram=$next_telegram"
 exec sh "$ENGINE" \
   --apply \
   --discord-tcp-route "$next_discord_tcp" \
   --discord-voice-route "$next_discord_voice" \
   --youtube-route "$next_youtube" \
+  --telegram-route "$next_telegram" \
   "$@"

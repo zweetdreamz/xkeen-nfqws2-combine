@@ -45,6 +45,8 @@ NFQWS_INIT="$(root_path /opt/etc/init.d/S51nfqws2)"
 NFQWS_CONF="$(root_path /opt/etc/nfqws2/nfqws2.conf)"
 NFQWS_LIST="$(root_path /opt/etc/nfqws2/lists/user.list)"
 NFQWS_YOUTUBE_LIST="$(root_path /opt/etc/nfqws2/lists/youtube.list)"
+NFQWS_TELEGRAM_LIST="$(root_path /opt/etc/nfqws2/lists/telegram.list)"
+NFQWS_TELEGRAM_IPSET="$(root_path /opt/etc/nfqws2/lists/telegram-ip.list)"
 NFQWS_DISCORD_UDP_BLOB="$(root_path /opt/etc/nfqws2/blobs/discord_udp.bin)"
 NFQWS_YOUTUBE_TLS_BLOB="$(root_path /opt/etc/nfqws2/blobs/tls_clienthello.bin)"
 NFQWS_YOUTUBE_QUIC_BLOB="$(root_path /opt/etc/nfqws2/blobs/quic_initial.bin)"
@@ -88,6 +90,9 @@ UDP_STRATEGY="flowseal"
 DISCORD_TCP_ROUTE_MODE="zapret"
 DISCORD_VOICE_ROUTE_MODE="zapret"
 YOUTUBE_ROUTE_MODE="vless"
+# Telegram is opt-in: "unmanaged" leaves its traffic to the user's own rules.
+# Empty means "keep the route recorded in nfqws2.conf" (resolved below).
+TELEGRAM_ROUTE_MODE=""
 DISCORD_TCP_ROUTE_EXPLICIT=0
 DISCORD_VOICE_ROUTE_EXPLICIT=0
 YOUTUBE_ROUTE_EXPLICIT=0
@@ -147,6 +152,10 @@ Routing options:
   --discord-route direct|zapret|vless
                              Shorthand that sets both Discord routes.
   --youtube-route direct|zapret|vless
+  --telegram-route direct|zapret|vless|unmanaged
+                             Telegram domains and DC networks. Without the
+                             option the recorded route is kept (initially
+                             unmanaged: the project does not touch Telegram).
   --proxy-outbound TAG       Xray proxy outbound used for vless modes;
                              normally detected from existing YouTube rules
   --core auto|xray|mihomo
@@ -234,23 +243,93 @@ ytstatic.l.google.com
 EOF
 }
 
-routes_summary() {
-  printf 'Discord TCP=%s, Discord Voice=%s, YouTube=%s' \
-    "$DISCORD_TCP_ROUTE_MODE" "$DISCORD_VOICE_ROUTE_MODE" "$YOUTUBE_ROUTE_MODE"
+# Telegram domains from ext:geosite_v2fly.dat:telegram (config/telegram-user.list).
+telegram_domains() {
+  cat <<'EOF'
+cdn-telegram.org
+comments.app
+contest.com
+fragment.com
+graph.org
+quiz.directory
+t.me
+tdesktop.com
+telega.one
+telegra.ph
+telegram-cdn.org
+telegram.dog
+telegram.me
+telegram.org
+telegram.space
+telesco.pe
+tg.dev
+ton.org
+toncenter.com
+tx.me
+usercontent.dev
+EOF
 }
 
-# True when at least one of the three managed routes equals $1.
+# Telegram networks from ext:geoip_v2fly.dat:telegram (config/telegram-ip.list).
+telegram_networks() {
+  cat <<'EOF'
+91.105.192.0/23
+91.108.4.0/22
+91.108.8.0/21
+91.108.16.0/21
+91.108.56.0/22
+95.161.64.0/20
+149.154.160.0/20
+185.76.151.0/24
+2001:67c:4e8::/48
+2001:b28:f23c::/47
+2001:b28:f23f::/48
+2a0a:f280::/32
+EOF
+}
+
+# Telegram route recorded in nfqws2.conf, or "unmanaged".
+recorded_telegram_route() {
+  if [ -f "$NFQWS_CONF" ]; then
+    awk '
+      $1 == "#" && $2 == "Active" && $3 == "routes:" {
+        for (field = 4; field <= NF; field++) {
+          pair = $field
+          sub(/[,.]$/, "", pair)
+          split(pair, kv, "=")
+          if (kv[1] == "Telegram") value = kv[2]
+        }
+      }
+      END {
+        if (value ~ /^(direct|zapret|vless|unmanaged)$/) print value
+        else print "unmanaged"
+      }
+    ' "$NFQWS_CONF"
+  else
+    echo unmanaged
+  fi
+}
+
+routes_summary() {
+  printf 'Discord TCP=%s, Discord Voice=%s, YouTube=%s, Telegram=%s' \
+    "$DISCORD_TCP_ROUTE_MODE" "$DISCORD_VOICE_ROUTE_MODE" "$YOUTUBE_ROUTE_MODE" \
+    "$TELEGRAM_ROUTE_MODE"
+}
+
+# True when at least one managed route equals $1.
 any_route_is() {
   [ "$DISCORD_TCP_ROUTE_MODE" = "$1" ] ||
     [ "$DISCORD_VOICE_ROUTE_MODE" = "$1" ] ||
-    [ "$YOUTUBE_ROUTE_MODE" = "$1" ]
+    [ "$YOUTUBE_ROUTE_MODE" = "$1" ] ||
+    [ "$TELEGRAM_ROUTE_MODE" = "$1" ]
 }
 
-# True when all three managed routes equal $1.
-all_routes_are() {
-  [ "$DISCORD_TCP_ROUTE_MODE" = "$1" ] &&
-    [ "$DISCORD_VOICE_ROUTE_MODE" = "$1" ] &&
-    [ "$YOUTUBE_ROUTE_MODE" = "$1" ]
+# XKeen must proxy these ports for the managed services to reach Xray.
+set_xkeen_required_ports() {
+  XKEEN_REQUIRED_PORTS="80,443,2053,2083,2087,2096,8443,3478:3481,5349,19294:19344,50000:$VOICE_HIGH"
+  if [ "$TELEGRAM_ROUTE_MODE" != "unmanaged" ]; then
+    XKEEN_REQUIRED_PORTS="$XKEEN_REQUIRED_PORTS,5222"
+  fi
 }
 
 print_plan() {
@@ -415,6 +494,14 @@ while [ "$#" -gt 0 ]; do
       YOUTUBE_ROUTE_MODE="$1"
       YOUTUBE_ROUTE_EXPLICIT=1
       ;;
+    --telegram-route)
+      shift
+      [ "$#" -gt 0 ] || {
+        echo "ERROR: --telegram-route requires direct, zapret, vless or unmanaged." >&2
+        exit 2
+      }
+      TELEGRAM_ROUTE_MODE="$1"
+      ;;
     --proxy-outbound)
       shift
       [ "$#" -gt 0 ] || {
@@ -456,6 +543,15 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+[ -n "$TELEGRAM_ROUTE_MODE" ] || TELEGRAM_ROUTE_MODE="$(recorded_telegram_route)"
+case "$TELEGRAM_ROUTE_MODE" in
+  direct|zapret|vless|unmanaged) ;;
+  *)
+    echo "ERROR: unsupported Telegram route: $TELEGRAM_ROUTE_MODE" >&2
+    exit 2
+    ;;
+esac
 
 if [ "$STANDALONE_ZAPRET" -eq 1 ]; then
   [ "$DISCORD_TCP_ROUTE_EXPLICIT" -eq 1 ] || DISCORD_TCP_ROUTE_MODE="zapret"
@@ -530,8 +626,8 @@ esac
 
 if [ "$WIDE_UDP" -eq 1 ]; then
   VOICE_HIGH="65535"
-  XKEEN_REQUIRED_PORTS="80,443,2053,2083,2087,2096,8443,3478:3481,5349,19294:19344,50000:65535"
 fi
+set_xkeen_required_ports
 
 if [ "$MODE" = "help" ]; then
   usage
@@ -1427,11 +1523,12 @@ preflight() {
         if [ ! -d "$XRAY_CONFIG_DIR" ]; then
           echo "ERROR: Xray config directory not found: $XRAY_CONFIG_DIR" >&2
           preflight_errors=$((preflight_errors + 1))
-        elif ! all_routes_are vless &&
+        elif { any_route_is direct || any_route_is zapret; } &&
              ! resolve_xray_direct_mark; then
           preflight_errors=$((preflight_errors + 1))
         elif { [ "$DISCORD_TCP_ROUTE_MODE" = "vless" ] ||
-               [ "$YOUTUBE_ROUTE_MODE" = "vless" ]; } &&
+               [ "$YOUTUBE_ROUTE_MODE" = "vless" ] ||
+               [ "$TELEGRAM_ROUTE_MODE" = "vless" ]; } &&
              ! resolve_xray_proxy_outbound; then
           preflight_errors=$((preflight_errors + 1))
         elif ! xkeen -xtest >/dev/null 2>&1; then
@@ -2236,17 +2333,17 @@ load_current_nfqws_context() {
     esac
   done
 
+  TELEGRAM_ROUTE_MODE="$(recorded_telegram_route)"
   recorded_udp_settings
   UDP_STRATEGY="$RECORDED_UDP_STRATEGY"
   if [ "$RECORDED_UDP_RANGE" = "wide" ]; then
     WIDE_UDP=1
     VOICE_HIGH=65535
-    XKEEN_REQUIRED_PORTS="80,443,2053,2083,2087,2096,8443,3478:3481,5349,19294:19344,50000:65535"
   else
     WIDE_UDP=0
     VOICE_HIGH=50100
-    XKEEN_REQUIRED_PORTS="80,443,2053,2083,2087,2096,8443,3478:3481,5349,19294:19344,50000:50100"
   fi
+  set_xkeen_required_ports
 }
 
 # Sets RECORDED_UDP_STRATEGY (flowseal|legacy) and RECORDED_UDP_RANGE
@@ -2363,6 +2460,26 @@ status_report() {
   fi
   echo "discord_tcp_route=$reported_discord_tcp_route"
   echo "discord_voice_route=$reported_discord_voice_route"
+  reported_telegram_route="$(recorded_telegram_route)"
+  if [ "$DETECTED_CORE" = "xray" ] && have jq &&
+     telegram_routing="$(find_xray_routing_file 2>/dev/null)"; then
+    telegram_outbound="$(
+      strict_json_stream "$telegram_routing" |
+        jq -r '[.routing.rules[]? | select(.ruleTag? == "kdn-telegram") | .outboundTag]
+               | if length > 0 then .[0] else "" end' 2>/dev/null || true
+    )"
+    case "$telegram_outbound" in
+      "") reported_telegram_route="unmanaged" ;;
+      telegram-direct)
+        case "$reported_telegram_route" in
+          direct|zapret) ;;
+          *) reported_telegram_route="direct" ;;
+        esac
+        ;;
+      *) reported_telegram_route="vless" ;;
+    esac
+  fi
+  echo "telegram_route=$reported_telegram_route"
   if [ -f "$NFQWS_CONF" ]; then
     recorded_udp_settings
     echo "udp_strategy=$RECORDED_UDP_STRATEGY"
@@ -2786,6 +2903,7 @@ patch_xray() {
     --arg discord_tcp_mode "$DISCORD_TCP_ROUTE_MODE" \
     --arg discord_voice_mode "$DISCORD_VOICE_ROUTE_MODE" \
     --arg youtube_mode "$YOUTUBE_ROUTE_MODE" \
+    --arg telegram_mode "$TELEGRAM_ROUTE_MODE" \
     --arg proxy_outbound "$PROXY_OUTBOUND_EFFECTIVE" \
     --arg voice_ports "3478-3481,5349,19294-19344,50000-$VOICE_HIGH" '
     def is_discord_selector:
@@ -2847,7 +2965,8 @@ patch_xray() {
         "ext:geosite_v2fly.dat:youtube"
       ] | unique) as $youtube_domains
     | ($original_rules | map(
-        select((managed_discord_rule or managed_youtube_rule) | not)
+        select(.ruleTag? != "kdn-telegram")
+        | select((managed_discord_rule or managed_youtube_rule) | not)
         | ((.domain | type) == "array" and (.domain | length) > 0) as $had_domain
         | ((.ip | type) == "array" and (.ip | length) > 0) as $had_ip
         | if (.domain | type) == "array" then
@@ -2897,6 +3016,29 @@ patch_xray() {
     | (if $youtube_mode != "vless" then "youtube-direct"
        else $proxy_outbound
        end) as $youtube_outbound
+    # Telegram rules carry ruleTag "kdn-telegram": only they are replaced or
+    # removed, other Telegram rules of the user stay (ours come first).
+    | (if $telegram_mode == "unmanaged" then []
+       else
+         (if $telegram_mode == "vless" then $proxy_outbound
+          else "telegram-direct" end) as $telegram_outbound
+         | [
+             {
+               "type": "field",
+               "ruleTag": "kdn-telegram",
+               "inboundTag": ["redirect", "tproxy"],
+               "outboundTag": $telegram_outbound,
+               "domain": ["ext:geosite_v2fly.dat:telegram"]
+             },
+             {
+               "type": "field",
+               "ruleTag": "kdn-telegram",
+               "inboundTag": ["redirect", "tproxy"],
+               "outboundTag": $telegram_outbound,
+               "ip": ["ext:geoip_v2fly.dat:telegram"]
+             }
+           ]
+       end) as $telegram_rules
     | .routing.rules = (
         $discord_rules
         + [
@@ -2907,6 +3049,7 @@ patch_xray() {
             "domain": $youtube_domains
           }
         ]
+        + $telegram_rules
         + $remaining_rules
       )
   ' "$routing_strict" > "$routing_patched"
@@ -2926,6 +3069,12 @@ patch_xray() {
   else
     rm -f "$youtube_outbound_file"
   fi
+
+  telegram_outbound_file="$XRAY_CONFIG_DIR/04_telegram_nfqws2_outbound.json"
+  case "$TELEGRAM_ROUTE_MODE" in
+    direct|zapret) write_xray_direct_outbound "$telegram_outbound_file" "telegram-direct" ;;
+    *) rm -f "$telegram_outbound_file" ;;
+  esac
 
   patch_xray_inbounds
   harden_xray_config_permissions
@@ -2947,6 +3096,9 @@ make_mihomo_rules_json() {
     if [ "$YOUTUBE_ROUTE_MODE" != "vless" ]; then
       youtube_domains | awk '{ print "DOMAIN-SUFFIX," $0 ",DIRECT" }'
     fi
+    case "$TELEGRAM_ROUTE_MODE" in
+      direct|zapret) telegram_mihomo_rules ;;
+    esac
   } | jq -Rsc 'split("\n") | map(select(length > 0))' > "$mihomo_rules_file"
 }
 
@@ -2960,7 +3112,16 @@ make_mihomo_removal_rules_json() {
     echo "AND,((NETWORK,UDP),(DST-PORT,50000-50100)),DIRECT"
     echo "AND,((NETWORK,UDP),(DST-PORT,50000-65535)),DIRECT"
     youtube_domains | awk '{ print "DOMAIN-SUFFIX," $0 ",DIRECT" }'
+    telegram_mihomo_rules
   } | jq -Rsc 'split("\n") | map(select(length > 0))' > "$mihomo_removal_file"
+}
+
+telegram_mihomo_rules() {
+  telegram_domains | awk '{ print "DOMAIN-SUFFIX," $0 ",DIRECT" }'
+  telegram_networks | awk '{
+    if (index($0, ":")) print "IP-CIDR6," $0 ",DIRECT,no-resolve"
+    else print "IP-CIDR," $0 ",DIRECT,no-resolve"
+  }'
 }
 
 patch_mihomo() {
@@ -3016,8 +3177,11 @@ patch_xkeen_ports_if_restricted() {
 5349
 19294:19344
 50000:$VOICE_HIGH
-# END keenetic-discord-nfqws2
 EOF
+  if [ "$TELEGRAM_ROUTE_MODE" != "unmanaged" ]; then
+    echo "5222" >> "$port_tmp"
+  fi
+  echo "# END keenetic-discord-nfqws2" >> "$port_tmp"
   replace_preserving_mode "$XKEEN_PORT_PROXYING" "$port_tmp"
 }
 
@@ -3100,6 +3264,13 @@ patch_nfqws() {
   atomic_replace_file \
     "$NFQWS_YOUTUBE_LIST" "$youtube_list_tmp" "$youtube_list_mode"
 
+  telegram_list_tmp="$(make_tmp)"
+  telegram_domains > "$telegram_list_tmp"
+  atomic_replace_file "$NFQWS_TELEGRAM_LIST" "$telegram_list_tmp" 0644
+  telegram_ipset_tmp="$(make_tmp)"
+  telegram_networks > "$telegram_ipset_tmp"
+  atomic_replace_file "$NFQWS_TELEGRAM_IPSET" "$telegram_ipset_tmp" 0644
+
   discord_tcp_import=""
   discord_voice_import=""
   youtube_import=""
@@ -3132,8 +3303,18 @@ patch_nfqws() {
     selected_tcp_ports="443"
   fi
 
+  base_tcp_filter="$selected_tcp_ports"
+  if [ "$TELEGRAM_ROUTE_MODE" = "zapret" ]; then
+    # MTProto also uses 80 and 5222; only the netfilter port list grows.
+    case ",$selected_tcp_ports," in
+      *,80,*) ;;
+      *) selected_tcp_ports="80,$selected_tcp_ports" ;;
+    esac
+    selected_tcp_ports="$selected_tcp_ports,5222"
+  fi
+
   if grep -q '^NFQWS_ARGS="--filter-tcp=' "$nfqws_tmp"; then
-    sed "s/^NFQWS_ARGS=\"--filter-tcp=[^ ]*/NFQWS_ARGS=\"--filter-tcp=$selected_tcp_ports/" \
+    sed "s/^NFQWS_ARGS=\"--filter-tcp=[^ ]*/NFQWS_ARGS=\"--filter-tcp=$base_tcp_filter/" \
       "$nfqws_tmp" > "${nfqws_tmp}.sed"
     mv "${nfqws_tmp}.sed" "$nfqws_tmp"
   else
@@ -3218,6 +3399,31 @@ NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
     fi
   fi
 
+  telegram_custom_append=""
+  if [ "$TELEGRAM_ROUTE_MODE" = "zapret" ]; then
+    # Web/CDN by hostlist (TLS) and MTProto to the Telegram DC networks.
+    # The MTProto strategy is a starting point; verify it in the app.
+    telegram_custom_append='if [ -n "$NFQWS_ARGS_CUSTOM" ]; then
+  NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
+--new"
+fi
+NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
+--filter-tcp=443 --filter-l7=tls
+--hostlist=/opt/etc/nfqws2/lists/telegram.list
+--out-range=-d10
+--payload=tls_client_hello
+--lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000
+--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up
+--new
+--filter-tcp=80,443,5222
+--ipset=/opt/etc/nfqws2/lists/telegram-ip.list
+--filter-l7=mtproto
+--out-range=-d10
+--payload=mtproto_initial
+--lua-desync=fake:blob=tls_clienthello:repeats=6
+--lua-desync=multisplit:pos=1"'
+  fi
+
   discord_tcp_profile_assignment=""
   nfqws_extra_args='$MODE_LIST'
   if [ -n "$discord_tcp_import" ]; then
@@ -3256,7 +3462,7 @@ $udp_desync\""
 # BEGIN keenetic-discord-nfqws2
 # Generated by apply-discord-nfqws2.sh $SCRIPT_VERSION.
 # Deployment mode: $deployment_mode.
-# Active routes: DiscordTCP=$DISCORD_TCP_ROUTE_MODE, DiscordVoice=$DISCORD_VOICE_ROUTE_MODE, YouTube=$YOUTUBE_ROUTE_MODE.
+# Active routes: DiscordTCP=$DISCORD_TCP_ROUTE_MODE, DiscordVoice=$DISCORD_VOICE_ROUTE_MODE, YouTube=$YOUTUBE_ROUTE_MODE, Telegram=$TELEGRAM_ROUTE_MODE.
 # Discord UDP: strategy=$UDP_STRATEGY, range=$udp_range_label.
 # Base TCP/QUIC use user.list; YouTube has isolated custom profiles.
 $udp_base_append
@@ -3266,6 +3472,7 @@ $udp_profile_assignment
 NFQWS_EXTRA_ARGS="$nfqws_extra_args"
 NFQWS_ARGS_IPSET=""
 $youtube_custom_append
+$telegram_custom_append
 TCP_PORTS=$selected_tcp_ports
 UDP_PORTS=$selected_udp_ports
 POLICY_NAME="$UNBOUND_POLICY_NAME"

@@ -31,6 +31,7 @@ RESPONSES: dict[str, dict] = {
         "discord_tcp_route": "zapret",
         "discord_voice_route": "direct",
         "youtube_route": "vless",
+        "telegram_route": "unmanaged",
         "xkeen_runtime": "running",
     },
     "/api/imported": {"ok": True, "rollback_available": False, "profiles": []},

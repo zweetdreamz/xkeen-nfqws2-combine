@@ -172,18 +172,31 @@ if run_tool \
   echo "ERROR: standalone mode accepted a VLESS route" >&2
   exit 1
 fi
+if run_tool \
+  --preflight \
+  --standalone-zapret \
+  --telegram-route vless >/dev/null 2>&1; then
+  echo "ERROR: standalone mode accepted a VLESS Telegram route" >&2
+  exit 1
+fi
 
 run_tool \
   --apply \
   --standalone-zapret \
   --discord-route zapret \
   --youtube-route direct \
+  --telegram-route zapret \
   --wan-interface fixture-wan \
   --yes-router >/dev/null
 
 nfqws_conf="$ROOT/opt/etc/nfqws2/nfqws2.conf"
 grep -Fq '# Deployment mode: standalone-zapret.' "$nfqws_conf"
-grep -Fq '# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=direct.' "$nfqws_conf"
+grep -Fq '# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=direct, Telegram=zapret.' "$nfqws_conf"
+# Telegram Zapret needs only nfqws2: hostlist, ipset and MTProto ports.
+grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/telegram.list' "$nfqws_conf"
+grep -Fq -- '--ipset=/opt/etc/nfqws2/lists/telegram-ip.list' "$nfqws_conf"
+grep -Fqx 'TCP_PORTS=80,443,2053,2083,2087,2096,8443,5222' "$nfqws_conf"
+[ -s "$ROOT/opt/etc/nfqws2/lists/telegram-ip.list" ]
 grep -Fq 'ISP_INTERFACE="fixture-wan"' "$nfqws_conf"
 grep -Fq 'NFQWS_ARGS_UDP="--filter-udp=443,3478-3481' "$nfqws_conf"
 [ -f "$PACKAGE_STATE/nfqws2-keenetic" ]
@@ -205,6 +218,7 @@ status="$(run_tool --status)"
 printf '%s\n' "$status" | grep -Fq 'deployment_mode=standalone-zapret'
 printf '%s\n' "$status" | grep -Fq 'detected_core=standalone'
 printf '%s\n' "$status" | grep -Fq 'xkeen_runtime=unmanaged'
+printf '%s\n' "$status" | grep -Fqx 'telegram_route=zapret'
 
 # Simulate XKeen being installed later. A scoped rollback must preserve it.
 mkdir -p "$ROOT/opt/etc/xkeen" "$ROOT/opt/etc/xray/configs"

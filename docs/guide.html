@@ -183,6 +183,7 @@
       <div class="service"><span class="badge" style="background:#5865f2">D</span><div><b>Discord TCP</b><span>Домены Discord: сайт, API, CDN, QUIC</span></div></div>
       <div class="service"><span class="badge" style="background:#3ba55d">V</span><div><b>Discord Voice</b><span>Голос и STUN по UDP-портам</span></div></div>
       <div class="service"><span class="badge" style="background:#ff2d2d">Y</span><div><b>YouTube</b><span>Сайт, видео, QUIC</span></div></div>
+      <div class="service"><span class="badge" style="background:#229ed9">T</span><div><b>Telegram</b><span>Сайт, CDN, MTProto. По умолчанию не управляется</span></div></div>
     </div>
 
     <h3>Переключить один сервис</h3>
@@ -191,9 +192,12 @@
 sh set-service-route.sh discord-tcp   zapret --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh discord-voice direct --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh discord       vpn    --core auto --wan-interface eth3 --yes-router
-sh set-service-route.sh youtube       zapret --core auto --wan-interface eth3 --yes-router</code></pre></div>
+sh set-service-route.sh youtube       zapret --core auto --wan-interface eth3 --yes-router
+sh set-service-route.sh telegram      zapret --core auto --wan-interface eth3 --yes-router</code></pre></div>
     <p><code>discord</code> переключает Discord TCP и Voice вместе. Режимы
-      остальных сервисов читаются из текущего состояния и сохраняются.</p>
+      остальных сервисов читаются из текущего состояния и сохраняются.
+      Telegram включается явно; <code>telegram unmanaged</code> убирает его
+      правила. Клиенты при этом не настраиваются.</p>
 
     <h3>Быстрые preset Zapret/VPN</h3>
     <table>
@@ -240,7 +244,8 @@ iptables-save -t mangle | grep NFQUEUE</code></pre></div>
 sh apply-discord-nfqws2.sh --preflight --core auto --wan-interface eth3
 sh scripts/diagnose-xkeen-router.sh</code></pre></div>
     <p><code>--status</code> показывает <code>discord_tcp_route</code>,
-      <code>discord_voice_route</code> и <code>youtube_route</code>.</p>
+      <code>discord_voice_route</code>, <code>youtube_route</code> и
+      <code>telegram_route</code>.</p>
     <p>Discord Desktop Voice:</p>
     <div class="code"><pre><code>sh scripts/diagnose-discord-voice.sh CLIENT_IP 30</code></pre></div>
     <p>Во время окна переподключитесь к voice-каналу. Для YouTube проверяйте

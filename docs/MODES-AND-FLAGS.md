@@ -88,14 +88,17 @@ sh set-service-route.sh youtube zapret --core auto --wan-interface eth3 --yes-ro
 sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-router
 ```
 
-`SERVICE` — `discord-tcp`, `discord-voice`, `discord` (оба маршрута Discord)
-или `youtube`.
+`SERVICE` — `discord-tcp`, `discord-voice`, `discord` (оба маршрута Discord),
+`youtube` или `telegram`. Только для `telegram` есть ещё режим `unmanaged`:
+правила проекта убираются, Telegram идёт по правилам пользователя
+(см. [TELEGRAM.md](TELEGRAM.md)).
 
 | Сервис | Core route | nfqws2 |
 |---|---|---|
 | Discord TCP | доменное правило `ext:geosite_v2fly.dat:discord` | hostlist `user.list`, `NFQWS_ARGS`, `TCP_PORTS` |
 | Discord Voice | правило UDP-портов Voice/STUN | `NFQWS_ARGS_UDP`, `UDP_PORTS`, blob `discord_udp` |
 | YouTube | доменные правила YouTube | `youtube.list` в `NFQWS_ARGS_CUSTOM` |
+| Telegram | правила `ruleTag: kdn-telegram` (домены и IP v2fly) | `telegram.list` и `telegram-ip.list` в `NFQWS_ARGS_CUSTOM` |
 
 | Режим | Core route | nfqws2 сервиса |
 |---|---|---|
@@ -120,11 +123,12 @@ Wrapper сначала читает `--status` и сохраняет режим�
 --discord-voice-route direct|zapret|vless
 --discord-route direct|zapret|vless      сокращение: оба маршрута Discord
 --youtube-route direct|zapret|vless
+--telegram-route direct|zapret|vless|unmanaged   без флага: записанный маршрут
 --proxy-outbound TAG
 ```
 
-`--status` печатает `discord_tcp_route=`, `discord_voice_route=` и
-`youtube_route=`. Поле `discord_route=` оставлено для старых читателей: оно
+`--status` печатает `discord_tcp_route=`, `discord_voice_route=`,
+`youtube_route=` и `telegram_route=`. Поле `discord_route=` оставлено для старых читателей: оно
 равно общему значению или `mixed`, если маршруты TCP и Voice различаются.
 `udp_strategy=flowseal|legacy` и `udp_range=narrow|wide` показывают
 записанные настройки Discord UDP (`unknown`, если `nfqws2.conf` нет).

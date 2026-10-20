@@ -6,8 +6,13 @@ XKeen/Xray/Mihomo. Путь пакета отдельно разобран в
 
 ## Три режима сервиса
 
-Режим выбирается отдельно для трёх сервисов: Discord TCP (домены Discord,
-TCP/TLS и QUIC), Discord Voice (Voice/STUN UDP-порты) и YouTube.
+Режим выбирается отдельно для каждого сервиса: Discord TCP (домены
+Discord, TCP/TLS и QUIC), Discord Voice (Voice/STUN UDP-порты), YouTube и
+Telegram. Telegram дополнительно может быть `unmanaged`: тогда проект не
+добавляет для него правил. Правила Telegram помечены
+`"ruleTag": "kdn-telegram"`, проект меняет только их; outbound —
+`04_telegram_nfqws2_outbound.json` (`telegram-direct`), порт 5222 добавляется
+в ограниченный `port_proxying.lst`. Подробно — [TELEGRAM.md](TELEGRAM.md).
 
 ### VLESS
 

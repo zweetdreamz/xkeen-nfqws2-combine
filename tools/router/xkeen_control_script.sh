@@ -80,14 +80,17 @@ FLOWSEAL_REF = "main"
 MAX_REPORT_BYTES = 512 * 1024
 MAX_HISTORY_ITEMS = 50
 SERVICES = ("youtube", "discord-tcp", "discord-voice")
-ROUTE_SERVICES = ("discord-tcp", "discord-voice", "youtube")
+ROUTE_SERVICES = ("discord-tcp", "discord-voice", "youtube", "telegram")
 # "discord" is accepted as a shorthand that switches Discord TCP and Voice together.
 ROUTE_REQUEST_SERVICES = ROUTE_SERVICES + ("discord",)
 ROUTE_VALUES = {"direct", "zapret", "vless"}
+# Telegram is opt-in: "unmanaged" means the project leaves it to user rules.
+TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"unmanaged"}
 STATUS_ROUTE_KEYS = {
     "discord-tcp": "discord_tcp_route",
     "discord-voice": "discord_voice_route",
     "youtube": "youtube_route",
+    "telegram": "telegram_route",
 }
 # Same pattern as zapret_tuner.SOURCE_NAME_RE: one Flowseal general*.bat file.
 SOURCE_FILE_NAME = re.compile(r"general[\w ()+.,-]*\.bat", re.IGNORECASE)
@@ -168,21 +171,21 @@ button:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .start{color:var(--green)}.start:hover{background:var(--green-soft);border-color:var(--green)}
 .clear{padding:7px 12px;font-size:13px;border-color:var(--line);color:var(--muted)}.clear:hover{color:var(--text)}
 .xkeen-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.xkeen-actions button{padding:12px 16px}
-.services{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.services{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .service,.profile{border:1px solid var(--line);border-radius:14px;padding:16px;background:var(--surface-2)}
 .service-head,.profile-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px}
 .service h3,.profile h3{margin:0;font-size:16px;font-weight:680}
 .service-title{display:flex;align-items:center;gap:10px}
 .service-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;color:#fff;font-weight:800;font-size:15px}
 .service[data-service^=discord] .service-icon{background:#5865f2}.service[data-service=discord-voice] .service-icon{background:#3ba55d}
-.service-scope{color:var(--muted);font-size:12px;line-height:1.3}.service[data-service=youtube] .service-icon{background:#ff2d2d}
+.service-scope{color:var(--muted);font-size:12px;line-height:1.3}.service[data-service=youtube] .service-icon{background:#ff2d2d}.service[data-service=telegram] .service-icon{background:#229ed9}
 .current:empty{display:none}.current{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:var(--sunken);color:var(--muted);font:600 11px/1.6 var(--mono);letter-spacing:.04em}
 .service:has(.mode.active[data-mode=direct]) .current{background:color-mix(in srgb,var(--direct) 14%,transparent);color:var(--direct)}
 .service:has(.mode.active[data-mode=zapret]) .current{background:color-mix(in srgb,var(--zapret) 14%,transparent);color:var(--zapret)}
 .service:has(.mode.active[data-mode=vpn]) .current{background:color-mix(in srgb,var(--vpn) 14%,transparent);color:var(--vpn)}
-.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}
+.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(4,1fr)}
 .mode{--mode:var(--accent);padding:9px 8px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted);box-shadow:none}
-.mode[data-mode=direct]{--mode:var(--direct)}.mode[data-mode=zapret]{--mode:var(--zapret)}.mode[data-mode=vpn]{--mode:var(--vpn)}
+.mode[data-mode=direct]{--mode:var(--direct)}.mode[data-mode=zapret]{--mode:var(--zapret)}.mode[data-mode=vpn]{--mode:var(--vpn)}.mode[data-mode=unmanaged]{--mode:var(--muted)}
 .mode::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--mode);opacity:.55}
 .mode:hover{background:var(--surface);color:var(--text);border-color:transparent}
 .mode.active{background:var(--surface);color:var(--mode);border-color:color-mix(in srgb,var(--mode) 45%,transparent);box-shadow:var(--shadow)}
@@ -256,7 +259,7 @@ pre{min-height:120px;max-height:340px;overflow:auto;margin:0;padding:14px 16px;b
 .section-head .i{color:var(--accent)}
 #tunerVerification{margin:12px 0 0}
 footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
-@media(max-width:980px){.services{grid-template-columns:1fr}.service .modes{max-width:460px}}
+@media(max-width:760px){.services{grid-template-columns:1fr}.service .modes{max-width:460px}}
 @media(max-width:760px){header{align-items:flex-start;flex-direction:column;padding-top:20px}.services,.profiles,.tuner-grid,.updates-grid,.diagnostic-grid,.legend,.meta{grid-template-columns:1fr}.card{padding:18px}.profile-head{flex-wrap:wrap}}
 @media(max-width:480px){.page{width:calc(100% - 24px)}.xkeen-actions,.upload{grid-template-columns:1fr}.tabs{display:grid;grid-template-columns:1fr 1fr}.tabs .tab{justify-content:center;padding:8px 10px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
@@ -288,6 +291,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
     <article class="service" data-service="discord-tcp"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">D</span><div><h3>Discord TCP</h3><div class="service-scope">Сайт, API, CDN, QUIC</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
     <article class="service" data-service="discord-voice"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">V</span><div><h3>Discord Voice</h3><div class="service-scope">Голос и STUN по UDP</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
     <article class="service" data-service="youtube"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">Y</span><div><h3>YouTube</h3><div class="service-scope">Сайт, видео, QUIC</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
+    <article class="service" data-service="telegram"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">T</span><div><h3>Telegram</h3><div class="service-scope">Сайт, CDN и MTProto · звонки только через VPN</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button><button class="mode" data-mode="unmanaged" title="Убрать правила проекта; Telegram идёт по вашим правилам XKeen">Выкл</button></div></article>
   </div><div class="legend"><div><b>Direct</b>Напрямую через WAN, без nfqws2.</div><div><b>Zapret</b>Через WAN с обработкой nfqws2.</div><div><b>VPN</b>Через существующий VLESS outbound Xray.</div></div><div class="warning">Смена маршрута выполняет полный транзакционный apply и перезапускает службы, включая Xkeen.</div><div id="routeProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="routeStage">Подготовка</b><span id="routePercent">0%</span></div><div class="bar"><span id="routeBar"></span></div></div></section>
   <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-check"/></svg><h2>Проверка после применения</h2></div><div id="postApplyStatus" class="hint">После переключения здесь появится краткий статус служб и конфигов.</div></div><button id="openDiagnostics" class="clear">Открыть диагностику</button></div></section>
   <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-history"/></svg><h2>История и откат</h2></div><div class="hint">Для каждой смены сохраняются режимы, результат и pre-apply snapshot.</div></div><button id="refreshHistory" class="clear">Обновить</button></div><div id="history" class="history-list"><div class="empty">История пуста.</div></div></section>
@@ -352,8 +356,8 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
 <script>
 const logEl=document.getElementById("log"),dot=document.getElementById("dot"),statusText=document.getElementById("statusText");
 const controlHeaders={"X-XKeen-Control":"1","Content-Type":"application/json"};
-const label={direct:"DIRECT",zapret:"ZAPRET",vless:"VPN",vpn:"VPN",unknown:"НЕИЗВЕСТНО"};
-const serviceLabel={youtube:"YouTube",discord:"Discord",rollback:"Откат","discord-tcp":"Discord TCP","discord-voice":"Discord Voice"};
+const label={direct:"DIRECT",zapret:"ZAPRET",vless:"VPN",vpn:"VPN",unmanaged:"ВЫКЛ",unknown:"НЕИЗВЕСТНО"};
+const serviceLabel={youtube:"YouTube",discord:"Discord",telegram:"Telegram",rollback:"Откат","discord-tcp":"Discord TCP","discord-voice":"Discord Voice"};
 const activeTunerStates=new Set(["preparing","running","voice_window","awaiting_voice","cancelling"]);
 let selectedReport=null,validatedDescriptor=null,tunerPoll=null,routeWatch=null,diagnosticWatch=null;
 function stamp(){return new Date().toLocaleTimeString("ru-RU",{hour12:false})}
@@ -364,16 +368,16 @@ function modeForUi(value){return value==="vless"?"vpn":value}
 function updateService(service,value){const box=document.querySelector('[data-service="'+service+'"]');box.querySelector(".current").textContent=label[value]||value;box.querySelectorAll(".mode").forEach(b=>b.classList.toggle("active",b.dataset.mode===modeForUi(value)))}
 function fmtDate(value){if(!value)return "—";const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString("ru-RU",{hour12:false})}
 function routeName(value){return label[value]||value||"?"}
-function routesText(routes){if(!routes)return "—";if(routes.discord&&!routes["discord-tcp"])return "Discord "+routeName(routes.discord)+" · YouTube "+routeName(routes.youtube);return "Discord TCP "+routeName(routes["discord-tcp"])+" · Voice "+routeName(routes["discord-voice"])+" · YouTube "+routeName(routes.youtube)}
+function routesText(routes){if(!routes)return "—";if(routes.discord&&!routes["discord-tcp"])return "Discord "+routeName(routes.discord)+" · YouTube "+routeName(routes.youtube);return "Discord TCP "+routeName(routes["discord-tcp"])+" · Voice "+routeName(routes["discord-voice"])+" · YouTube "+routeName(routes.youtube)+(routes.telegram&&routes.telegram!=="unmanaged"?" · Telegram "+routeName(routes.telegram):"")}
 function setRouteProgress(d){const box=document.getElementById("routeProgress"),progress=Math.max(0,Math.min(100,Number(d.progress||0))),tracked=d.progress!==undefined||!!d.operation;box.classList.toggle("visible",!!d.active||(tracked&&["completed","failed"].includes(d.status)));document.getElementById("routeStage").textContent=d.stage_label||d.status||"Подготовка";document.getElementById("routePercent").textContent=progress+"%";document.getElementById("routeBar").style.width=progress+"%"}
 async function readJson(response){const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.output||data.error||("HTTP "+response.status));return data}
 async function api(path,options={}){return readJson(await fetch(path,{cache:"no-store",...options}))}
-async function refresh(){try{const d=await api("/api/status");updateService("discord-tcp",d.discord_tcp_route||"unknown");updateService("discord-voice",d.discord_voice_route||"unknown");updateService("youtube",d.youtube_route||"unknown");const running=d.xkeen_runtime==="running";dot.className="dot "+(running?"ok":"bad");statusText.textContent=running?"XKeen работает":"XKeen остановлен"}catch(e){dot.className="dot bad";statusText.textContent="ошибка статуса";log("status: "+e)}}
+async function refresh(){try{const d=await api("/api/status");updateService("discord-tcp",d.discord_tcp_route||"unknown");updateService("discord-voice",d.discord_voice_route||"unknown");updateService("youtube",d.youtube_route||"unknown");updateService("telegram",d.telegram_route||"unknown");const running=d.xkeen_runtime==="running";dot.className="dot "+(running?"ok":"bad");statusText.textContent=running?"XKeen работает":"XKeen остановлен"}catch(e){dot.className="dot bad";statusText.textContent="ошибка статуса";log("status: "+e)}}
 async function refreshProfiles(){const root=document.getElementById("profiles");try{const d=await api("/api/imported");root.textContent="";d.profiles.forEach(p=>{const box=document.createElement("article");box.className="profile";const h=document.createElement("h3");h.textContent=serviceLabel[p.service];const family=document.createElement("div");family.className="family";family.textContent=p.installed?(p.family+" · "+p.candidate_id+" · "+fmtDate(p.installed_utc)):(p.error||"Встроенный профиль");box.append(h,family);if(p.installed){const b=document.createElement("button");b.textContent="Вернуть встроенный";b.addEventListener("click",()=>clearImport(p.service));box.append(b)}root.append(box)});document.getElementById("rollbackImport").disabled=!d.rollback_available}catch(e){root.textContent="Ошибка: "+e;log("профили: "+e)}}
 async function xkeenAction(action){busy(true);log("xkeen -"+action,true);try{const d=await api("/api/xkeen/"+action,{method:"POST",headers:controlHeaders,body:"{}"});log(d.output||"готово")}catch(e){log("ошибка: "+e)}finally{busy(false);await refresh();await refreshProfiles()}}
 function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
 function watchRouteJob(jobId,name){if(routeWatch)return routeWatch;routeWatch=(async()=>{busy(true);let lastStage="",connectionLost=false;const deadline=Date.now()+16*60*1000;try{while(Date.now()<deadline){let d;try{d=await api("/api/route/status");if(connectionLost){log("связь с панелью восстановлена");connectionLost=false}}catch(e){if(!connectionLost){log("перезапуск сети прервал связь; продолжаю ждать результат");connectionLost=true}await delay(2000);continue}if(jobId&&d.job_id&&d.job_id!==jobId)throw new Error("состояние задания изменилось");setRouteProgress(d);if(d.stage!==lastStage){lastStage=d.stage;log((name||serviceLabel[d.service]||"Маршрут")+": "+(d.stage_label||d.status))}if(d.active){await delay(1500);continue}if(d.status==="completed"){log(d.output||"операция завершена");await runPostChecks(d.operation==="switch"?d.service:"all",false);return d}throw new Error(d.output||d.error||"переключение завершилось с ошибкой")}throw new Error("превышено время ожидания; задание продолжает работать на роутере")}finally{routeWatch=null;busy(false);await refresh();await refreshProfiles();await refreshHistory();await refreshVersions()}})();return routeWatch}
-async function routeAction(service,mode){const name=serviceLabel[service]||service;if(!confirm(name+": переключить в "+label[mode]+"?\n\nЭто перезапустит Xkeen и nfqws2."))return;busy(true);log(name+" → "+label[mode],true);try{const d=await api("/api/route/"+service+"/"+mode,{method:"POST",headers:controlHeaders,body:"{}"});log("задание принято; можно закрыть страницу — оно продолжится на роутере");await watchRouteJob(d.job_id,name)}catch(e){log("ошибка: "+e);busy(false);await refresh();await refreshProfiles()}}
+async function routeAction(service,mode){const name=serviceLabel[service]||service;if(!confirm(name+": "+(mode==="unmanaged"?"убрать правила проекта":"переключить в "+label[mode])+"?\n\nЭто перезапустит Xkeen и nfqws2."))return;busy(true);log(name+" → "+label[mode],true);try{const d=await api("/api/route/"+service+"/"+mode,{method:"POST",headers:controlHeaders,body:"{}"});log("задание принято; можно закрыть страницу — оно продолжится на роутере");await watchRouteJob(d.job_id,name)}catch(e){log("ошибка: "+e);busy(false);await refresh();await refreshProfiles()}}
 async function resumeRouteJob(){try{const d=await api("/api/route/status");setRouteProgress(d);if(d.active){log("найдена выполняющаяся операция с маршрутами");await watchRouteJob(d.job_id,serviceLabel[d.service]||"Маршрут")}}catch(e){log("статус переключения: "+e)}}
 async function rollbackHistory(jobId){if(!confirm("Вернуть состояние до выбранной операции?\n\nСначала будет создан rescue snapshot текущего состояния."))return;busy(true);log("откат операции "+jobId,true);try{const d=await api("/api/history/rollback/"+jobId,{method:"POST",headers:controlHeaders,body:"{}"});await watchRouteJob(d.job_id,"Откат")}catch(e){log("ошибка отката: "+e);busy(false);await refreshHistory()}}
 async function refreshHistory(){const root=document.getElementById("history");try{const d=await api("/api/history");root.textContent="";if(!d.items.length){root.innerHTML='<div class="empty">История пуста.</div>';return}d.items.forEach(item=>{const box=document.createElement("article");box.className="history-item";const head=document.createElement("div");head.className="history-head";const title=document.createElement("b");title.textContent=(item.operation==="rollback"?"Откат":"Переключение")+" · "+fmtDate(item.created_utc);const state=document.createElement("span");state.className=item.status==="completed"?"good":"bad";state.textContent=item.status||"unknown";head.append(title,state);const routes=document.createElement("div");routes.className="history-routes";routes.textContent=routesText(item.before_routes)+" → "+routesText(item.after_routes||item.requested_routes);box.append(head,routes);if(item.snapshot){const snap=document.createElement("div");snap.className="history-routes mono";snap.textContent=item.snapshot.split("/").pop();box.append(snap)}if(item.rollback_available){const b=document.createElement("button");b.className="rollback";b.textContent="Вернуть состояние до операции";b.addEventListener("click",()=>rollbackHistory(item.job_id));box.append(b)}root.append(box)})}catch(e){root.textContent="Ошибка истории: "+e}}
@@ -498,6 +502,7 @@ def parse_status(text):
             "discord_tcp_route",
             "discord_voice_route",
             "youtube_route",
+            "telegram_route",
             "xkeen_runtime",
             "nfqws_runtime",
             "script_version",
@@ -759,9 +764,10 @@ def utc_now():
 def parse_active_routes(text):
     """Read the "# Active routes:" line written by apply-discord-nfqws2.sh.
 
-    Returns {"discord-tcp", "discord-voice", "youtube"} -> route, or None when
-    the line is missing or malformed. The legacy line "Discord=X, YouTube=Y."
-    written before the TCP/Voice split applies X to both Discord routes.
+    Returns {"discord-tcp", "discord-voice", "youtube", "telegram"} -> route,
+    or None when the line is missing or malformed. The legacy line
+    "Discord=X, YouTube=Y." written before the TCP/Voice split applies X to
+    both Discord routes. Lines without Telegram predate it: "unmanaged".
     """
     match = re.search(r"^# Active routes: (.+)\.$", text, re.MULTILINE)
     if not match:
@@ -769,20 +775,24 @@ def parse_active_routes(text):
     values = {}
     for pair in match.group(1).split(", "):
         key, separator, value = pair.partition("=")
-        if not separator or value not in ROUTE_VALUES:
+        allowed = TELEGRAM_ROUTE_VALUES if key == "Telegram" else ROUTE_VALUES
+        if not separator or value not in allowed:
             return None
         values[key] = value
+    telegram = values.pop("Telegram", "unmanaged")
     if set(values) == {"DiscordTCP", "DiscordVoice", "YouTube"}:
         return {
             "discord-tcp": values["DiscordTCP"],
             "discord-voice": values["DiscordVoice"],
             "youtube": values["YouTube"],
+            "telegram": telegram,
         }
     if set(values) == {"Discord", "YouTube"}:
         return {
             "discord-tcp": values["Discord"],
             "discord-voice": values["Discord"],
             "youtube": values["YouTube"],
+            "telegram": telegram,
         }
     return None
 
@@ -1101,6 +1111,32 @@ def config_health():
             and (active == (route == "zapret")),
             f"route={route}, nfqws={'on' if active else 'off'}",
         )
+    telegram = routes["telegram"]
+    telegram_profile = "--hostlist=/opt/etc/nfqws2/lists/telegram.list" in nfqws_text
+    telegram_rules = [
+        rule for rule in rules
+        if isinstance(rule, dict) and rule.get("ruleTag") == "kdn-telegram"
+    ]
+    if telegram == "unmanaged":
+        telegram_ok = not telegram_rules and not telegram_profile
+    else:
+        expected_outbound = "telegram-direct" if telegram != "vless" else None
+        telegram_ok = (
+            telegram in ROUTE_VALUES
+            and len(telegram_rules) == 2
+            and all(
+                (rule.get("outboundTag") == expected_outbound)
+                if expected_outbound
+                else rule.get("outboundTag") != "telegram-direct"
+                for rule in telegram_rules
+            )
+            and telegram_profile == (telegram == "zapret")
+        )
+    add(
+        "Telegram route",
+        telegram_ok,
+        f"route={telegram}, rules={len(telegram_rules)}, nfqws={'on' if telegram_profile else 'off'}",
+    )
     return {"ok": True, "routes": routes, "checks": checks, "all_ok": all(item["ok"] for item in checks)}
 
 
@@ -1241,7 +1277,10 @@ def update_route_state(job_id, **changes):
 def validate_route(service, mode):
     if service not in ROUTE_REQUEST_SERVICES:
         raise ValueError("неподдерживаемый сервис")
-    if mode not in {"direct", "zapret", "vpn"}:
+    allowed = {"direct", "zapret", "vpn"}
+    if service == "telegram":
+        allowed = allowed | {"unmanaged"}
+    if mode not in allowed:
         raise ValueError("неподдерживаемый маршрут")
     return service, mode
 
@@ -2279,7 +2318,7 @@ class Handler(BaseHTTPRequestHandler):
             len(parts) == 4
             and parts[:2] == ["api", "route"]
             and parts[2] in ROUTE_REQUEST_SERVICES
-            and parts[3] in {"direct", "zapret", "vpn"}
+            and parts[3] in {"direct", "zapret", "vpn", "unmanaged"}
         ):
             try:
                 payload = start_route_job(parts[2], parts[3])

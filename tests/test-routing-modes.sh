@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-# Integration test for all nine direct/zapret/vless combinations. It must run on
+# Integration test for the direct/zapret/vless route combinations. It must run on
 # Linux/Entware with real jq. All router paths are redirected to a disposable
 # fixture; service, package, route and firewall commands are mocked.
 
@@ -183,6 +183,12 @@ cat > "$ROOT/opt/etc/xray/configs/05_routing.json" <<'EOF'
         "inboundTag":["redirect","tproxy"],
         "outboundTag":"direct",
         "domain":["example.org"]
+      },
+      {
+        "type":"field",
+        "inboundTag":["redirect","tproxy"],
+        "outboundTag":"direct",
+        "domain":["domain:web.telegram.org"]
       }
     ]
   }
@@ -302,6 +308,7 @@ assert_mode() {
   expected_tcp="$1"
   expected_voice="$2"
   expected_youtube="$3"
+  expected_telegram="${4:-unmanaged}"
 
   # Discord TCP/QUIC: the domain rule goes to discord-direct unless vless.
   jq -e --arg mode "$expected_tcp" '
@@ -377,11 +384,21 @@ assert_mode() {
   if [ "$expected_tcp" = "zapret" ]; then
     [ -s "$ROOT/opt/etc/nfqws2/lists/user.list" ]
     [ "$(ls -l "$ROOT/opt/etc/nfqws2/lists/user.list" | awk '{print $1}')" = "-rw-r--r--" ]
-    grep -Fqx 'TCP_PORTS=80,443,2053,2083,2087,2096,8443' "$nfqws_file"
+    expected_tcp_ports="80,443,2053,2083,2087,2096,8443"
   else
     [ ! -s "$ROOT/opt/etc/nfqws2/lists/user.list" ]
-    grep -Fqx 'TCP_PORTS=443' "$nfqws_file"
+    expected_tcp_ports="443"
   fi
+  # NFQWS_ARGS keeps the Discord ports; Telegram MTProto adds 80 and 5222
+  # to the netfilter list only.
+  grep -Fq "NFQWS_ARGS=\"--filter-tcp=$expected_tcp_ports " "$nfqws_file"
+  if [ "$expected_telegram" = "zapret" ]; then
+    case "$expected_tcp_ports" in
+      80,*) expected_tcp_ports="$expected_tcp_ports,5222" ;;
+      *) expected_tcp_ports="80,$expected_tcp_ports,5222" ;;
+    esac
+  fi
+  grep -Fqx "TCP_PORTS=$expected_tcp_ports" "$nfqws_file"
 
   if [ "$expected_voice" = "zapret" ]; then
     grep -Fq -- '--filter-l7=stun,discord' "$nfqws_file"
@@ -445,8 +462,10 @@ assert_mode() {
     )
   ' "$routing_file" >/dev/null
 
+  assert_telegram "$expected_telegram"
+
   sh -n "$nfqws_file"
-  grep -Fqx "# Active routes: DiscordTCP=$expected_tcp, DiscordVoice=$expected_voice, YouTube=$expected_youtube." "$nfqws_file"
+  grep -Fqx "# Active routes: DiscordTCP=$expected_tcp, DiscordVoice=$expected_voice, YouTube=$expected_youtube, Telegram=$expected_telegram." "$nfqws_file"
 
   if [ "$expected_tcp" = "$expected_voice" ]; then
     expected_discord="$expected_tcp"
@@ -462,6 +481,70 @@ assert_mode() {
     grep -Fqx "discord_voice_route=$expected_voice"
   printf '%s\n' "$status_output" |
     grep -Fqx "youtube_route=$expected_youtube"
+  printf '%s\n' "$status_output" |
+    grep -Fqx "telegram_route=$expected_telegram"
+}
+
+telegram_outbound_file="$ROOT/opt/etc/xray/configs/04_telegram_nfqws2_outbound.json"
+
+assert_telegram() {
+  # Lists are always installed; they are inert without the profile.
+  [ "$(ls -l "$ROOT/opt/etc/nfqws2/lists/telegram.list" | awk '{print $1}')" = "-rw-r--r--" ]
+  cmp -s "$ROOT/opt/etc/nfqws2/lists/telegram.list" "$SCRIPT_DIR/config/telegram-user.list"
+  cmp -s "$ROOT/opt/etc/nfqws2/lists/telegram-ip.list" "$SCRIPT_DIR/config/telegram-ip.list"
+
+  # The user's own Telegram rule (fixture) is never touched.
+  jq -e '
+    any(.routing.rules[]?;
+      .outboundTag == "direct" and .domain == ["domain:web.telegram.org"])
+  ' "$routing_file" >/dev/null
+
+  case "$1" in
+    unmanaged)
+      jq -e 'any(.routing.rules[]?; .ruleTag? == "kdn-telegram") | not' "$routing_file" >/dev/null
+      [ ! -e "$telegram_outbound_file" ]
+      ;;
+    vless)
+      jq -e '
+        ([.routing.rules[]? | select(.ruleTag? == "kdn-telegram") | .outboundTag]
+          == ["vless-reality", "vless-reality"])
+      ' "$routing_file" >/dev/null
+      [ ! -e "$telegram_outbound_file" ]
+      ;;
+    direct|zapret)
+      jq -e '
+        [.routing.rules[]? | select(.ruleTag? == "kdn-telegram")] as $rules
+        | ($rules | map(.outboundTag)) == ["telegram-direct", "telegram-direct"]
+        and ($rules[0].domain == ["ext:geosite_v2fly.dat:telegram"])
+        and ($rules[1].ip == ["ext:geoip_v2fly.dat:telegram"])
+      ' "$routing_file" >/dev/null
+      jq -e '.outbounds[0].tag == "telegram-direct"' "$telegram_outbound_file" >/dev/null
+      ;;
+  esac
+
+  if [ "$1" = "zapret" ]; then
+    grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/telegram.list' "$nfqws_file"
+    grep -Fq -- '--ipset=/opt/etc/nfqws2/lists/telegram-ip.list' "$nfqws_file"
+    grep -Fq -- '--filter-l7=mtproto' "$nfqws_file"
+    grep -Fq -- '--payload=mtproto_initial' "$nfqws_file"
+  elif grep -Fq -- 'telegram' "$nfqws_file"; then
+    echo "ERROR: Telegram profile present with Telegram=$1" >&2
+    exit 1
+  fi
+
+  # A restrictive port_proxying.lst gets 5222 for managed Telegram only.
+  if grep -qx '# BEGIN keenetic-discord-nfqws2' "$ROOT/opt/etc/xkeen/port_proxying.lst"; then
+    managed_ports="$(sed -n '/^# BEGIN keenetic-discord-nfqws2$/,/^# END keenetic-discord-nfqws2$/p' \
+      "$ROOT/opt/etc/xkeen/port_proxying.lst")"
+    if [ "$1" = "unmanaged" ]; then
+      if printf '%s\n' "$managed_ports" | grep -qx 5222; then
+        echo "ERROR: unmanaged Telegram added port 5222" >&2
+        exit 1
+      fi
+    else
+      printf '%s\n' "$managed_ports" | grep -qx 5222
+    fi
+  fi
 }
 
 # apply_mode DISCORD YOUTUBE uses the legacy --discord-route shorthand.
@@ -477,6 +560,8 @@ apply_mode() {
   assert_mode "$discord_mode" "$discord_mode" "$youtube_mode"
 }
 
+# apply_split_mode TCP VOICE YOUTUBE [TELEGRAM]: TELEGRAM is the route the
+# engine is expected to keep (the option is not passed).
 apply_split_mode() {
   tcp_mode="$1"
   voice_mode="$2"
@@ -488,7 +573,7 @@ apply_split_mode() {
     --discord-tcp-route "$tcp_mode" \
     --discord-voice-route "$voice_mode" \
     --youtube-route "$youtube_mode" >/dev/null
-  assert_mode "$tcp_mode" "$voice_mode" "$youtube_mode"
+  assert_mode "$tcp_mode" "$voice_mode" "$youtube_mode" "${4:-unmanaged}"
 }
 
 # Install standalone first: the baseline then covers nfqws2 only. The first
@@ -575,6 +660,29 @@ run_service_tool youtube vpn --yes-router --core xray --narrow-udp --udp-strateg
 grep -Fqx 'UDP_PORTS=443,3478:3481,5349,19294:19344,50000:50100' "$nfqws_file"
 grep -Fq -- '--lua-desync=fake:blob=discord_udp:repeats=6' "$nfqws_file"
 assert_mode zapret zapret vless
+
+# Telegram: opt-in, kept across other services' switches, and removable.
+# A restrictive port list exercises the XKeen 5222 handling.
+printf '%s\n' '# restricted fixture' 443 > "$ROOT/opt/etc/xkeen/port_proxying.lst"
+run_service_tool telegram zapret --yes-router --core xray >/dev/null
+assert_mode zapret zapret vless zapret
+run_service_tool youtube direct --yes-router --core xray >/dev/null
+assert_mode zapret zapret direct zapret
+run_service_tool discord-tcp vpn --yes-router --core xray >/dev/null
+assert_mode vless zapret direct zapret
+run_service_tool telegram direct --yes-router --core xray >/dev/null
+assert_mode vless zapret direct direct
+run_service_tool telegram vpn --yes-router --core xray >/dev/null
+assert_mode vless zapret direct vless
+# Applies without --telegram-route keep the recorded route.
+apply_split_mode zapret zapret vless vless
+run_service_tool telegram unmanaged --yes-router --core xray >/dev/null
+assert_mode zapret zapret vless
+grep -qx '# BEGIN keenetic-discord-nfqws2' "$ROOT/opt/etc/xkeen/port_proxying.lst"
+if run_service_tool youtube unmanaged --yes-router --core xray >/dev/null 2>&1; then
+  echo "ERROR: only Telegram may be unmanaged" >&2
+  exit 1
+fi
 
 # A config written before the TCP/Voice split still reports both routes.
 sed -i 's/^# Active routes: .*/# Active routes: Discord=zapret, YouTube=vless./' "$nfqws_file"
@@ -678,5 +786,6 @@ run_tool --rollback --yes-router >/dev/null
 [ "$(sha256sum "$nfqws_file" | awk '{print $1}')" = "$original_nfqws_hash" ]
 [ ! -e "$ROOT/opt/etc/xray/configs/04_discord_nfqws2_outbound.json" ]
 [ ! -e "$ROOT/opt/etc/xray/configs/04_youtube_nfqws2_outbound.json" ]
+[ ! -e "$telegram_outbound_file" ]
 
 echo "routing-mode-tests-ok"

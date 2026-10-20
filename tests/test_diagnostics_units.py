@@ -187,8 +187,44 @@ class RouteConsistencyTests(DiagnosticsUnitBase):
 
     def test_unknown_routes_are_errors(self):
         checks = self.module.route_consistency("garbage", {"discord-direct", "youtube-direct"}, "")
-        self.assertEqual([c["status"] for c in checks], ["error", "error", "error"])
+        self.assertEqual([c["status"] for c in checks], ["error", "error", "error", "error"])
         self.assertEqual(checks[0]["detail"], "route=unknown, nfqws=off")
+
+
+class TelegramRouteTests(DiagnosticsUnitBase):
+    HEADER = "# Active routes: DiscordTCP=vless, DiscordVoice=vless, YouTube=vless, Telegram={}.\n"
+    PROFILE = "--hostlist=/opt/etc/nfqws2/lists/telegram.list\n"
+
+    def telegram_check(self, route, tags, profile=False):
+        config = self.HEADER.format(route) + (self.PROFILE if profile else "")
+        checks = self.module.route_consistency(config, tags, "")
+        return [check for check in checks if check["name"] == "Telegram route"]
+
+    def test_header_with_telegram_is_parsed(self):
+        text = self.HEADER.format("zapret")
+        self.assertEqual(self.module.parse_routes(text), ("vless", "vless", "vless"))
+        self.assertEqual(self.module.telegram_route(text), "zapret")
+        self.assertEqual(self.module.telegram_route("# Active routes: Discord=vless, YouTube=vless."), "unmanaged")
+        self.assertEqual(self.module.telegram_route("garbage"), "unknown")
+        self.assertEqual(self.module.telegram_route(self.HEADER.format("proxy")), "unknown")
+
+    def test_unmanaged_adds_no_check_unless_profile_is_left(self):
+        self.assertEqual(self.telegram_check("unmanaged", set()), [])
+        [check] = self.telegram_check("unmanaged", set(), profile=True)
+        self.assertEqual((check["status"], check["detail"]), ("error", "route=unmanaged, nfqws=on"))
+
+    def test_managed_routes(self):
+        for route, tags, profile, status in (
+            ("direct", {"telegram-direct"}, False, "ok"),
+            ("direct", set(), False, "error"),
+            ("zapret", {"telegram-direct"}, True, "ok"),
+            ("zapret", {"telegram-direct"}, False, "error"),
+            ("vless", set(), False, "ok"),
+            ("vless", set(), True, "error"),
+        ):
+            with self.subTest(route=route, tags=tags, profile=profile):
+                [check] = self.telegram_check(route, tags, profile)
+                self.assertEqual(check["status"], status)
 
 
 class SummaryTests(DiagnosticsUnitBase):
@@ -553,7 +589,10 @@ class RunHealthTests(DiagnosticsUnitBase):
         self.assertEqual(bad, [])
         by_name = {check["name"]: check["detail"] for check in checks}
         self.assertEqual(by_name["Xray"], "PID: [101]")
-        self.assertEqual(by_name["Управляемые маршруты"], "Discord TCP=zapret, Discord Voice=zapret, YouTube=direct")
+        self.assertEqual(
+            by_name["Управляемые маршруты"],
+            "Discord TCP=zapret, Discord Voice=zapret, YouTube=direct, Telegram=unmanaged",
+        )
         self.assertEqual(by_name["Discord hostlist"], "2 записей; route=zapret")
         self.assertEqual(by_name["YouTube hostlist"], "0 записей; route=не zapret")
         self.assertEqual(by_name["Xray config test"], "Configuration OK")
@@ -585,6 +624,7 @@ class RunHealthTests(DiagnosticsUnitBase):
             "YouTube route": "error",
             "Discord TCP route": "error",
             "Discord Voice route": "error",
+            "Telegram route": "error",
             "Xray config test": "error",
             "NFQUEUE": "error",
             "IPv4 WAN route": "error",

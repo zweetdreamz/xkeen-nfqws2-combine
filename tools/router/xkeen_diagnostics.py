@@ -204,14 +204,16 @@ def make_check(name: str, status: str, detail: str) -> dict[str, str]:
 
 
 ROUTE_VALUES = {"direct", "zapret", "vless"}
+TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"unmanaged"}
 
 
 def parse_active_routes(text: str) -> dict[str, str] | None:
     """Read the "# Active routes:" line written by apply-discord-nfqws2.sh.
 
-    Returns {"discord-tcp", "discord-voice", "youtube"} -> route, or None when
-    the line is missing or malformed. The legacy line "Discord=X, YouTube=Y."
-    written before the TCP/Voice split applies X to both Discord routes.
+    Returns {"discord-tcp", "discord-voice", "youtube", "telegram"} -> route,
+    or None when the line is missing or malformed. The legacy line
+    "Discord=X, YouTube=Y." written before the TCP/Voice split applies X to
+    both Discord routes. Lines without Telegram predate it: "unmanaged".
     """
     match = re.search(r"^# Active routes: (.+)\.$", text, re.MULTILINE)
     if not match:
@@ -219,22 +221,32 @@ def parse_active_routes(text: str) -> dict[str, str] | None:
     values = {}
     for pair in match.group(1).split(", "):
         key, separator, value = pair.partition("=")
-        if not separator or value not in ROUTE_VALUES:
+        allowed = TELEGRAM_ROUTE_VALUES if key == "Telegram" else ROUTE_VALUES
+        if not separator or value not in allowed:
             return None
         values[key] = value
+    telegram = values.pop("Telegram", "unmanaged")
     if set(values) == {"DiscordTCP", "DiscordVoice", "YouTube"}:
         return {
             "discord-tcp": values["DiscordTCP"],
             "discord-voice": values["DiscordVoice"],
             "youtube": values["YouTube"],
+            "telegram": telegram,
         }
     if set(values) == {"Discord", "YouTube"}:
         return {
             "discord-tcp": values["Discord"],
             "discord-voice": values["Discord"],
             "youtube": values["YouTube"],
+            "telegram": telegram,
         }
     return None
+
+
+def telegram_route(text: str) -> str:
+    """Return the recorded Telegram route ("unmanaged" when absent) or "unknown"."""
+    routes = parse_active_routes(text)
+    return routes["telegram"] if routes else "unknown"
 
 
 def parse_routes(text: str) -> tuple[str, str, str]:
@@ -298,6 +310,23 @@ def route_consistency(config: str, tags: set[str], discord_list: str) -> list[di
     ):
         okay = mode in ROUTE_VALUES and (mode == "vless" or tag in tags) and active == (mode == "zapret")
         checks.append(make_check(name, "ok" if okay else "error", f"route={mode}, nfqws={'on' if active else 'off'}"))
+    telegram = telegram_route(config)
+    telegram_active = "--hostlist=/opt/etc/nfqws2/lists/telegram.list" in config
+    if telegram != "unmanaged":
+        okay = (
+            telegram in ROUTE_VALUES
+            and (telegram == "vless" or "telegram-direct" in tags)
+            and telegram_active == (telegram == "zapret")
+        )
+        checks.append(
+            make_check(
+                "Telegram route",
+                "ok" if okay else "error",
+                f"route={telegram}, nfqws={'on' if telegram_active else 'off'}",
+            )
+        )
+    elif telegram_active:
+        checks.append(make_check("Telegram route", "error", "route=unmanaged, nfqws=on"))
     return checks
 
 
@@ -320,7 +349,8 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
         add(
             "Управляемые маршруты",
             status,
-            f"Discord TCP={discord_tcp_route}, Discord Voice={discord_voice_route}, YouTube={youtube_route}",
+            f"Discord TCP={discord_tcp_route}, Discord Voice={discord_voice_route}, "
+            f"YouTube={youtube_route}, Telegram={telegram_route(config)}",
         )
     except (OSError, ValueError) as exc:
         config = ""
@@ -348,6 +378,8 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
             expected.add("discord-direct")
         if youtube_route != "vless":
             expected.add("youtube-direct")
+        if telegram_route(config) in {"direct", "zapret"}:
+            expected.add("telegram-direct")
         missing = sorted(expected - tags)
         add("Xray routing", "error" if missing else "ok", "missing: " + ", ".join(missing) if missing else "service-direct rules согласованы")
     except (OSError, ValueError, json.JSONDecodeError) as exc:

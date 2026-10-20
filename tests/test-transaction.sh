@@ -59,6 +59,29 @@ awk '
   in_data { print }
 ' "$TARGET" > "$FIXTURE/embedded-youtube-domains.list"
 diff -u "$YOUTUBE_LIST" "$FIXTURE/embedded-youtube-domains.list"
+
+# Telegram lists embedded in the engine match config/, and the Mihomo rules
+# built from them use IP-CIDR6 for IPv6 and never resolve domains for IPs.
+sed -n '/^telegram_domains() {$/,/^}$/p; /^telegram_networks() {$/,/^}$/p; /^telegram_mihomo_rules() {$/,/^}$/p' \
+  "$TARGET" > "$FIXTURE/telegram-functions.sh"
+(
+  . "$FIXTURE/telegram-functions.sh"
+  telegram_domains | diff -u "$SCRIPT_DIR/config/telegram-user.list" -
+  telegram_networks | diff -u "$SCRIPT_DIR/config/telegram-ip.list" -
+  telegram_mihomo_rules > "$FIXTURE/telegram-mihomo.rules"
+)
+grep -Fqx 'DOMAIN-SUFFIX,t.me,DIRECT' "$FIXTURE/telegram-mihomo.rules"
+grep -Fqx 'IP-CIDR,149.154.160.0/20,DIRECT,no-resolve' "$FIXTURE/telegram-mihomo.rules"
+grep -Fqx 'IP-CIDR6,2001:67c:4e8::/48,DIRECT,no-resolve' "$FIXTURE/telegram-mihomo.rules"
+[ "$(wc -l < "$FIXTURE/telegram-mihomo.rules" | tr -d ' ')" = "33" ]
+if grep -Fq 'zkeenip.dat:telegram' "$TARGET"; then
+  echo "ERROR: zkeenip.dat:telegram includes 194.221.0.0/16 and must not be used." >&2
+  exit 1
+fi
+if sh "$TARGET" --print-plan --telegram-route bogus >/dev/null 2>&1; then
+  echo "ERROR: invalid Telegram route unexpectedly passed." >&2
+  exit 1
+fi
 if grep -Fq 'test("discord"' "$TARGET"; then
   echo "ERROR: router jq has no ONIGURUMA support; regex test() must not be used." >&2
   exit 1

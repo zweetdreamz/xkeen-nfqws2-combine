@@ -211,6 +211,22 @@ class RecordedRouteTests(TempRootTestCase):
         self.assertEqual(JOB.recorded_route("discord-voice"), "zapret")
         self.assertEqual(JOB.recorded_route("youtube"), "vless")
 
+    def test_header_with_telegram(self):
+        conf = self.write_conf()
+        for telegram in ("direct", "zapret", "vless", "unmanaged"):
+            with self.subTest(telegram=telegram):
+                conf.write_text(
+                    "# Active routes: DiscordTCP=direct, DiscordVoice=zapret, YouTube=vless, "
+                    f"Telegram={telegram}.\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(JOB.recorded_route("discord-voice"), "zapret")
+                self.assertEqual(JOB.parse_active_routes(conf.read_text())["telegram"], telegram)
+        # "unmanaged" is valid for Telegram only.
+        self.assertIsNone(JOB.parse_active_routes(
+            "# Active routes: DiscordTCP=unmanaged, DiscordVoice=zapret, YouTube=vless.\n"
+        ))
+
     def test_first_matching_line_wins(self):
         self.write_conf(extra="# Active routes: Discord=direct, YouTube=direct.\n")
         self.assertEqual(JOB.recorded_route("youtube"), "direct")

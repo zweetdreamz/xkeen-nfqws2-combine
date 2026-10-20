@@ -79,7 +79,7 @@ async function main() {
   const browser = await playwright.chromium.launch(launchOptions);
   const errors = [];
   try {
-    // Three independent route cards with their current modes.
+    // Four independent route cards with their current modes.
     let page = await openPanel(browser, errors);
     const cards = await page.$$eval(".service", (items) =>
       items.map((item) => [item.dataset.service, item.querySelector(".current").textContent])
@@ -88,7 +88,25 @@ async function main() {
       ["discord-tcp", "ZAPRET"],
       ["discord-voice", "DIRECT"],
       ["youtube", "VPN"],
+      ["telegram", "ВЫКЛ"],
     ]);
+    // Telegram alone has the "off" mode; it is active while unmanaged.
+    assert.deepEqual(
+      await page.$$eval('[data-service="telegram"] .mode', (buttons) =>
+        buttons.map((button) => [button.dataset.mode, button.classList.contains("active")])
+      ),
+      [["direct", false], ["zapret", false], ["vpn", false], ["unmanaged", true]]
+    );
+    assert.equal(await page.$$eval('.mode[data-mode="unmanaged"]', (buttons) => buttons.length), 1);
+    // 2x2 grid on a desktop width; the four Telegram buttons share one row.
+    const tops = await page.$$eval(".service", (items) => items.map((item) => Math.round(item.getBoundingClientRect().top)));
+    assert.equal(tops[0], tops[1]);
+    assert.equal(tops[2], tops[3]);
+    assert.ok(tops[2] > tops[0]);
+    const telegramButtonTops = await page.$$eval('[data-service="telegram"] .mode', (buttons) =>
+      new Set(buttons.map((button) => Math.round(button.getBoundingClientRect().top))).size
+    );
+    assert.equal(telegramButtonTops, 1);
 
     // The LAN IPv4 field belongs to Discord Voice only.
     await page.click('.tab[data-tab="autotune"]');
