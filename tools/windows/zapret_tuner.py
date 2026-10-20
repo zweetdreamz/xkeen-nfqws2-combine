@@ -520,10 +520,16 @@ def known_candidate(service: str, sources: Sequence[SourceFile]) -> Candidate:
 
 
 def split_components(candidate: Candidate) -> tuple[list[str], str | None, str | None]:
+    """Split the first (TCP/TLS) profile into selectors, fake and split.
+
+    Only tokens before the first ``--new`` are used: the YouTube QUIC profile
+    that follows must not leak its filters or payload into a TCP mix.
+    """
     base: list[str] = []
     fake: str | None = None
     split: str | None = None
-    for token in candidate.args:
+    tcp_end = candidate.args.index("--new") if "--new" in candidate.args else len(candidate.args)
+    for token in candidate.args[:tcp_end]:
         if token.startswith("--lua-desync=fake:") and fake is None:
             fake = token
         elif token.startswith(
@@ -535,7 +541,7 @@ def split_components(candidate: Candidate) -> tuple[list[str], str | None, str |
             )
         ) and split is None:
             split = token
-        elif token != "--new" and not token.startswith("--lua-desync="):
+        elif not token.startswith("--lua-desync="):
             base.append(token)
     return base, fake, split
 

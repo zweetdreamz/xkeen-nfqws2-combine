@@ -1160,6 +1160,50 @@ class NetworkWrapperTests(unittest.TestCase):
                     TUNER.fetch_sources("o/r", "main")
 
 
+class MixedCandidateTests(unittest.TestCase):
+    """Component mixes must keep the YouTube TCP and QUIC sections apart."""
+
+    def sources(self):
+        alt = SAMPLE.replace("--dpi-desync-repeats=8", "--dpi-desync-repeats=4")
+        return [
+            SOURCE,
+            TUNER.SourceFile("general (ALT2).bat", alt, "def456", "https://example.invalid/alt2.bat"),
+        ]
+
+    def test_split_components_ignores_quic_section(self):
+        candidate = TUNER.known_candidate("youtube", [SOURCE])
+        base, fake, split = TUNER.split_components(candidate)
+        self.assertEqual(fake, TUNER.NATIVE_FAKE)
+        self.assertEqual(split, TUNER.NATIVE_SPLIT)
+        self.assertEqual(base, list(candidate.args[: candidate.args.index("--new")][:5]))
+        self.assertFalse(any("udp" in token or "quic" in token for token in base))
+
+    def test_youtube_mixes_have_no_quic_tokens_in_tcp_section(self):
+        for level in ("safe", "extended"):
+            mixes = TUNER.mixed_candidates(
+                "youtube",
+                [
+                    candidate
+                    for candidate in TUNER.build_candidates("youtube", self.sources(), "off")
+                    if candidate.rank != 0
+                ],
+                self.sources(),
+                level,
+            )
+            self.assertTrue(mixes, level)
+            for candidate in mixes:
+                with self.subTest(level=level, family=candidate.family):
+                    self.assertIn("--new", candidate.args)
+                    tcp = candidate.args[: candidate.args.index("--new")]
+                    quic = candidate.args[candidate.args.index("--new"):]
+                    self.assertFalse(
+                        [token for token in tcp if "udp" in token or "quic" in token],
+                        candidate.args,
+                    )
+                    self.assertIn("--filter-tcp=443", tcp)
+                    self.assertIn("--filter-udp=443", quic)
+
+
 class SourceSelectionTests(unittest.TestCase):
     def test_select_source_is_case_insensitive(self):
         other = TUNER.SourceFile("general (ALT3).bat", SAMPLE, "def456", "u")
