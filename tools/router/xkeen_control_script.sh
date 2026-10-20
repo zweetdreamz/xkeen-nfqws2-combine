@@ -94,55 +94,202 @@ HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f5bd5'/%3E%3Cpath d='M9 22h9a3.5 3.5 0 0 0 0-7h-4a3.5 3.5 0 0 1 0-7h9' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
 <title>XKeen Control</title>
 <style>
-:root{color-scheme:dark;--bg:#050816;--panel:#0b1226;--line:#243151;--text:#e5edff;--muted:#91a0c2;--green:#21e6a1;--red:#ff5779;--amber:#ffbd4a;--blue:#32b6ff;--purple:#a875ff}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% 0,#172354 0,transparent 36%),radial-gradient(circle at 90% 20%,#351752 0,transparent 30%),var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,"Segoe UI",sans-serif}
-.page{width:min(1040px,calc(100% - 24px));margin:24px auto 40px}header{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:18px}h1{margin:0;font-size:clamp(30px,6vw,50px);letter-spacing:-1px}.subtitle,.hint,.muted{color:var(--muted)}
-.status{display:flex;align-items:center;gap:8px;padding:9px 13px;border:1px solid var(--line);border-radius:999px;background:#081024}.dot{width:9px;height:9px;border-radius:50%;background:var(--amber);box-shadow:0 0 12px currentColor}.dot.ok{background:var(--green)}.dot.bad{background:var(--red)}
-.tabs{display:flex;gap:8px;margin:0 0 4px}.tab{background:#081024}.tab.active{border-color:var(--blue);background:#112a45;color:#ccefff}.tab-page{display:none}.tab-page.active{display:block}
-.card{border:1px solid var(--line);border-radius:18px;background:rgba(11,18,38,.88);box-shadow:0 18px 50px #0006;padding:20px;margin-top:16px}.card h2{margin:0 0 6px;font-size:21px}.hint{margin:0 0 16px}
-.xkeen-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}button{appearance:none;border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#111c38;color:var(--text);font:inherit;font-weight:750;cursor:pointer;transition:.15s transform,.15s border-color,.15s background}button:hover{transform:translateY(-1px);border-color:var(--blue)}button:disabled{opacity:.5;cursor:wait;transform:none}.start{color:var(--green)}.stop{color:var(--red)}.restart,.rollback{color:var(--amber)}
-.services{display:grid;grid-template-columns:1fr 1fr;gap:14px}.service,.profile{border:1px solid var(--line);border-radius:14px;padding:16px;background:#081024}.service-head,.profile-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.service h3,.profile h3{margin:0;font-size:19px}.current{color:var(--muted);font:12px ui-monospace,Consolas,monospace}.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.mode{padding:11px 8px}.mode.active{border-color:var(--green);background:#10382f;color:#caffec;box-shadow:0 0 0 1px #21e6a155 inset}.mode[data-mode=direct]{--mode:var(--blue)}.mode[data-mode=zapret]{--mode:var(--green)}.mode[data-mode=vpn]{--mode:var(--purple)}.mode:not(.active){color:var(--mode)}
-.legend{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px;color:var(--muted);font-size:12px}.legend b{display:block;color:var(--text);margin-bottom:3px}.warning{color:#ffd88e;font-size:13px;margin-top:12px}
-.upload{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}input[type=file]{width:100%;padding:11px;border:1px dashed var(--line);border-radius:12px;background:#081024;color:var(--muted)}.candidate{display:none}.candidate.visible{display:block}.meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 18px;margin:14px 0}.meta div{min-width:0}.meta b{display:block;color:var(--muted);font-size:12px}.apply{color:var(--green)}.profiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.profile{padding:13px}.profile h3{font-size:15px}.profile .family{min-height:42px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}.profile button{width:100%;padding:8px;margin-top:9px;color:var(--red)}
-.tuner-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.field{display:grid;gap:6px}.field label{color:var(--muted);font-size:12px;font-weight:700}.field select,.field input{width:100%;padding:11px;border:1px solid var(--line);border-radius:11px;background:#081024;color:var(--text);font:inherit}.tuner-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:15px}.cancel{color:var(--red)}.verdict{display:none;margin-top:14px;padding:14px;border:1px solid var(--amber);border-radius:13px;background:#2b2110}.verdict.visible{display:block}.verdict-actions{display:flex;gap:9px;margin-top:10px}.progress-line{display:flex;justify-content:space-between;gap:12px;margin:12px 0;color:var(--muted)}.found-card{display:none}.found-card.visible{display:block}
-.console-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.console-head h2{margin:0}.clear{padding:7px 11px;font-size:12px}pre{min-height:130px;max-height:340px;overflow:auto;margin:0;padding:14px;border:1px solid #1d2b49;border-radius:12px;background:#030711;color:#9dfbd7;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}.args{min-height:90px;max-height:260px}
-.route-progress{display:none;margin-top:16px;padding:14px;border:1px solid var(--blue);border-radius:13px;background:#071a2b}.route-progress.visible{display:block}.route-progress-head{display:flex;justify-content:space-between;gap:12px}.bar{height:8px;margin-top:10px;border-radius:99px;background:#18233d;overflow:hidden}.bar span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--blue),var(--green));transition:width .3s}
-.history-list,.version-list,.check-list,.diagnostic-list{display:grid;gap:9px}.history-item,.version-item,.check-item,.diagnostic-item,.update-box{padding:13px;border:1px solid var(--line);border-radius:13px;background:#081024}.history-head,.version-head,.check-head,.diagnostic-head,.update-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.history-item button,.version-item button{padding:7px 10px;font-size:12px}.history-routes,.version-meta,.check-detail,.diagnostic-detail{color:var(--muted);font-size:12px;margin-top:5px;overflow-wrap:anywhere}.good{color:var(--green)}.bad{color:var(--red)}.toolbar{display:flex;flex-wrap:wrap;gap:9px}.check-item,.diagnostic-item{border-left:3px solid var(--red)}.check-item.ok,.diagnostic-item.ok{border-left-color:var(--green)}.check-item.manual,.diagnostic-item.warn{border-left-color:var(--amber)}.updates-grid,.diagnostic-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.mono{font:12px ui-monospace,Consolas,monospace;overflow-wrap:anywhere}.empty{color:var(--muted);padding:8px 0}.download{display:inline-block;text-decoration:none;border:1px solid var(--line);border-radius:12px;padding:11px 14px;background:#111c38;color:var(--blue);font-weight:750}.protocols{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}.protocol{padding:3px 7px;border:1px solid var(--line);border-radius:999px;font:11px ui-monospace,Consolas,monospace}.protocol.ok{color:var(--green);border-color:#1d6d55}.protocol.warn{color:var(--amber);border-color:#735a20}.protocol.bad{color:var(--red);border-color:#723044}
-@media(max-width:760px){header{align-items:flex-start;flex-direction:column}.services,.profiles,.tuner-grid,.updates-grid,.diagnostic-grid{grid-template-columns:1fr}.legend{grid-template-columns:1fr}.meta{grid-template-columns:1fr}}
-@media(max-width:480px){.xkeen-actions,.modes,.upload{grid-template-columns:1fr}}
+:root{color-scheme:light dark;
+--bg:#f4f5f7;--surface:#fff;--surface-2:#f7f8fa;--sunken:#eef0f4;--line:#e3e6ec;--line-strong:#cfd4dd;
+--text:#141a26;--muted:#5f6879;--faint:#8a93a3;
+--accent:#4f5bd5;--accent-strong:#3f49b8;--accent-soft:#eceefd;--on-accent:#fff;
+--green:#0f8a5f;--green-soft:#e6f5ee;--red:#d1343f;--red-soft:#fdecee;--amber:#a85b00;--amber-soft:#fff4e0;
+--direct:#1f6fd1;--zapret:#0f8a5f;--vpn:#7a4fd6;
+--shadow:0 1px 2px rgba(16,24,40,.05),0 4px 16px rgba(16,24,40,.05);--ring:0 0 0 3px rgba(79,91,213,.28);
+--radius:16px;--radius-sm:10px;--mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace}
+@media(prefers-color-scheme:dark){:root{
+--bg:#0e1116;--surface:#161a21;--surface-2:#1b2029;--sunken:#11151b;--line:#272d38;--line-strong:#363d4a;
+--text:#e7eaf0;--muted:#a0a8b7;--faint:#757e8e;
+--accent:#8e97ff;--accent-strong:#a9b0ff;--accent-soft:#232848;--on-accent:#0e1116;
+--green:#3fcf8e;--green-soft:#15291f;--red:#ff6b74;--red-soft:#2e1619;--amber:#f4b740;--amber-soft:#2b2210;
+--direct:#5aa4ff;--zapret:#3fcf8e;--vpn:#b294ff;
+--shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.25);--ring:0 0 0 3px rgba(142,151,255,.35)}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.i{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.page{width:min(1080px,calc(100% - 32px));margin:0 auto;padding:0 0 48px}
+header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:28px 0 18px}
+.brand{display:flex;align-items:center;gap:14px;min-width:0}
+.logo{display:grid;place-items:center;width:46px;height:46px;flex:none;border-radius:13px;background:linear-gradient(135deg,#5b67e8,#3f49b8);color:#fff;box-shadow:0 6px 18px rgba(79,91,213,.35)}
+.logo .i{width:24px;height:24px;stroke-width:2.2}
+h1{margin:0;font-size:clamp(22px,4vw,28px);line-height:1.15;letter-spacing:-.02em;font-weight:720}
+.subtitle,.hint,.muted{color:var(--muted)}.subtitle{font-size:14px}
+.status{display:inline-flex;align-items:center;gap:9px;padding:7px 14px 7px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);box-shadow:var(--shadow);font-size:14px;font-weight:600;white-space:nowrap}
+.dot{position:relative;width:9px;height:9px;border-radius:50%;background:var(--amber);color:var(--amber)}
+.dot.ok{background:var(--green);color:var(--green)}.dot.bad{background:var(--red);color:var(--red)}
+.dot.ok::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid currentColor;opacity:0;animation:pulse 2.4s ease-out infinite}
+@keyframes pulse{0%{transform:scale(.6);opacity:.55}100%{transform:scale(1.5);opacity:0}}
+.tabs{position:sticky;top:0;z-index:5;display:flex;gap:4px;margin:0 -4px;padding:6px 4px;overflow-x:auto;scrollbar-width:none;background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:saturate(1.4) blur(10px);-webkit-backdrop-filter:saturate(1.4) blur(10px)}
+.tabs::-webkit-scrollbar{display:none}
+.tabs .tab{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border:1px solid transparent;border-radius:11px;background:transparent;color:var(--muted);font-weight:600;white-space:nowrap;box-shadow:none}
+.tabs .tab:hover{background:var(--surface);color:var(--text);border-color:var(--line);transform:none}
+.tabs .tab.active{background:var(--surface);color:var(--accent);border-color:var(--line);box-shadow:var(--shadow)}
+.tab-page{display:none}.tab-page.active{display:block;animation:fade .18s ease-out}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.card{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow);padding:22px;margin-top:16px}
+.card h2{margin:0 0 4px;font-size:18px;line-height:1.3;letter-spacing:-.01em;font-weight:680}
+.hint{margin:0 0 16px;font-size:14px}
+button{appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:10px 16px;background:var(--surface);color:var(--text);font:inherit;font-size:14px;font-weight:600;line-height:1.3;cursor:pointer;transition:background .15s,border-color .15s,color .15s,box-shadow .15s,transform .15s}
+button:hover{background:var(--surface-2);border-color:var(--faint)}
+button:active{transform:translateY(1px)}
+button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{outline:none;box-shadow:var(--ring);border-color:var(--accent)}
+button:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.apply{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}.apply:hover{background:var(--accent-strong);border-color:var(--accent-strong)}
+.cancel,.stop{color:var(--red)}.cancel:hover,.stop:hover{background:var(--red-soft);border-color:var(--red)}
+.rollback,.restart{color:var(--amber)}.rollback:hover,.restart:hover{background:var(--amber-soft);border-color:var(--amber)}
+.start{color:var(--green)}.start:hover{background:var(--green-soft);border-color:var(--green)}
+.clear{padding:7px 12px;font-size:13px;border-color:var(--line);color:var(--muted)}.clear:hover{color:var(--text)}
+.xkeen-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.xkeen-actions button{padding:12px 16px}
+.services{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.service,.profile{border:1px solid var(--line);border-radius:14px;padding:16px;background:var(--surface-2)}
+.service-head,.profile-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px}
+.service h3,.profile h3{margin:0;font-size:16px;font-weight:680}
+.service-title{display:flex;align-items:center;gap:10px}
+.service-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;color:#fff;font-weight:800;font-size:15px}
+.service[data-service=discord] .service-icon{background:#5865f2}.service[data-service=youtube] .service-icon{background:#ff2d2d}
+.current{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:var(--sunken);color:var(--muted);font:600 11px/1.6 var(--mono);letter-spacing:.04em}
+.service:has(.mode.active[data-mode=direct]) .current{background:color-mix(in srgb,var(--direct) 14%,transparent);color:var(--direct)}
+.service:has(.mode.active[data-mode=zapret]) .current{background:color-mix(in srgb,var(--zapret) 14%,transparent);color:var(--zapret)}
+.service:has(.mode.active[data-mode=vpn]) .current{background:color-mix(in srgb,var(--vpn) 14%,transparent);color:var(--vpn)}
+.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}
+.mode{--mode:var(--accent);padding:9px 8px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted);box-shadow:none}
+.mode[data-mode=direct]{--mode:var(--direct)}.mode[data-mode=zapret]{--mode:var(--zapret)}.mode[data-mode=vpn]{--mode:var(--vpn)}
+.mode::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--mode);opacity:.55}
+.mode:hover{background:var(--surface);color:var(--text);border-color:transparent}
+.mode.active{background:var(--surface);color:var(--mode);border-color:color-mix(in srgb,var(--mode) 45%,transparent);box-shadow:var(--shadow)}
+.mode.active::before{opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,var(--mode) 22%,transparent)}
+.legend{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px;color:var(--muted);font-size:13px}
+.legend>div{padding:10px 12px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line)}
+.legend b{display:flex;align-items:center;gap:7px;color:var(--text);margin-bottom:2px;font-size:13px}
+.legend b::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--c)}
+.legend>div:nth-child(1){--c:var(--direct)}.legend>div:nth-child(2){--c:var(--zapret)}.legend>div:nth-child(3){--c:var(--vpn)}
+.warning{display:flex;gap:10px;align-items:flex-start;margin-top:14px;padding:11px 14px;border-radius:12px;border:1px solid color-mix(in srgb,var(--amber) 30%,transparent);background:var(--amber-soft);color:var(--text);font-size:13px;line-height:1.5}
+.warning::before{content:"!";display:grid;place-items:center;flex:none;width:18px;height:18px;margin-top:1px;border-radius:50%;background:var(--amber);color:var(--surface);font-weight:800;font-size:12px}
+.upload{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}
+input[type=file]{width:100%;padding:12px;border:1.5px dashed var(--line-strong);border-radius:12px;background:var(--surface-2);color:var(--muted);font:inherit;font-size:14px;cursor:pointer}
+input[type=file]:hover{border-color:var(--accent)}
+input[type=file]::file-selector-button{margin-right:12px;padding:7px 12px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);color:var(--text);font:inherit;font-weight:600;cursor:pointer}
+.candidate{display:none}.candidate.visible{display:block;margin-top:16px}
+.meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px;margin:14px 0;padding:14px 16px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line)}
+.meta div{min-width:0;overflow-wrap:anywhere}.meta b{display:block;color:var(--faint);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.profiles{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.profile{display:flex;flex-direction:column;padding:14px}
+.profile h3{font-size:15px}.profile .family{flex:1;min-height:40px;margin-top:4px;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.profile button{width:100%;padding:8px;margin-top:10px;font-size:13px;color:var(--red)}
+.tuner-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.field{display:grid;gap:6px}.field label{color:var(--muted);font-size:13px;font-weight:600}
+.field select,.field input{width:100%;padding:10px 12px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font:inherit;font-size:14px}
+.field select:hover,.field input:hover{border-color:var(--faint)}
+.tuner-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+.verdict{display:none;margin-top:14px;padding:16px;border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:13px;background:var(--amber-soft)}
+.verdict.visible{display:block}.verdict b{display:block;margin-bottom:2px}.verdict-actions{display:flex;gap:10px;margin-top:12px}
+.progress-line{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px 12px;margin:12px 0;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+.found-card{display:none;border-color:color-mix(in srgb,var(--green) 40%,var(--line))}.found-card.visible{display:block}
+.found-card h2{color:var(--green)}
+.console-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.console-head h2{margin:0}
+pre{min-height:120px;max-height:340px;overflow:auto;margin:0;padding:14px 16px;border:1px solid #1f2633;border-radius:12px;background:#0b0e14;color:#c9f4dd;white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.65 var(--mono)}
+.args{min-height:80px;max-height:260px;color:#cdd6ff}
+.route-progress{display:none;margin-top:16px;padding:14px 16px;border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);border-radius:13px;background:var(--accent-soft)}
+.route-progress.visible{display:block}
+.route-progress-head{display:flex;justify-content:space-between;gap:12px;font-size:14px;font-variant-numeric:tabular-nums}
+.bar{height:6px;margin-top:10px;border-radius:99px;background:color-mix(in srgb,var(--accent) 16%,transparent);overflow:hidden}
+.bar span{display:block;height:100%;width:0;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--green));transition:width .35s ease}
+.history-list,.version-list,.check-list,.diagnostic-list{display:grid;gap:10px}
+.history-item,.version-item,.check-item,.diagnostic-item,.update-box{padding:14px 16px;border:1px solid var(--line);border-radius:13px;background:var(--surface-2)}
+.history-head,.version-head,.check-head,.diagnostic-head,.update-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.history-head>b,.version-head>b,.diagnostic-head>b{font-size:14px;font-weight:650}
+.history-head>span,.version-head>span,.diagnostic-head>span{flex:none;padding:2px 9px;border-radius:999px;background:var(--sunken);color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.history-head>span.good,.version-head>span.good,.diagnostic-head>span.good{background:var(--green-soft);color:var(--green)}
+.history-head>span.bad,.version-head>span.bad,.diagnostic-head>span.bad{background:var(--red-soft);color:var(--red)}
+.diagnostic-item.warn .diagnostic-head>span{background:var(--amber-soft);color:var(--amber)}
+.history-item button,.version-item button{margin-top:10px;padding:6px 12px;font-size:13px}
+.history-routes,.version-meta,.check-detail,.diagnostic-detail{color:var(--muted);font-size:13px;margin-top:4px;overflow-wrap:anywhere}
+.good{color:var(--green)}.bad{color:var(--red)}
+.diagnostic-item.bad,.check-item.bad{color:var(--text)}
+.card>.profile-head:last-child{margin-bottom:0}.card>.profile-head:last-child .hint{margin-bottom:0}
+#postApplyStatus.good,#postApplyStatus.bad{margin:0 0 4px;font-size:14px;font-weight:600}
+.toolbar{display:flex;flex-wrap:wrap;gap:10px}
+.check-item,.diagnostic-item{position:relative;padding-left:18px;overflow:hidden}
+.check-item::before,.diagnostic-item::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--red)}
+.check-item.ok::before,.diagnostic-item.ok::before{background:var(--green)}.check-item.manual::before,.diagnostic-item.warn::before{background:var(--amber)}
+.updates-grid,.diagnostic-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.mono{font:12px var(--mono);overflow-wrap:anywhere}
+.empty{color:var(--faint);padding:14px;border:1px dashed var(--line);border-radius:12px;text-align:center;font-size:14px}
+.update-box .empty{border:0;padding:0;text-align:left}
+.download{display:inline-flex;align-items:center;gap:8px;text-decoration:none;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:10px 16px;background:var(--surface);color:var(--accent);font-weight:600;font-size:14px;transition:background .15s,border-color .15s}
+.download:hover{background:var(--accent-soft);border-color:var(--accent)}
+.protocols{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.protocol{padding:2px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);font:11px/1.7 var(--mono)}
+.protocol.ok{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,transparent)}
+.protocol.warn{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 40%,transparent)}
+.protocol.bad{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,transparent)}
+.section-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}.section-head h2{margin:0}
+.section-head .i{color:var(--accent)}
+#tunerVerification{margin:12px 0 0}
+footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
+@media(max-width:760px){header{align-items:flex-start;flex-direction:column;padding-top:20px}.services,.profiles,.tuner-grid,.updates-grid,.diagnostic-grid,.legend,.meta{grid-template-columns:1fr}.card{padding:18px}.profile-head{flex-wrap:wrap}}
+@media(max-width:480px){.page{width:calc(100% - 24px)}.xkeen-actions,.upload{grid-template-columns:1fr}.tabs{display:grid;grid-template-columns:1fr 1fr}.tabs .tab{justify-content:center;padding:8px 10px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style>
 </head>
-<body><main class="page">
-<header><div><h1>XKeen Control</h1><div class="subtitle">Маршруты сервисов и профили nfqws2</div></div><div class="status"><span id="dot" class="dot"></span><span id="statusText">проверка…</span></div></header>
-<nav class="tabs"><button class="tab active" data-tab="control">Управление</button><button class="tab" data-tab="diagnostics">Диагностика</button><button class="tab" data-tab="autotune">Автоподбор</button><button class="tab" data-tab="import">Импорт профиля</button></nav>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h7.5a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7H16"/></symbol>
+<symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+<symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></symbol>
+<symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4"/><path d="M7 9l5-5 5 5"/><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+<symbol id="i-restart" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></symbol>
+<symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.64-6.36"/><path d="M3 4v5h5"/><path d="M12 7.5V12l3 2"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></symbol>
+<symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7.5 9.5l3 2.5-3 2.5"/><path d="M13 15h4"/></symbol>
+<symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+</svg>
+<main class="page">
+<header><div class="brand"><div class="logo"><svg class="i"><use href="#i-route"/></svg></div><div><h1>XKeen Control</h1><div class="subtitle">Маршруты сервисов и профили nfqws2</div></div></div><div class="status" role="status" aria-live="polite"><span id="dot" class="dot"></span><span id="statusText">проверка…</span></div></header>
+<nav class="tabs" aria-label="Разделы"><button class="tab active" data-tab="control"><svg class="i"><use href="#i-route"/></svg>Управление</button><button class="tab" data-tab="diagnostics"><svg class="i"><use href="#i-pulse"/></svg>Диагностика</button><button class="tab" data-tab="autotune"><svg class="i"><use href="#i-spark"/></svg>Автоподбор</button><button class="tab" data-tab="import"><svg class="i"><use href="#i-upload"/></svg>Импорт профиля</button></nav>
 
 <div id="control" class="tab-page active">
-  <section class="card"><h2>XKeen</h2><p class="hint">Запуск и остановка proxy-клиента.</p><div class="xkeen-actions"><button class="start" data-action="start">Включить</button><button class="stop" data-action="stop">Выключить</button><button class="restart" data-action="restart">Перезапустить</button></div></section>
-  <section class="card"><h2>Маршруты сервисов</h2><p class="hint">Меняется только выбранный сервис; режим второго сохраняется.</p><div class="services">
-    <article class="service" data-service="discord"><div class="service-head"><h3>Discord</h3><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
-    <article class="service" data-service="youtube"><div class="service-head"><h3>YouTube</h3><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
-  </div><div class="legend"><div><b>Direct</b>Напрямую через WAN, без nfqws2.</div><div><b>Zapret</b>Через WAN с обработкой nfqws2.</div><div><b>VPN</b>Через существующий VLESS outbound Xray.</div></div><div class="warning">Смена маршрута выполняет полный транзакционный apply и перезапускает службы, включая Xkeen.</div><div id="routeProgress" class="route-progress"><div class="route-progress-head"><b id="routeStage">Подготовка</b><span id="routePercent">0%</span></div><div class="bar"><span id="routeBar"></span></div></div></section>
-  <section class="card"><div class="profile-head"><div><h2>Проверка после применения</h2><div id="postApplyStatus" class="hint">После переключения здесь появится краткий статус служб и конфигов.</div></div><button id="openDiagnostics" class="clear">Открыть диагностику</button></div></section>
-  <section class="card"><div class="profile-head"><div><h2>История и откат</h2><div class="hint">Для каждой смены сохраняются режимы, результат и pre-apply snapshot.</div></div><button id="refreshHistory" class="clear">Обновить</button></div><div id="history" class="history-list"><div class="empty">История пуста.</div></div></section>
+  <section class="card"><div class="section-head"><svg class="i"><use href="#i-power"/></svg><h2>XKeen</h2></div><p class="hint">Запуск и остановка proxy-клиента.</p><div class="xkeen-actions"><button class="start" data-action="start"><svg class="i"><use href="#i-play"/></svg>Включить</button><button class="stop" data-action="stop"><svg class="i"><use href="#i-stop"/></svg>Выключить</button><button class="restart" data-action="restart"><svg class="i"><use href="#i-restart"/></svg>Перезапустить</button></div></section>
+  <section class="card"><div class="section-head"><svg class="i"><use href="#i-route"/></svg><h2>Маршруты сервисов</h2></div><p class="hint">Меняется только выбранный сервис; режим второго сохраняется.</p><div class="services">
+    <article class="service" data-service="discord"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">D</span><h3>Discord</h3></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
+    <article class="service" data-service="youtube"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">Y</span><h3>YouTube</h3></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
+  </div><div class="legend"><div><b>Direct</b>Напрямую через WAN, без nfqws2.</div><div><b>Zapret</b>Через WAN с обработкой nfqws2.</div><div><b>VPN</b>Через существующий VLESS outbound Xray.</div></div><div class="warning">Смена маршрута выполняет полный транзакционный apply и перезапускает службы, включая Xkeen.</div><div id="routeProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="routeStage">Подготовка</b><span id="routePercent">0%</span></div><div class="bar"><span id="routeBar"></span></div></div></section>
+  <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-check"/></svg><h2>Проверка после применения</h2></div><div id="postApplyStatus" class="hint">После переключения здесь появится краткий статус служб и конфигов.</div></div><button id="openDiagnostics" class="clear">Открыть диагностику</button></div></section>
+  <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-history"/></svg><h2>История и откат</h2></div><div class="hint">Для каждой смены сохраняются режимы, результат и pre-apply snapshot.</div></div><button id="refreshHistory" class="clear">Обновить</button></div><div id="history" class="history-list"><div class="empty">История пуста.</div></div></section>
 </div>
 
 <div id="diagnostics" class="tab-page">
-  <section class="card"><h2>Диагностика Flowseal для роутера</h2><p class="hint">Адаптация Run Diagnostics и Run Tests: ничего не применяет, не меняет firewall и не перезапускает Xkeen/nfqws2.</p>
-    <div class="toolbar"><button class="diag-start" data-diag-kind="health">Проверить роутер</button><button class="diag-start" data-diag-kind="standard">Standard tests</button><button class="diag-start" data-diag-kind="dpi">DPI 16–20 КБ</button><button id="cancelDiagnostic" class="cancel" disabled>Остановить тест</button></div>
-    <div id="diagnosticProgress" class="route-progress"><div class="route-progress-head"><b id="diagnosticStatus">Задание не запускалось</b><span id="diagnosticPercent">0%</span></div><div class="bar"><span id="diagnosticBar"></span></div></div>
+  <section class="card"><div class="section-head"><svg class="i"><use href="#i-pulse"/></svg><h2>Диагностика Flowseal для роутера</h2></div><p class="hint">Адаптация Run Diagnostics и Run Tests: ничего не применяет, не меняет firewall и не перезапускает Xkeen/nfqws2.</p>
+    <div class="toolbar"><button class="diag-start apply" data-diag-kind="health">Проверить роутер</button><button class="diag-start" data-diag-kind="standard">Standard tests</button><button class="diag-start" data-diag-kind="dpi">DPI 16–20 КБ</button><button id="cancelDiagnostic" class="cancel" disabled>Остановить тест</button></div>
+    <div id="diagnosticProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="diagnosticStatus">Задание не запускалось</b><span id="diagnosticPercent">0%</span></div><div class="bar"><span id="diagnosticBar"></span></div></div>
     <div class="warning">Standard tests и DPI выполняются из этого браузера по текущим маршрутам устройства. Собственный VPN/прокси компьютера тоже влияет на путь. Ping и выбор TLS-версии браузеру недоступны. DPI: HTTPS GET и POST 64 КиБ на 12 узлов, до 768 КиБ отправки. CORS скрывает HTTP-код и объём передачи; таймаут или ошибка могут быть вызваны сервером, перенаправлением или политикой браузера и не доказывают DPI-блокировку. При закрытии страницы тест остановится.</div>
   </section>
   <section class="card"><div class="profile-head"><div><h2>Результаты</h2><div id="diagnosticSummary" class="hint">Пока нет результатов.</div></div></div><div id="diagnosticResults" class="diagnostic-list"><div class="empty">Запустите один из тестов выше.</div></div></section>
   <section class="card"><h2>Проверить в приложении</h2><p class="hint">Discord Voice/UDP: переподключитесь к голосовому каналу и проверьте звук в обе стороны. YouTube QUIC/HTTP3: запустите видео в клиенте с HTTP3; обычный HTTPS-тест не подтверждает QUIC или воспроизведение.</p></section>
-  <section class="card"><h2>Кэш Discord на Windows</h2><p class="hint">Роутер не имеет доступа к файлам компьютера. Helper закрывает Discord и переименовывает Cache, Code Cache и GPUCache в резервные каталоги — ничего безвозвратно не удаляется.</p><a class="download" href="/tools/reset-discord-cache.ps1" download>Скачать Windows-helper</a></section>
+  <section class="card"><h2>Кэш Discord на Windows</h2><p class="hint">Роутер не имеет доступа к файлам компьютера. Helper закрывает Discord и переименовывает Cache, Code Cache и GPUCache в резервные каталоги — ничего безвозвратно не удаляется.</p><a class="download" href="/tools/reset-discord-cache.ps1" download><svg class="i"><use href="#i-download"/></svg>Скачать Windows-helper</a></section>
 </div>
 
 <div id="autotune" class="tab-page">
   <section class="card"><div class="profile-head"><div><h2>Обновления Flowseal</h2><div class="hint">Новые стратегии скачиваются для следующего подбора. Рабочие профили остаются прежними.</div></div><button id="checkUpdates">Проверить обновление</button></div><div id="updateInfo" class="update-box"><div class="empty">Обновления ещё не проверялись.</div></div></section>
   <section class="card">
-    <h2>Автоподбор стратегий</h2>
+    <div class="section-head"><svg class="i"><use href="#i-spark"/></svg><h2>Автоподбор стратегий</h2></div>
     <p class="hint">Актуальные general*.bat временно проверяются на роутере. Меняется только проверяемый профиль; остальные TCP/QUIC/UDP-профили сохраняются. Для TCP выполняются baseline и два прохода кандидата с проверкой API/CDN. Voice требует подтверждения звука.</p>
     <div class="tuner-grid">
       <div class="field"><label for="tunerService">Сервис</label><select id="tunerService"><option value="youtube">YouTube</option><option value="discord-tcp">Discord TCP</option><option value="discord-voice">Discord Voice</option></select></div>
@@ -151,7 +298,7 @@ HTML = r"""<!doctype html>
       <div class="field"><label for="tunerSeed">Seed (пусто = новый случайный)</label><input id="tunerSeed" inputmode="numeric" pattern="[0-9]*" placeholder="например, 1732459012"></div>
       <div class="field" id="clientIpField" hidden><label for="tunerClientIp">LAN IPv4 компьютера с Discord</label><input id="tunerClientIp" inputmode="decimal" placeholder="192.168.2.60"></div>
     </div>
-    <div class="tuner-actions"><button id="startTuner" class="apply">Начать подбор</button><button id="cancelTuner" class="cancel" disabled>Остановить и восстановить nfqws2</button></div>
+    <div class="tuner-actions"><button id="startTuner" class="apply"><svg class="i"><use href="#i-play"/></svg>Начать подбор</button><button id="cancelTuner" class="cancel" disabled>Остановить и восстановить nfqws2</button></div>
     <div class="warning">Safe отдельно меняет repeats, out-range, TCP pos/seq и QUIC repeats. Extended добавляет ограниченные сочетания и смешивание BAT-компонентов. Пустой seed даёт новый порядок и подмножество кандидатов; сохранённый seed точно повторяет поиск. Подбор временно перезапускает только nfqws2; Xkeen не вызывается. Сервис должен заранее находиться в режиме Zapret.</div>
   </section>
   <section class="card">
@@ -159,10 +306,10 @@ HTML = r"""<!doctype html>
     <div class="progress-line"><span id="tunerProgress">—</span><span id="tunerProbe"></span></div>
     <pre id="tunerLog"></pre>
     <div id="tunerVerification" class="hint"></div>
-    <div id="voiceVerdict" class="verdict"><b>Проверьте Discord Voice</b><div>Переподключитесь к голосовому каналу и подтвердите, появился ли звук в обе стороны.</div><div class="verdict-actions"><button id="voiceYes" class="apply">Да, работает</button><button id="voiceNo" class="cancel">Нет</button></div></div>
+    <div id="voiceVerdict" class="verdict" role="alert"><b>Проверьте Discord Voice</b><div>Переподключитесь к голосовому каналу и подтвердите, появился ли звук в обе стороны.</div><div class="verdict-actions"><button id="voiceYes" class="apply">Да, работает</button><button id="voiceNo" class="cancel">Нет</button></div></div>
   </section>
   <section id="tunerFound" class="card found-card">
-    <h2>Найден проходной профиль</h2>
+    <div class="section-head"><svg class="i good"><use href="#i-check"/></svg><h2>Найден проходной профиль</h2></div>
     <div class="meta"><div><b>ID</b><span id="tunerFoundId"></span></div><div><b>Семейство</b><span id="tunerFoundFamily"></span></div><div><b>Источник</b><span id="tunerFoundSource"></span></div></div>
     <pre id="tunerFoundArgs" class="args"></pre>
     <div class="tuner-actions"><button id="applyTunerResult" class="apply">Применить найденный профиль</button></div>
@@ -171,14 +318,15 @@ HTML = r"""<!doctype html>
 </div>
 
 <div id="import" class="tab-page">
-  <section class="card"><h2>Отчёт Windows-тюнера</h2><p class="hint">Выберите JSON-отчёт с найденным кандидатом. Сначала он проверяется, применение доступно только для сервиса в режиме Zapret.</p><div class="upload"><input id="reportFile" type="file" accept="application/json,.json"><button id="validate">Проверить</button></div>
+  <section class="card"><div class="section-head"><svg class="i"><use href="#i-upload"/></svg><h2>Отчёт Windows-тюнера</h2></div><p class="hint">Выберите JSON-отчёт с найденным кандидатом. Сначала он проверяется, применение доступно только для сервиса в режиме Zapret.</p><div class="upload"><input id="reportFile" type="file" accept="application/json,.json"><button id="validate">Проверить</button></div>
     <div id="candidate" class="candidate"><div class="meta"><div><b>Сервис</b><span id="candidateService"></span></div><div><b>ID кандидата</b><span id="candidateId"></span></div><div><b>BAT-источник</b><span id="candidateSource"></span></div><div><b>Семейство</b><span id="candidateFamily"></span></div></div><pre id="candidateArgs" class="args"></pre><p class="warning">Применение создаёт отдельный snapshot, меняет только nfqws2 и перезапускает только nfqws2. Xkeen не останавливается и не перезапускается.</p><button id="applyImport" class="apply">Применить профиль nfqws2</button></div>
   </section>
-  <section class="card"><div class="profile-head"><div><h2>Постоянные профили</h2><div class="hint">Они сохраняются при следующих обычных apply.</div></div><button id="rollbackImport" class="rollback">Откатить последнее изменение</button></div><div id="profiles" class="profiles"></div></section>
+  <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-layers"/></svg><h2>Постоянные профили</h2></div><div class="hint">Они сохраняются при следующих обычных apply.</div></div><button id="rollbackImport" class="rollback">Откатить последнее изменение</button></div><div id="profiles" class="profiles"></div></section>
   <section class="card"><div class="profile-head"><div><h2>Версии профилей по дате</h2><div class="hint">Каждый импорт и заменяемый профиль сохраняются отдельно.</div></div><button id="refreshVersions" class="clear">Обновить</button></div><div id="profileVersions" class="version-list"><div class="empty">Сохранённых версий пока нет.</div></div></section>
 </div>
 
-<section class="card"><div class="console-head"><h2>Журнал</h2><button class="clear" id="clear">Очистить</button></div><pre id="log"></pre></section>
+<section class="card"><div class="console-head"><div class="section-head"><svg class="i"><use href="#i-terminal"/></svg><h2>Журнал</h2></div><button class="clear" id="clear">Очистить</button></div><pre id="log" aria-live="polite"></pre></section>
+<footer>XKeen + nfqws2 · локальная панель, доступна только из LAN</footer>
 </main>
 <script src="/assets/browser-diagnostics.js"></script>
 <script>
