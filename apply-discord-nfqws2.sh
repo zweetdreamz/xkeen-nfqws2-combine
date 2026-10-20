@@ -1812,10 +1812,13 @@ restore_packages() {
       opkg install "$restore_pkg" >/dev/null 2>&1 || restore_package_errors=1
       current_version="$(package_version "$restore_pkg" || true)"
     fi
+    # opkg cannot install an older version from the feed, so an upgrade made
+    # after the snapshot is reported but is not a restore failure: failing
+    # here would make the automatic rollback undo the requested restore.
     if [ "$restore_presence" = "PRESENT" ] && [ -n "$current_version" ] &&
        [ "$current_version" != "$restore_version" ]; then
-      echo "WARNING: $restore_pkg version is $current_version; baseline was $restore_version." >&2
-      restore_package_errors=1
+      echo "WARNING: $restore_pkg version is $current_version; snapshot has $restore_version." >&2
+      echo "         opkg cannot downgrade it; the package stays at $current_version." >&2
     fi
   done < "$restore_packages_file"
 

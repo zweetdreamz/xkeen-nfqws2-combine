@@ -216,7 +216,9 @@ cat > "$MOCK_BIN/opkg" <<'EOF'
 #!/bin/sh
 case "${1:-}" in
   status)
-    printf 'Package: %s\nVersion: 1.0-test\nStatus: install user installed\n' "${2:-fixture}"
+    # A test can simulate "opkg upgrade" by writing a version to this file.
+    version="$(cat "$KD_TEST_ROOT/opkg-version" 2>/dev/null || echo 1.0-test)"
+    printf 'Package: %s\nVersion: %s\nStatus: install user installed\n' "${2:-fixture}" "$version"
     ;;
   list-installed)
     echo "nfqws2-keenetic - 1.0-test"
@@ -500,6 +502,22 @@ apply_mode vless zapret
 selected_snapshot="$(sed -n '1p' "$ROOT/opt/etc/keenetic-discord-nfqws2/latest-preapply.ptr")"
 apply_mode direct direct
 run_tool --rollback-snapshot "$selected_snapshot" --yes-router >/dev/null
+assert_mode zapret zapret vless
+
+# opkg cannot downgrade, so a package upgraded after the snapshot must only
+# produce a warning. It used to fail the restore, and the automatic rollback
+# then restored the rescue snapshot, silently undoing the requested rollback.
+apply_mode zapret vless
+apply_mode vless zapret
+printf '%s\n' '2.0-upgraded' > "$ROOT/opkg-version"
+rollback_output="$(run_tool --rollback-latest --yes-router 2>&1)"
+rm -f "$ROOT/opkg-version"
+printf '%s\n' "$rollback_output" |
+  grep -Fq 'WARNING: nfqws2-keenetic version is 2.0-upgraded; snapshot has 1.0-test.'
+if printf '%s\n' "$rollback_output" | grep -Fq 'automatic rollback'; then
+  echo "ERROR: package drift triggered an automatic rollback" >&2
+  exit 1
+fi
 assert_mode zapret zapret vless
 
 # A config written before the TCP/Voice split still reports both routes.
