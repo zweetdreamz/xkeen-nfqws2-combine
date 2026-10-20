@@ -329,7 +329,7 @@ test_voice_candidate() {
   fi
 
   emit "VOICE_READY|$candidate_number|$VOICE_DURATION"
-  if [ -x "$VOICE_DIAGNOSTIC" ]; then
+  if [ -f "$VOICE_DIAGNOSTIC" ]; then
     sh "$VOICE_DIAGNOSTIC" "$CLIENT_IP" "$VOICE_DURATION" || true
   else
     emit "VOICE_DIAGNOSTIC_MISSING|$VOICE_DIAGNOSTIC"

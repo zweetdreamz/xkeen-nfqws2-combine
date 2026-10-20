@@ -280,7 +280,7 @@ echo 'EVENT|VOICE_OBSERVATION|15|12|1'
 echo 'EVENT|VOICE_ENDPOINT|162.159.130.234|50007|15|12'
 echo yes > "$TUNER_VERDICT_FILE"
 EOF
-chmod +x "$voice_dir/diagnose-discord-voice.sh"
+# Not executable on purpose: project scripts are stored as 0644 and run via sh.
 : > "$ROOT/nfqws-candidates.log"
 python3 - "$SCRIPT_DIR/tools/windows" "$ROOT" <<'PY'
 import sys
