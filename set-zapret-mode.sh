@@ -12,11 +12,13 @@ Usage:
   sh set-zapret-mode.sh both --yes-router
   sh set-zapret-mode.sh vless --yes-router
 
-Presets:
+Presets (Discord means both Discord TCP and Discord Voice):
   discord  Discord through zapret, YouTube through VLESS
   youtube  Discord through VLESS, YouTube through zapret
   both     Discord and YouTube through zapret
   vless    Discord and YouTube through VLESS
+
+Use set-service-route.sh to route Discord TCP and Discord Voice separately.
 
 Additional apply options are passed to apply-discord-nfqws2.sh.
 Every switch creates latest-preapply and uses automatic rollback on failure.

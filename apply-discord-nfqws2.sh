@@ -82,9 +82,11 @@ NFQWS_IPV6_EFFECTIVE=0
 CONFIRMED=0
 WIDE_UDP=0
 UDP_STRATEGY="flowseal"
-DISCORD_ROUTE_MODE="zapret"
+DISCORD_TCP_ROUTE_MODE="zapret"
+DISCORD_VOICE_ROUTE_MODE="zapret"
 YOUTUBE_ROUTE_MODE="vless"
-DISCORD_ROUTE_EXPLICIT=0
+DISCORD_TCP_ROUTE_EXPLICIT=0
+DISCORD_VOICE_ROUTE_EXPLICIT=0
 YOUTUBE_ROUTE_EXPLICIT=0
 PROXY_OUTBOUND_REQUESTED=""
 PROXY_OUTBOUND_EFFECTIVE=""
@@ -135,7 +137,12 @@ Routing options:
   --standalone-zapret       Install/manage nfqws2 without XKeen/Xray/Mihomo.
                             Defaults both services to zapret; vless is rejected.
                             Aliases: --without-xkeen, --no-xkeen.
+  --discord-tcp-route direct|zapret|vless
+                             Discord domains: TCP/TLS and QUIC.
+  --discord-voice-route direct|zapret|vless
+                             Discord Voice/STUN UDP ports.
   --discord-route direct|zapret|vless
+                             Shorthand that sets both Discord routes.
   --youtube-route direct|zapret|vless
   --proxy-outbound TAG       Xray proxy outbound used for vless modes;
                              normally detected from existing YouTube rules
@@ -155,7 +162,8 @@ Imported tuner profiles:
   --rollback-import
       Restore nfqws2 to the state before the latest profile import/clear.
 
-The compatibility default is Discord through zapret and YouTube through vless.
+The compatibility default is Discord TCP and Voice through zapret and YouTube
+through vless.
 With --standalone-zapret the default is zapret for both services.
 Use set-zapret-mode.sh for the four explicit service combinations.
 
@@ -222,6 +230,25 @@ ytstatic.l.google.com
 EOF
 }
 
+routes_summary() {
+  printf 'Discord TCP=%s, Discord Voice=%s, YouTube=%s' \
+    "$DISCORD_TCP_ROUTE_MODE" "$DISCORD_VOICE_ROUTE_MODE" "$YOUTUBE_ROUTE_MODE"
+}
+
+# True when at least one of the three managed routes equals $1.
+any_route_is() {
+  [ "$DISCORD_TCP_ROUTE_MODE" = "$1" ] ||
+    [ "$DISCORD_VOICE_ROUTE_MODE" = "$1" ] ||
+    [ "$YOUTUBE_ROUTE_MODE" = "$1" ]
+}
+
+# True when all three managed routes equal $1.
+all_routes_are() {
+  [ "$DISCORD_TCP_ROUTE_MODE" = "$1" ] &&
+    [ "$DISCORD_VOICE_ROUTE_MODE" = "$1" ] &&
+    [ "$YOUTUBE_ROUTE_MODE" = "$1" ]
+}
+
 print_plan() {
   if [ "$WIDE_UDP" -eq 1 ]; then
     plan_udp="$UDP_PORTS_WIDE"
@@ -232,7 +259,7 @@ print_plan() {
   if [ "$STANDALONE_ZAPRET" -eq 1 ]; then
     cat <<EOF
 План standalone-установки Zapret:
-0. Целевые режимы nfqws2: Discord=$DISCORD_ROUTE_MODE, YouTube=$YOUTUBE_ROUTE_MODE.
+0. Целевые режимы nfqws2: $(routes_summary).
 1. Не искать, не читать, не настраивать и не перезапускать XKeen/Xray/Mihomo.
 2. Создать scoped snapshot только для nfqws2, его Entware-пакетов и hooks.
 3. Установить отсутствующие зависимости и nfqws2-keenetic.
@@ -253,7 +280,7 @@ EOF
 
   cat <<EOF
 План изменений на роутере:
-0. Целевые маршруты: Discord=$DISCORD_ROUTE_MODE, YouTube=$YOUTUBE_ROUTE_MODE.
+0. Целевые маршруты: $(routes_summary).
 1. До любых изменений создать полный снимок состояния.
 2. Сохранить неизменяемый baseline при первом запуске и отдельный latest-preapply.
 3. Учесть XKeen core=$CORE_REQUESTED и безопасно прочитать:
@@ -351,8 +378,28 @@ while [ "$#" -gt 0 ]; do
         echo "ERROR: --discord-route requires direct, zapret or vless." >&2
         exit 2
       }
-      DISCORD_ROUTE_MODE="$1"
-      DISCORD_ROUTE_EXPLICIT=1
+      DISCORD_TCP_ROUTE_MODE="$1"
+      DISCORD_VOICE_ROUTE_MODE="$1"
+      DISCORD_TCP_ROUTE_EXPLICIT=1
+      DISCORD_VOICE_ROUTE_EXPLICIT=1
+      ;;
+    --discord-tcp-route)
+      shift
+      [ "$#" -gt 0 ] || {
+        echo "ERROR: --discord-tcp-route requires direct, zapret or vless." >&2
+        exit 2
+      }
+      DISCORD_TCP_ROUTE_MODE="$1"
+      DISCORD_TCP_ROUTE_EXPLICIT=1
+      ;;
+    --discord-voice-route)
+      shift
+      [ "$#" -gt 0 ] || {
+        echo "ERROR: --discord-voice-route requires direct, zapret or vless." >&2
+        exit 2
+      }
+      DISCORD_VOICE_ROUTE_MODE="$1"
+      DISCORD_VOICE_ROUTE_EXPLICIT=1
       ;;
     --youtube-route)
       shift
@@ -406,7 +453,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$STANDALONE_ZAPRET" -eq 1 ]; then
-  [ "$DISCORD_ROUTE_EXPLICIT" -eq 1 ] || DISCORD_ROUTE_MODE="zapret"
+  [ "$DISCORD_TCP_ROUTE_EXPLICIT" -eq 1 ] || DISCORD_TCP_ROUTE_MODE="zapret"
+  [ "$DISCORD_VOICE_ROUTE_EXPLICIT" -eq 1 ] || DISCORD_VOICE_ROUTE_MODE="zapret"
   [ "$YOUTUBE_ROUTE_EXPLICIT" -eq 1 ] || YOUTUBE_ROUTE_MODE="zapret"
   if [ "$CORE_REQUESTED" != "auto" ]; then
     echo "ERROR: --core cannot be combined with --standalone-zapret." >&2
@@ -416,13 +464,11 @@ if [ "$STANDALONE_ZAPRET" -eq 1 ]; then
     echo "ERROR: --direct-mark/--proxy-outbound require XKeen and cannot be used in standalone mode." >&2
     exit 2
   fi
-  if [ "$DISCORD_ROUTE_MODE" = "vless" ] ||
-     [ "$YOUTUBE_ROUTE_MODE" = "vless" ]; then
+  if any_route_is vless; then
     echo "ERROR: vless routing is unavailable with --standalone-zapret; use zapret or direct." >&2
     exit 2
   fi
-  if [ "$DISCORD_ROUTE_MODE" != "zapret" ] &&
-     [ "$YOUTUBE_ROUTE_MODE" != "zapret" ]; then
+  if ! any_route_is zapret; then
     echo "ERROR: standalone mode needs at least one service with route=zapret." >&2
     exit 2
   fi
@@ -444,10 +490,18 @@ case "$UDP_STRATEGY" in
     ;;
 esac
 
-case "$DISCORD_ROUTE_MODE" in
+case "$DISCORD_TCP_ROUTE_MODE" in
   direct|zapret|vless) ;;
   *)
-    echo "ERROR: unsupported Discord route: $DISCORD_ROUTE_MODE" >&2
+    echo "ERROR: unsupported Discord TCP route: $DISCORD_TCP_ROUTE_MODE" >&2
+    exit 2
+    ;;
+esac
+
+case "$DISCORD_VOICE_ROUTE_MODE" in
+  direct|zapret|vless) ;;
+  *)
+    echo "ERROR: unsupported Discord Voice route: $DISCORD_VOICE_ROUTE_MODE" >&2
     exit 2
     ;;
 esac
@@ -1342,7 +1396,7 @@ preflight() {
     echo "ERROR: jq is required to patch and validate routing safely." >&2
     preflight_errors=$((preflight_errors + 1))
   fi
-  if [ "$DISCORD_ROUTE_MODE" = "zapret" ] &&
+  if [ "$DISCORD_VOICE_ROUTE_MODE" = "zapret" ] &&
      ! verify_discord_udp_blob_source; then
     preflight_errors=$((preflight_errors + 1))
   fi
@@ -1368,11 +1422,10 @@ preflight() {
         if [ ! -d "$XRAY_CONFIG_DIR" ]; then
           echo "ERROR: Xray config directory not found: $XRAY_CONFIG_DIR" >&2
           preflight_errors=$((preflight_errors + 1))
-        elif { [ "$DISCORD_ROUTE_MODE" != "vless" ] ||
-               [ "$YOUTUBE_ROUTE_MODE" != "vless" ]; } &&
+        elif ! all_routes_are vless &&
              ! resolve_xray_direct_mark; then
           preflight_errors=$((preflight_errors + 1))
-        elif { [ "$DISCORD_ROUTE_MODE" = "vless" ] ||
+        elif { [ "$DISCORD_TCP_ROUTE_MODE" = "vless" ] ||
                [ "$YOUTUBE_ROUTE_MODE" = "vless" ]; } &&
              ! resolve_xray_proxy_outbound; then
           preflight_errors=$((preflight_errors + 1))
@@ -1435,7 +1488,7 @@ preflight() {
   else
     echo "Preflight OK. XKeen core: $DETECTED_CORE"
   fi
-  echo "Routes: Discord=$DISCORD_ROUTE_MODE, YouTube=$YOUTUBE_ROUTE_MODE"
+  echo "Routes: $(routes_summary)"
   if [ "$DETECTED_CORE" = "xray" ]; then
     echo "Xray discord-direct mark: ${DIRECT_MARK_EFFECTIVE:-none}"
     echo "Xray proxy outbound: ${PROXY_OUTBOUND_EFFECTIVE:-not needed}"
@@ -2105,18 +2158,27 @@ show_snapshots() {
   fi
 }
 
+# Reads one service route from the "# Active routes:" line of nfqws2.conf.
+# Services: discord-tcp, discord-voice, youtube. The legacy line
+# "Discord=X, YouTube=Y." (before the TCP/Voice split) applies X to both
+# Discord routes.
 recorded_nfqws_route() {
   recorded_service="$1"
   [ -f "$NFQWS_CONF" ] || return 1
   awk -v service="$recorded_service" '
     $1 == "#" && $2 == "Active" && $3 == "routes:" {
-      discord = $4
-      youtube = $5
-      sub(/^Discord=/, "", discord)
-      sub(/,$/, "", discord)
-      sub(/^YouTube=/, "", youtube)
-      sub(/\.$/, "", youtube)
-      value = (service == "discord" ? discord : youtube)
+      value = ""
+      for (field = 4; field <= NF; field++) {
+        pair = $field
+        sub(/[,.]$/, "", pair)
+        split(pair, kv, "=")
+        if ((kv[1] == "DiscordTCP" && service == "discord-tcp") ||
+            (kv[1] == "DiscordVoice" && service == "discord-voice") ||
+            (kv[1] == "Discord" && (service == "discord-tcp" || service == "discord-voice")) ||
+            (kv[1] == "YouTube" && service == "youtube")) {
+          value = kv[2]
+        }
+      }
     }
     END {
       if (value == "direct" || value == "zapret" || value == "vless") {
@@ -2147,18 +2209,21 @@ load_current_nfqws_context() {
     STANDALONE_ZAPRET=1
     DETECTED_CORE="standalone"
   fi
-  DISCORD_ROUTE_MODE="$(recorded_nfqws_route discord 2>/dev/null || true)"
+  DISCORD_TCP_ROUTE_MODE="$(recorded_nfqws_route discord-tcp 2>/dev/null || true)"
+  DISCORD_VOICE_ROUTE_MODE="$(recorded_nfqws_route discord-voice 2>/dev/null || true)"
   YOUTUBE_ROUTE_MODE="$(recorded_nfqws_route youtube 2>/dev/null || true)"
-  case "$DISCORD_ROUTE_MODE:$YOUTUBE_ROUTE_MODE" in
-    direct:direct|direct:zapret|direct:vless|\
-    zapret:direct|zapret:zapret|zapret:vless|\
-    vless:direct|vless:zapret|vless:vless) ;;
-    *)
-      echo "ERROR: current managed Discord/YouTube routes cannot be determined." >&2
-      echo "       Apply a normal route mode once before importing a profile." >&2
-      return 1
-      ;;
-  esac
+  for current_route in \
+    "$DISCORD_TCP_ROUTE_MODE" "$DISCORD_VOICE_ROUTE_MODE" "$YOUTUBE_ROUTE_MODE"
+  do
+    case "$current_route" in
+      direct|zapret|vless) ;;
+      *)
+        echo "ERROR: current managed Discord/YouTube routes cannot be determined." >&2
+        echo "       Apply a normal route mode once before importing a profile." >&2
+        return 1
+        ;;
+    esac
+  done
 
   current_udp_ports="$(nfqws_value UDP_PORTS)"
   case "$current_udp_ports" in
@@ -2197,21 +2262,36 @@ status_report() {
     STANDALONE_ZAPRET=1
   fi
   detect_core || true
-  reported_discord_route="unknown"
+  reported_discord_tcp_route="unknown"
+  reported_discord_voice_route="unknown"
   reported_youtube_route="unknown"
-  recorded_discord_route="$(recorded_nfqws_route discord 2>/dev/null || true)"
+  recorded_discord_tcp_route="$(recorded_nfqws_route discord-tcp 2>/dev/null || true)"
+  recorded_discord_voice_route="$(recorded_nfqws_route discord-voice 2>/dev/null || true)"
   recorded_youtube_route="$(recorded_nfqws_route youtube 2>/dev/null || true)"
   if [ "$DETECTED_CORE" = "xray" ] && have jq; then
     if reported_routing="$(find_xray_routing_file 2>/dev/null)"; then
       if strict_json_stream "$reported_routing" |
            jq -e 'any(.routing.rules[]?;
-             .outboundTag == "discord-direct")' >/dev/null 2>&1; then
-        case "$recorded_discord_route" in
-          zapret|direct) reported_discord_route="$recorded_discord_route" ;;
-          *) reported_discord_route="direct" ;;
+             .outboundTag == "discord-direct"
+             and ((.domain // []) | length) > 0)' >/dev/null 2>&1; then
+        case "$recorded_discord_tcp_route" in
+          zapret|direct) reported_discord_tcp_route="$recorded_discord_tcp_route" ;;
+          *) reported_discord_tcp_route="direct" ;;
         esac
       else
-        reported_discord_route="vless"
+        reported_discord_tcp_route="vless"
+      fi
+      if strict_json_stream "$reported_routing" |
+           jq -e 'any(.routing.rules[]?;
+             .outboundTag == "discord-direct"
+             and .network == "udp"
+             and ((.domain // []) | length) == 0)' >/dev/null 2>&1; then
+        case "$recorded_discord_voice_route" in
+          zapret|direct) reported_discord_voice_route="$recorded_discord_voice_route" ;;
+          *) reported_discord_voice_route="direct" ;;
+        esac
+      else
+        reported_discord_voice_route="vless"
       fi
       if strict_json_stream "$reported_routing" |
            jq -e 'any(.routing.rules[]?;
@@ -2225,8 +2305,11 @@ status_report() {
       fi
     fi
   else
-    case "$recorded_discord_route" in
-      direct|zapret|vless) reported_discord_route="$recorded_discord_route" ;;
+    case "$recorded_discord_tcp_route" in
+      direct|zapret|vless) reported_discord_tcp_route="$recorded_discord_tcp_route" ;;
+    esac
+    case "$recorded_discord_voice_route" in
+      direct|zapret|vless) reported_discord_voice_route="$recorded_discord_voice_route" ;;
     esac
     case "$recorded_youtube_route" in
       direct|zapret|vless) reported_youtube_route="$recorded_youtube_route" ;;
@@ -2236,7 +2319,15 @@ status_report() {
   echo "script_version=$SCRIPT_VERSION"
   echo "deployment_mode=$(recorded_deployment_mode 2>/dev/null || current_snapshot_scope)"
   echo "detected_core=${DETECTED_CORE:-unknown}"
-  echo "discord_route=$reported_discord_route"
+  # discord_route is kept for older readers: it is "mixed" when TCP and
+  # Voice use different routes.
+  if [ "$reported_discord_tcp_route" = "$reported_discord_voice_route" ]; then
+    echo "discord_route=$reported_discord_tcp_route"
+  else
+    echo "discord_route=mixed"
+  fi
+  echo "discord_tcp_route=$reported_discord_tcp_route"
+  echo "discord_voice_route=$reported_discord_voice_route"
   echo "youtube_route=$reported_youtube_route"
   if [ "$STANDALONE_ZAPRET" -eq 1 ]; then
     echo "proxy_dns=unmanaged"
@@ -2628,7 +2719,8 @@ patch_xray() {
   }
   routing_patched="$(make_tmp)"
   jq \
-    --arg discord_mode "$DISCORD_ROUTE_MODE" \
+    --arg discord_tcp_mode "$DISCORD_TCP_ROUTE_MODE" \
+    --arg discord_voice_mode "$DISCORD_VOICE_ROUTE_MODE" \
     --arg youtube_mode "$YOUTUBE_ROUTE_MODE" \
     --arg proxy_outbound "$PROXY_OUTBOUND_EFFECTIVE" \
     --arg voice_ports "3478-3481,5349,19294-19344,50000-$VOICE_HIGH" '
@@ -2705,14 +2797,16 @@ patch_xray() {
           else .
           end
       )) as $remaining_rules
-    | (if $discord_mode != "vless" then
+    | ([
+        {
+          "type": "field",
+          "inboundTag": ["redirect", "tproxy"],
+          "outboundTag": (if $discord_tcp_mode != "vless" then "discord-direct"
+                          else $proxy_outbound end),
+          "domain": $discord_domains
+        }
+      ] + (if $discord_voice_mode != "vless" then
         [
-          {
-            "type": "field",
-            "inboundTag": ["redirect", "tproxy"],
-            "outboundTag": "discord-direct",
-            "domain": $discord_domains
-          },
           {
             "type": "field",
             "inboundTag": ["redirect", "tproxy"],
@@ -2722,15 +2816,8 @@ patch_xray() {
           }
         ]
       else
-        [
-          {
-            "type": "field",
-            "inboundTag": ["redirect", "tproxy"],
-            "outboundTag": $proxy_outbound,
-            "domain": $discord_domains
-          }
-        ]
-      end) as $discord_rules
+        []
+      end)) as $discord_rules
     | (if $youtube_mode != "vless" then "youtube-direct"
        else $proxy_outbound
        end) as $youtube_outbound
@@ -2750,7 +2837,8 @@ patch_xray() {
   replace_preserving_mode "$routing_file" "$routing_patched"
 
   discord_outbound_file="$XRAY_CONFIG_DIR/04_discord_nfqws2_outbound.json"
-  if [ "$DISCORD_ROUTE_MODE" != "vless" ]; then
+  if [ "$DISCORD_TCP_ROUTE_MODE" != "vless" ] ||
+     [ "$DISCORD_VOICE_ROUTE_MODE" != "vless" ]; then
     write_xray_direct_outbound "$discord_outbound_file" "discord-direct"
   else
     rm -f "$discord_outbound_file"
@@ -2771,8 +2859,10 @@ patch_xray() {
 make_mihomo_rules_json() {
   mihomo_rules_file="$1"
   {
-    if [ "$DISCORD_ROUTE_MODE" != "vless" ]; then
+    if [ "$DISCORD_TCP_ROUTE_MODE" != "vless" ]; then
       discord_domains | awk '{ print "DOMAIN-SUFFIX," $0 ",DIRECT" }'
+    fi
+    if [ "$DISCORD_VOICE_ROUTE_MODE" != "vless" ]; then
       echo "AND,((NETWORK,UDP),(DST-PORT,3478-3481)),DIRECT"
       echo "AND,((NETWORK,UDP),(DST-PORT,5349)),DIRECT"
       echo "AND,((NETWORK,UDP),(DST-PORT,19294-19344)),DIRECT"
@@ -2898,7 +2988,7 @@ patch_nfqws() {
   mkdir -p "$(dirname "$NFQWS_LIST")"
 
   list_tmp="$(make_tmp)"
-  if [ "$DISCORD_ROUTE_MODE" = "zapret" ]; then
+  if [ "$DISCORD_TCP_ROUTE_MODE" = "zapret" ]; then
     discord_domains > "$list_tmp"
   else
     : > "$list_tmp"
@@ -2923,8 +3013,10 @@ patch_nfqws() {
   discord_tcp_import=""
   discord_voice_import=""
   youtube_import=""
-  if [ "$DISCORD_ROUTE_MODE" = "zapret" ]; then
+  if [ "$DISCORD_TCP_ROUTE_MODE" = "zapret" ]; then
     discord_tcp_import="$(active_imported_profile discord-tcp 2>/dev/null || true)"
+  fi
+  if [ "$DISCORD_VOICE_ROUTE_MODE" = "zapret" ]; then
     discord_voice_import="$(active_imported_profile discord-voice 2>/dev/null || true)"
   fi
   if [ "$YOUTUBE_ROUTE_MODE" = "zapret" ]; then
@@ -2944,7 +3036,7 @@ patch_nfqws() {
   sed '/^# BEGIN keenetic-discord-nfqws2$/,/^# END keenetic-discord-nfqws2$/d' \
     "$NFQWS_CONF" > "$nfqws_tmp"
 
-  if [ "$DISCORD_ROUTE_MODE" = "zapret" ]; then
+  if [ "$DISCORD_TCP_ROUTE_MODE" = "zapret" ]; then
     selected_tcp_ports="$TCP_PORTS_VALUE"
   else
     selected_tcp_ports="443"
@@ -2963,11 +3055,11 @@ patch_nfqws() {
     imported_voice_filter="$(jq -r '.args[] | select(startswith("--filter-udp=")) | ltrimstr("--filter-udp=")' "$discord_voice_import")"
     selected_udp_filter="$imported_voice_filter"
     selected_udp_ports="$(printf '%s\n' "$imported_voice_filter" | tr '-' ':')"
-  elif [ "$DISCORD_ROUTE_MODE" = "zapret" ] &&
+  elif [ "$DISCORD_VOICE_ROUTE_MODE" = "zapret" ] &&
      [ "$WIDE_UDP" -eq 1 ]; then
     selected_udp_ports="$UDP_PORTS_WIDE"
     selected_udp_filter="$UDP_FILTER_WIDE"
-  elif [ "$DISCORD_ROUTE_MODE" = "zapret" ]; then
+  elif [ "$DISCORD_VOICE_ROUTE_MODE" = "zapret" ]; then
     selected_udp_ports="$UDP_PORTS_FLOWSEAL"
     selected_udp_filter="$UDP_FILTER_FLOWSEAL"
   else
@@ -2977,7 +3069,7 @@ patch_nfqws() {
 
   udp_base_append=""
   udp_desync=""
-  case "$DISCORD_ROUTE_MODE:${discord_voice_import:+imported}:$UDP_STRATEGY" in
+  case "$DISCORD_VOICE_ROUTE_MODE:${discord_voice_import:+imported}:$UDP_STRATEGY" in
     zapret:imported:*)
       verify_discord_udp_blob_source
       mkdir -p "$(dirname "$NFQWS_DISCORD_UDP_BLOB")"
@@ -3057,7 +3149,7 @@ NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
   if [ -n "$discord_voice_import" ]; then
     discord_voice_import_args="$(jq -r '.args[]' "$discord_voice_import")"
     udp_profile_assignment="NFQWS_ARGS_UDP=\"$discord_voice_import_args\""
-  elif [ "$DISCORD_ROUTE_MODE" = "zapret" ]; then
+  elif [ "$DISCORD_VOICE_ROUTE_MODE" = "zapret" ]; then
     udp_profile_assignment="NFQWS_ARGS_UDP=\"--filter-udp=$selected_udp_filter
                 --filter-l7=stun,discord
                 --out-range=<n2
@@ -3079,7 +3171,7 @@ $udp_desync\""
 # BEGIN keenetic-discord-nfqws2
 # Generated by apply-discord-nfqws2.sh $SCRIPT_VERSION.
 # Deployment mode: $deployment_mode.
-# Active routes: Discord=$DISCORD_ROUTE_MODE, YouTube=$YOUTUBE_ROUTE_MODE.
+# Active routes: DiscordTCP=$DISCORD_TCP_ROUTE_MODE, DiscordVoice=$DISCORD_VOICE_ROUTE_MODE, YouTube=$YOUTUBE_ROUTE_MODE.
 # Base TCP/QUIC use user.list; YouTube has isolated custom profiles.
 $udp_base_append
 $youtube_base_append
@@ -3258,7 +3350,8 @@ apply_import_profile_transaction() {
   import_service="$(jq -r '.service' "$IMPORT_PROFILE_REQUESTED")"
   case "$import_service" in
     youtube) import_route="$YOUTUBE_ROUTE_MODE" ;;
-    discord-tcp|discord-voice) import_route="$DISCORD_ROUTE_MODE" ;;
+    discord-tcp) import_route="$DISCORD_TCP_ROUTE_MODE" ;;
+    discord-voice) import_route="$DISCORD_VOICE_ROUTE_MODE" ;;
   esac
   [ "$import_route" = "zapret" ] || {
     echo "ERROR: $import_service currently uses route=$import_route." >&2

@@ -125,21 +125,50 @@ def release_project_lock(lock: Path | None) -> None:
         pass
 
 
+ROUTE_VALUES = {"direct", "zapret", "vless"}
+
+
+def parse_active_routes(text: str) -> dict[str, str] | None:
+    """Read the "# Active routes:" line written by apply-discord-nfqws2.sh.
+
+    Returns {"discord-tcp", "discord-voice", "youtube"} -> route, or None when
+    the line is missing or malformed. The legacy line "Discord=X, YouTube=Y."
+    written before the TCP/Voice split applies X to both Discord routes.
+    """
+    match = re.search(r"^# Active routes: (.+)\.$", text, re.MULTILINE)
+    if not match:
+        return None
+    values = {}
+    for pair in match.group(1).split(", "):
+        key, separator, value = pair.partition("=")
+        if not separator or value not in ROUTE_VALUES:
+            return None
+        values[key] = value
+    if set(values) == {"DiscordTCP", "DiscordVoice", "YouTube"}:
+        return {
+            "discord-tcp": values["DiscordTCP"],
+            "discord-voice": values["DiscordVoice"],
+            "youtube": values["YouTube"],
+        }
+    if set(values) == {"Discord", "YouTube"}:
+        return {
+            "discord-tcp": values["Discord"],
+            "discord-voice": values["Discord"],
+            "youtube": values["YouTube"],
+        }
+    return None
+
+
 def recorded_route(service: str) -> str:
     config = root_path(NFQWS_CONF_LOGICAL)
     try:
         text = config.read_text(encoding="utf-8", errors="replace")
     except OSError as error:
         raise RuntimeError(f"cannot read current nfqws2 config: {config}") from error
-    match = re.search(
-        r"^# Active routes: Discord=(direct|zapret|vless), "
-        r"YouTube=(direct|zapret|vless)\.$",
-        text,
-        re.MULTILINE,
-    )
-    if not match:
+    routes = parse_active_routes(text)
+    if routes is None:
         raise RuntimeError("current managed service routes cannot be determined")
-    return match.group(2 if service == "youtube" else 1)
+    return routes[service]
 
 
 def core_pids() -> dict[str, list[int]]:

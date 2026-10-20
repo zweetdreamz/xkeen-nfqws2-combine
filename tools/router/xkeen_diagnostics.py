@@ -203,13 +203,46 @@ def make_check(name: str, status: str, detail: str) -> dict[str, str]:
     return {"name": name, "status": status, "detail": detail[:1000]}
 
 
-def parse_routes(text: str) -> tuple[str, str]:
-    match = re.search(
-        r"^# Active routes: Discord=(direct|zapret|vless), YouTube=(direct|zapret|vless)\.$",
-        text,
-        re.MULTILINE,
-    )
-    return match.groups() if match else ("unknown", "unknown")
+ROUTE_VALUES = {"direct", "zapret", "vless"}
+
+
+def parse_active_routes(text: str) -> dict[str, str] | None:
+    """Read the "# Active routes:" line written by apply-discord-nfqws2.sh.
+
+    Returns {"discord-tcp", "discord-voice", "youtube"} -> route, or None when
+    the line is missing or malformed. The legacy line "Discord=X, YouTube=Y."
+    written before the TCP/Voice split applies X to both Discord routes.
+    """
+    match = re.search(r"^# Active routes: (.+)\.$", text, re.MULTILINE)
+    if not match:
+        return None
+    values = {}
+    for pair in match.group(1).split(", "):
+        key, separator, value = pair.partition("=")
+        if not separator or value not in ROUTE_VALUES:
+            return None
+        values[key] = value
+    if set(values) == {"DiscordTCP", "DiscordVoice", "YouTube"}:
+        return {
+            "discord-tcp": values["DiscordTCP"],
+            "discord-voice": values["DiscordVoice"],
+            "youtube": values["YouTube"],
+        }
+    if set(values) == {"Discord", "YouTube"}:
+        return {
+            "discord-tcp": values["Discord"],
+            "discord-voice": values["Discord"],
+            "youtube": values["YouTube"],
+        }
+    return None
+
+
+def parse_routes(text: str) -> tuple[str, str, str]:
+    """Return (Discord TCP, Discord Voice, YouTube) routes or "unknown"."""
+    routes = parse_active_routes(text)
+    if routes is None:
+        return ("unknown", "unknown", "unknown")
+    return (routes["discord-tcp"], routes["discord-voice"], routes["youtube"])
 
 
 def process_ids(name: str) -> list[int]:
@@ -219,16 +252,26 @@ def process_ids(name: str) -> list[int]:
     return [int(value) for value in result["output"].split() if value.isdigit()]
 
 
-def route_consistency(config: str, tags: set, discord_list: str) -> list[dict[str, str]]:
-    discord, youtube = parse_routes(config)
+def voice_profile_active(config: str) -> bool:
+    """True when nfqws2 has a Discord Voice profile (built-in or imported).
+
+    Every Voice profile the engine writes or accepts selects --filter-l7=stun,discord.
+    """
+    return "--filter-l7=stun,discord" in config
+
+
+def route_consistency(config: str, tags: set[str], discord_list: str) -> list[dict[str, str]]:
+    discord_tcp, discord_voice, youtube = parse_routes(config)
     youtube_active = "--hostlist=/opt/etc/nfqws2/lists/youtube.list" in config
-    discord_active = bool(discord_list.strip())
+    discord_tcp_active = bool(discord_list.strip())
+    discord_voice_active = voice_profile_active(config)
     checks = []
     for name, mode, tag, active in (
         ("YouTube route", youtube, "youtube-direct", youtube_active),
-        ("Discord route", discord, "discord-direct", discord_active),
+        ("Discord TCP route", discord_tcp, "discord-direct", discord_tcp_active),
+        ("Discord Voice route", discord_voice, "discord-direct", discord_voice_active),
     ):
-        okay = mode in {"direct", "zapret", "vless"} and (mode == "vless" or tag in tags) and active == (mode == "zapret")
+        okay = mode in ROUTE_VALUES and (mode == "vless" or tag in tags) and active == (mode == "zapret")
         checks.append(make_check(name, "ok" if okay else "error", f"route={mode}, nfqws={'on' if active else 'off'}"))
     return checks
 
@@ -247,16 +290,20 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
 
     try:
         config = safe_read(root_path(NFQWS_CONFIG_LOGICAL))
-        discord_route, youtube_route = parse_routes(config)
-        status = "ok" if "unknown" not in {discord_route, youtube_route} else "error"
-        add("Управляемые маршруты", status, f"Discord={discord_route}, YouTube={youtube_route}")
+        discord_tcp_route, discord_voice_route, youtube_route = parse_routes(config)
+        status = "ok" if "unknown" not in {discord_tcp_route, discord_voice_route, youtube_route} else "error"
+        add(
+            "Управляемые маршруты",
+            status,
+            f"Discord TCP={discord_tcp_route}, Discord Voice={discord_voice_route}, YouTube={youtube_route}",
+        )
     except (OSError, ValueError) as exc:
         config = ""
-        discord_route = youtube_route = "unknown"
+        discord_tcp_route = discord_voice_route = youtube_route = "unknown"
         add("Конфигурация nfqws2", "error", str(exc))
 
     for label, logical, active in (
-        ("Discord hostlist", DISCORD_LIST_LOGICAL, discord_route == "zapret"),
+        ("Discord hostlist", DISCORD_LIST_LOGICAL, discord_tcp_route == "zapret"),
         ("YouTube hostlist", YOUTUBE_LIST_LOGICAL, youtube_route == "zapret"),
     ):
         try:
@@ -272,7 +319,7 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
         rules = routing.get("routing", {}).get("rules", [])
         tags = {rule.get("outboundTag") for rule in rules if isinstance(rule, dict)}
         expected = set()
-        if discord_route != "vless":
+        if discord_tcp_route != "vless" or discord_voice_route != "vless":
             expected.add("discord-direct")
         if youtube_route != "vless":
             expected.add("youtube-direct")

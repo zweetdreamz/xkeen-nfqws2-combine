@@ -42,11 +42,29 @@ class RouterDiagnosticsTests(unittest.TestCase):
         tags = {"discord-direct", "youtube-direct"}
         checks = self.module.route_consistency(text, tags, "discord.com\n")
         by_name = {item["name"]: item["status"] for item in checks}
-        self.assertEqual(by_name["Discord route"], "error")
+        self.assertEqual(by_name["Discord TCP route"], "error")
+        self.assertEqual(by_name["Discord Voice route"], "ok")
         self.assertEqual(by_name["YouTube route"], "ok")
         self.assertTrue(all(item["status"] == "ok" for item in self.module.route_consistency(text, tags, "")))
         checks = self.module.route_consistency(text, {"discord-direct"}, "")
         self.assertEqual(checks[0]["status"], "error")
+
+    def test_route_consistency_checks_discord_voice_separately(self):
+        text = (
+            "# Active routes: DiscordTCP=vless, DiscordVoice=zapret, YouTube=vless.\n"
+            "NFQWS_ARGS_UDP=\"--filter-udp=443 --filter-l7=stun,discord\""
+        )
+        by_name = {
+            item["name"]: item["status"]
+            for item in self.module.route_consistency(text, {"discord-direct"}, "")
+        }
+        self.assertEqual(by_name["Discord TCP route"], "ok")
+        self.assertEqual(by_name["Discord Voice route"], "ok")
+        by_name = {
+            item["name"]: item["status"]
+            for item in self.module.route_consistency(text, set(), "")
+        }
+        self.assertEqual(by_name["Discord Voice route"], "error")
 
     def test_dpi_suite_is_provider_diverse_and_bounded(self):
         self.assertEqual(len(self.module.DPI_TARGETS), 12)

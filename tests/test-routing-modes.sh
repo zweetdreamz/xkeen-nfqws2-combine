@@ -281,19 +281,35 @@ routing_file="$ROOT/opt/etc/xray/configs/05_routing.json"
 nfqws_file="$ROOT/opt/etc/nfqws2/nfqws2.conf"
 
 assert_mode() {
-  expected_discord="$1"
-  expected_youtube="$2"
+  expected_tcp="$1"
+  expected_voice="$2"
+  expected_youtube="$3"
 
-  jq -e --arg mode "$expected_discord" '
+  # Discord TCP/QUIC: the domain rule goes to discord-direct unless vless.
+  jq -e --arg mode "$expected_tcp" '
     if $mode != "vless"
-    then any(.routing.rules[]?; .outboundTag == "discord-direct")
+    then any(.routing.rules[]?;
+      .outboundTag == "discord-direct"
+      and any(.domain[]?; contains("discord"))
+    )
     else
-      (any(.routing.rules[]?; .outboundTag == "discord-direct") | not)
+      (any(.routing.rules[]?;
+        .outboundTag == "discord-direct" and has("domain")
+      ) | not)
       and any(.routing.rules[]?;
         .outboundTag == "vless-reality"
         and any(.domain[]?; contains("discord"))
       )
     end
+  ' "$routing_file" >/dev/null
+
+  # Discord Voice: the UDP port rule exists only outside vless.
+  jq -e --arg mode "$expected_voice" '
+    any(.routing.rules[]?;
+      .outboundTag == "discord-direct"
+      and .network == "udp"
+      and .port == "3478-3481,5349,19294-19344,50000-50100"
+    ) == ($mode != "vless")
   ' "$routing_file" >/dev/null
 
   jq -e '
@@ -334,19 +350,27 @@ assert_mode() {
     end
   ' "$routing_file" >/dev/null
 
-  if [ "$expected_discord" = "zapret" ]; then
+  if [ "$expected_tcp" = "vless" ] && [ "$expected_voice" = "vless" ]; then
+    [ ! -e "$ROOT/opt/etc/xray/configs/04_discord_nfqws2_outbound.json" ]
+  else
+    [ -f "$ROOT/opt/etc/xray/configs/04_discord_nfqws2_outbound.json" ]
+  fi
+
+  if [ "$expected_tcp" = "zapret" ]; then
     [ -s "$ROOT/opt/etc/nfqws2/lists/user.list" ]
     [ "$(ls -l "$ROOT/opt/etc/nfqws2/lists/user.list" | awk '{print $1}')" = "-rw-r--r--" ]
-    [ -f "$ROOT/opt/etc/xray/configs/04_discord_nfqws2_outbound.json" ]
-    grep -Fq -- '--filter-l7=stun,discord' "$nfqws_file"
-  elif [ "$expected_discord" = "direct" ]; then
-    [ ! -s "$ROOT/opt/etc/nfqws2/lists/user.list" ]
-    [ -f "$ROOT/opt/etc/xray/configs/04_discord_nfqws2_outbound.json" ]
-    grep -Fq 'NFQWS_ARGS_UDP=""' "$nfqws_file"
+    grep -Fqx 'TCP_PORTS=80,443,2053,2083,2087,2096,8443' "$nfqws_file"
   else
     [ ! -s "$ROOT/opt/etc/nfqws2/lists/user.list" ]
-    [ ! -e "$ROOT/opt/etc/xray/configs/04_discord_nfqws2_outbound.json" ]
+    grep -Fqx 'TCP_PORTS=443' "$nfqws_file"
+  fi
+
+  if [ "$expected_voice" = "zapret" ]; then
+    grep -Fq -- '--filter-l7=stun,discord' "$nfqws_file"
+    grep -Fqx 'UDP_PORTS=443,3478:3481,5349,19294:19344,50000:50100' "$nfqws_file"
+  else
     grep -Fq 'NFQWS_ARGS_UDP=""' "$nfqws_file"
+    grep -Fqx 'UDP_PORTS=443' "$nfqws_file"
   fi
 
   if [ "$expected_youtube" = "zapret" ]; then
@@ -392,14 +416,25 @@ assert_mode() {
   ' "$routing_file" >/dev/null
 
   sh -n "$nfqws_file"
+  grep -Fqx "# Active routes: DiscordTCP=$expected_tcp, DiscordVoice=$expected_voice, YouTube=$expected_youtube." "$nfqws_file"
 
+  if [ "$expected_tcp" = "$expected_voice" ]; then
+    expected_discord="$expected_tcp"
+  else
+    expected_discord="mixed"
+  fi
   status_output="$(run_tool --status)"
   printf '%s\n' "$status_output" |
     grep -Fqx "discord_route=$expected_discord"
   printf '%s\n' "$status_output" |
+    grep -Fqx "discord_tcp_route=$expected_tcp"
+  printf '%s\n' "$status_output" |
+    grep -Fqx "discord_voice_route=$expected_voice"
+  printf '%s\n' "$status_output" |
     grep -Fqx "youtube_route=$expected_youtube"
 }
 
+# apply_mode DISCORD YOUTUBE uses the legacy --discord-route shorthand.
 apply_mode() {
   discord_mode="$1"
   youtube_mode="$2"
@@ -409,15 +444,31 @@ apply_mode() {
     --core xray \
     --discord-route "$discord_mode" \
     --youtube-route "$youtube_mode" >/dev/null
-  assert_mode "$discord_mode" "$youtube_mode"
+  assert_mode "$discord_mode" "$discord_mode" "$youtube_mode"
+}
+
+apply_split_mode() {
+  tcp_mode="$1"
+  voice_mode="$2"
+  youtube_mode="$3"
+  run_tool \
+    --apply \
+    --yes-router \
+    --core xray \
+    --discord-tcp-route "$tcp_mode" \
+    --discord-voice-route "$voice_mode" \
+    --youtube-route "$youtube_mode" >/dev/null
+  assert_mode "$tcp_mode" "$voice_mode" "$youtube_mode"
 }
 
 apply_mode zapret vless
 discord_hash="$(sha256sum "$routing_file" | awk '{print $1}')"
 
-for discord_mode in direct zapret vless; do
-  for youtube_mode in direct zapret vless; do
-    apply_mode "$discord_mode" "$youtube_mode"
+for tcp_mode in direct zapret vless; do
+  for voice_mode in direct zapret vless; do
+    for youtube_mode in direct zapret vless; do
+      apply_split_mode "$tcp_mode" "$voice_mode" "$youtube_mode"
+    done
   done
 done
 
@@ -427,21 +478,34 @@ apply_mode zapret zapret
 [ "$(sha256sum "$routing_file" | awk '{print $1}')" = "$both_hash" ]
 
 run_service_tool youtube direct --yes-router --core xray >/dev/null
-assert_mode zapret direct
+assert_mode zapret zapret direct
+run_service_tool discord-voice vpn --yes-router --core xray >/dev/null
+assert_mode zapret vless direct
+run_service_tool discord-tcp direct --yes-router --core xray >/dev/null
+assert_mode direct vless direct
 run_service_tool discord vpn --yes-router --core xray >/dev/null
-assert_mode vless direct
+assert_mode vless vless direct
+run_service_tool discord-voice zapret --yes-router --core xray >/dev/null
+assert_mode vless zapret direct
 
 apply_mode zapret vless
 apply_mode vless zapret
 run_tool --rollback-latest --yes-router >/dev/null
-assert_mode zapret vless
+assert_mode zapret zapret vless
 [ "$(sha256sum "$routing_file" | awk '{print $1}')" = "$discord_hash" ]
 
 apply_mode vless zapret
 selected_snapshot="$(sed -n '1p' "$ROOT/opt/etc/keenetic-discord-nfqws2/latest-preapply.ptr")"
 apply_mode direct direct
 run_tool --rollback-snapshot "$selected_snapshot" --yes-router >/dev/null
-assert_mode zapret vless
+assert_mode zapret zapret vless
+
+# A config written before the TCP/Voice split still reports both routes.
+sed -i 's/^# Active routes: .*/# Active routes: Discord=zapret, YouTube=vless./' "$nfqws_file"
+legacy_status="$(run_tool --status)"
+printf '%s\n' "$legacy_status" | grep -Fqx 'discord_tcp_route=zapret'
+printf '%s\n' "$legacy_status" | grep -Fqx 'discord_voice_route=zapret'
+apply_mode zapret vless
 
 # Focused tuner-profile operations must never stop or restart XKeen.
 apply_mode zapret zapret

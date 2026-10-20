@@ -7,14 +7,19 @@ ENGINE="$SCRIPT_DIR/apply-discord-nfqws2.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  sh set-service-route.sh discord direct|zapret|vpn --yes-router [apply options]
-  sh set-service-route.sh youtube direct|zapret|vpn --yes-router [apply options]
+  sh set-service-route.sh discord-tcp   direct|zapret|vpn --yes-router [apply options]
+  sh set-service-route.sh discord-voice direct|zapret|vpn --yes-router [apply options]
+  sh set-service-route.sh discord       direct|zapret|vpn --yes-router [apply options]
+  sh set-service-route.sh youtube       direct|zapret|vpn --yes-router [apply options]
 
-The route of the other service is read from the current managed state and
+discord-tcp covers Discord domains (TCP/TLS and QUIC), discord-voice covers
+Discord Voice/STUN UDP ports, and discord switches both at once.
+
+The routes of the other services are read from the current managed state and
 preserved. "vpn" is a user-facing alias for the engine route "vless".
 
 Examples:
-  sh set-service-route.sh discord zapret --core auto --wan-interface eth3 --yes-router
+  sh set-service-route.sh discord-voice zapret --core auto --wan-interface eth3 --yes-router
   sh set-service-route.sh youtube direct --core auto --wan-interface eth3 --yes-router
 EOF
 }
@@ -29,9 +34,9 @@ requested_mode="$2"
 shift 2
 
 case "$service" in
-  discord|youtube) ;;
+  discord|discord-tcp|discord-voice|youtube) ;;
   *)
-    echo "ERROR: service must be discord or youtube." >&2
+    echo "ERROR: service must be discord-tcp, discord-voice, discord or youtube." >&2
     usage >&2
     exit 2
     ;;
@@ -48,41 +53,47 @@ case "$requested_mode" in
 esac
 
 status_output="$(sh "$ENGINE" --status)"
-current_discord="$(
+
+status_value() {
   printf '%s\n' "$status_output" |
-    awk -F= '$1 == "discord_route" { print $2; exit }'
-)"
-current_youtube="$(
-  printf '%s\n' "$status_output" |
-    awk -F= '$1 == "youtube_route" { print $2; exit }'
-)"
+    awk -F= -v key="$1" '$1 == key { print $2; exit }'
+}
 
-case "$current_discord" in
-  direct|zapret|vless) ;;
-  *)
-    echo "ERROR: cannot determine current Discord route; no changes made." >&2
-    exit 1
+require_route() {
+  case "$2" in
+    direct|zapret|vless) ;;
+    *)
+      echo "ERROR: cannot determine current $1 route; no changes made." >&2
+      exit 1
+      ;;
+  esac
+}
+
+current_discord_tcp="$(status_value discord_tcp_route)"
+current_discord_voice="$(status_value discord_voice_route)"
+current_youtube="$(status_value youtube_route)"
+
+require_route "Discord TCP" "$current_discord_tcp"
+require_route "Discord Voice" "$current_discord_voice"
+require_route "YouTube" "$current_youtube"
+
+next_discord_tcp="$current_discord_tcp"
+next_discord_voice="$current_discord_voice"
+next_youtube="$current_youtube"
+case "$service" in
+  discord)
+    next_discord_tcp="$route_mode"
+    next_discord_voice="$route_mode"
     ;;
-esac
-case "$current_youtube" in
-  direct|zapret|vless) ;;
-  *)
-    echo "ERROR: cannot determine current YouTube route; no changes made." >&2
-    exit 1
-    ;;
+  discord-tcp) next_discord_tcp="$route_mode" ;;
+  discord-voice) next_discord_voice="$route_mode" ;;
+  youtube) next_youtube="$route_mode" ;;
 esac
 
-if [ "$service" = "discord" ]; then
-  next_discord="$route_mode"
-  next_youtube="$current_youtube"
-else
-  next_discord="$current_discord"
-  next_youtube="$route_mode"
-fi
-
-echo "Service routes: Discord=$next_discord, YouTube=$next_youtube"
+echo "Service routes: Discord TCP=$next_discord_tcp, Discord Voice=$next_discord_voice, YouTube=$next_youtube"
 exec sh "$ENGINE" \
   --apply \
-  --discord-route "$next_discord" \
+  --discord-tcp-route "$next_discord_tcp" \
+  --discord-voice-route "$next_discord_voice" \
   --youtube-route "$next_youtube" \
   "$@"

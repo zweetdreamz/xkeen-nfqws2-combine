@@ -162,7 +162,7 @@ run_tool() {
 }
 
 plan="$(run_tool --print-plan --standalone-zapret)"
-printf '%s\n' "$plan" | grep -Fq 'Discord=zapret, YouTube=zapret'
+printf '%s\n' "$plan" | grep -Fq 'Discord TCP=zapret, Discord Voice=zapret, YouTube=zapret'
 printf '%s\n' "$plan" | grep -Fq 'только nfqws2'
 
 if run_tool \
@@ -183,7 +183,7 @@ run_tool \
 
 nfqws_conf="$ROOT/opt/etc/nfqws2/nfqws2.conf"
 grep -Fq '# Deployment mode: standalone-zapret.' "$nfqws_conf"
-grep -Fq '# Active routes: Discord=zapret, YouTube=direct.' "$nfqws_conf"
+grep -Fq '# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=direct.' "$nfqws_conf"
 grep -Fq 'ISP_INTERFACE="fixture-wan"' "$nfqws_conf"
 grep -Fq 'NFQWS_ARGS_UDP="--filter-udp=443,3478-3481' "$nfqws_conf"
 [ -f "$PACKAGE_STATE/nfqws2-keenetic" ]
