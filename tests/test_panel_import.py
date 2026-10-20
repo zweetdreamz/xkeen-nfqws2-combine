@@ -11,6 +11,8 @@ import time
 import unittest
 from unittest import mock
 
+from panel_loader import load_panel_namespace
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,16 +24,6 @@ def load_tuner():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
-
-
-def load_panel_namespace():
-    installer = (
-        ROOT / "tools" / "router" / "xkeen_control_script.sh"
-    ).read_text(encoding="utf-8")
-    source = installer.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF\n", 1)[0]
-    namespace = {"__name__": "panel_import_test"}
-    exec(compile(source, "app.py", "exec"), namespace)
-    return namespace
 
 
 class PanelImportTests(unittest.TestCase):

@@ -30,3 +30,10 @@ venv/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Test and coverage artefacts
+tests/.generated/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/

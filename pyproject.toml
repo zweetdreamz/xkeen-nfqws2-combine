@@ -1,0 +1,17 @@
+# Tooling configuration only: the project is a set of router scripts, not an
+# installable Python package.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-p no:cacheprovider"
+
+[tool.coverage.run]
+branch = true
+source = ["tools", "tests/.generated"]
+omit = ["tests/test_*.py", "tests/panel_loader.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+precision = 1
