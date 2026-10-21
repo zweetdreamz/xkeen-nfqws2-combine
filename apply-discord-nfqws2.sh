@@ -9,7 +9,7 @@ set -eu
 # It never points at the host root and is rejected unless KD_ALLOW_TEST_ROOT=1.
 
 PROJECT="keenetic-discord-nfqws2"
-SCRIPT_VERSION="3.1.0"
+SCRIPT_VERSION="3.1.1"
 TEST_ROOT="${KD_TEST_ROOT:-}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
@@ -3616,6 +3616,12 @@ patch_nfqws() {
     imported_voice_filter="$(jq -r '.args[] | select(startswith("--filter-udp=")) | ltrimstr("--filter-udp=")' "$discord_voice_import")"
     selected_udp_filter="$imported_voice_filter"
     selected_udp_ports="$(printf '%s\n' "$imported_voice_filter" | tr '-' ':')"
+    # The Voice profile replaces only the Discord UDP profile; the QUIC
+    # profiles (YouTube, user.list) still need UDP 443 in the queue.
+    case ",$selected_udp_ports," in
+      *,443,*) ;;
+      *) selected_udp_ports="443,$selected_udp_ports" ;;
+    esac
   elif [ "$DISCORD_VOICE_ROUTE_MODE" = "zapret" ] &&
      [ "$WIDE_UDP" -eq 1 ]; then
     selected_udp_ports="$UDP_PORTS_WIDE"

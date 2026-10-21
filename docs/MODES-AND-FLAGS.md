@@ -23,7 +23,7 @@ policy marks или hardware offload.
 | XKeen/core | XKeen 2.0, Xray 26.10.17, Hybrid |
 | WAN | `eth3` |
 | nfqws2 | пакет 1.2.4, NFQUEUE 300 (20.10.2026 обновлён до 1.3.1) |
-| Скрипт на роутере и в рабочей папке | 3.1.0 |
+| Скрипт на роутере и в рабочей папке | 3.1.1 |
 | Активный режим | Discord TCP/Voice и YouTube `zapret`, Telegram `ws` |
 | Discord UDP | `flowseal`, узкий диапазон |
 | IPv6 nfqws2 | `off`: usable IPv6 WAN route отсутствует |

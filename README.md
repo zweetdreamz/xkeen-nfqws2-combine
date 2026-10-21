@@ -33,7 +33,7 @@ Telegram в режиме `ws` проверен 21.10.2026:
 | Роутер | Keenetic Giga KN-1011, KeeneticOS 5.0.12 |
 | XKeen | 2.0, Xray 26.10.17, режим Hybrid |
 | nfqws2 | `nfqws2-keenetic 1.3.1`, ядро `v1.0.5.2`, очередь 300, WAN `eth3` |
-| Управляющий скрипт | `3.1.0` ([CHANGELOG.md](CHANGELOG.md)) |
+| Управляющий скрипт | `3.1.1` ([CHANGELOG.md](CHANGELOG.md)) |
 | Активный режим | Discord TCP/Voice и YouTube через DIRECT + nfqws2, Telegram — `ws` (через Cloudflare) |
 | Web-панель | `http://192.168.2.1:8088`, только LAN |
 | IPv6 nfqws2 | выключен: рабочего IPv6 WAN-маршрута нет |

@@ -957,6 +957,35 @@ fi
 [ ! -s "$ROOT/xkeen-init.log" ]
 [ "$(sha256sum "$nfqws_file" | awk '{print $1}')" = "$before_bad_import" ]
 
+# An imported Voice profile replaces only the Discord UDP profile: QUIC
+# (UDP 443) must stay in the NFQUEUE ports for the YouTube/base QUIC profiles.
+voice_args="$FIXTURE/voice-args.txt"
+cat > "$voice_args" <<'EOF'
+--filter-udp=19294-19344,50000-50100
+--filter-l7=stun,discord
+--out-range=<n2
+--payload=stun,discord_ip_discovery
+--lua-desync=fake:blob=discord_udp:repeats=6
+EOF
+voice_serialized="$FIXTURE/voice-serialized.txt"
+{
+  printf '%s\n' discord-voice 'fixture BAT.bat' 'fixture voice profile'
+  cat "$voice_args"
+} | awk 'NR == 1 { text=$0; next } { text=text "\n" $0 } END { printf "%s", text }' > "$voice_serialized"
+voice_id="$(sha256sum "$voice_serialized" | awk '{print substr($1,1,12)}')"
+voice_stage="$ROOT/opt/tmp/voice-profile.json"
+jq '.service = "discord-voice" | .family = "fixture voice profile" | .candidate_id = $id
+    | .args = ($args | split("\n") | map(select(length > 0)))' \
+  --arg id "$voice_id" --rawfile args "$voice_args" "$profile_stage" > "$voice_stage"
+run_tool --apply-import-profile "$voice_stage" --yes-router >/dev/null
+[ -f "$ROOT/opt/etc/nfqws2/imported-profiles/discord-voice.json" ]
+grep -Fqx 'UDP_PORTS=443,19294:19344,50000:50100' "$nfqws_file"
+grep -Fqx -- '--filter-udp=19294-19344,50000-50100' "$nfqws_file"
+grep -Fq -- '--lua-desync=fake:blob=youtube_quic:repeats=7' "$nfqws_file"
+run_tool --clear-imported-profile discord-voice --yes-router >/dev/null
+[ ! -e "$ROOT/opt/etc/nfqws2/imported-profiles/discord-voice.json" ]
+grep -Fqx 'UDP_PORTS=443,3478:3481,5349,19294:19344,50000:50100' "$nfqws_file"
+
 # Full baseline rollback after standalone + integrated applies.
 run_tool --show-snapshots | grep -Fq 'XKeen baseline: '
 run_tool --rollback --yes-router >/dev/null
