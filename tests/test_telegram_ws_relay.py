@@ -172,6 +172,42 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         await server.wait_closed()
 
 
+class ProcessTests(unittest.TestCase):
+    def test_sigterm_does_not_wait_for_open_clients(self):
+        import signal
+        import subprocess
+        import tempfile
+        import time
+        port = free_port()
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / "relay.pid"
+            process = subprocess.Popen(
+                [sys.executable, str(ROOT / "tools" / "router" / "telegram_ws_relay.py"),
+                 "--listen", f"127.0.0.1:{port}", "--pidfile", str(pidfile),
+                 "--log", str(Path(directory) / "relay.log")],
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while True:
+                    try:
+                        client = socket.create_connection(("127.0.0.1", port), timeout=1)
+                        break
+                    except OSError:
+                        if time.monotonic() > deadline:
+                            raise
+                        time.sleep(0.1)
+                with client:
+                    client.sendall(b"partial header")  # Telegram keeps its connections open
+                    time.sleep(0.3)
+                    process.send_signal(signal.SIGTERM)
+                    self.assertEqual(process.wait(timeout=5), 0)
+                self.assertFalse(pidfile.exists())
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+
 class HelperTests(unittest.TestCase):
     def test_hosts(self):
         self.assertEqual(RELAY.ws_hosts(2, False), ["kws2.web.telegram.org"])

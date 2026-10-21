@@ -308,8 +308,12 @@ async def serve(listen: tuple[str, int], relay: Relay, ready: asyncio.Event | No
     for sig in (signal.SIGTERM, signal.SIGINT):
         with contextlib.suppress(NotImplementedError, RuntimeError):
             loop.add_signal_handler(sig, stop.set)
-    async with server:
+    try:
         await stop.wait()
+    finally:
+        # No wait_closed(): it waits for every client connection, and Telegram
+        # keeps them open. asyncio.run() cancels the handlers on the way out.
+        server.close()
 
 
 def main(argv: list[str] | None = None) -> int:

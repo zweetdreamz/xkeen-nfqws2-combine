@@ -2057,23 +2057,26 @@ running() {
 start() {
   running && return 0
   mkdir -p "\$(dirname "\$PIDFILE")" "\$(dirname "\$LOG")"
-  "\$PYTHON" "\$RELAY" --listen "\$LISTEN" --pidfile "\$PIDFILE" --log "\$LOG" >/dev/null 2>&1 &
+  echo "Starting Telegram WS relay on \$LISTEN..."
+  "\$PYTHON" "\$RELAY" --listen "\$LISTEN" --pidfile "\$PIDFILE" --log "\$LOG" </dev/null >/dev/null 2>&1 &
   waited=0
   while [ "\$waited" -lt 10 ]; do
-    running && return 0
+    running && { echo "Telegram WS relay started."; return 0; }
     sleep 1
     waited=\$((waited + 1))
   done
+  echo "Telegram WS relay did not start; see \$LOG" >&2
   return 1
 }
 
 stop() {
   if running; then
     pid="\$(cat "\$PIDFILE")"
+    echo "Stopping Telegram WS relay..."
     kill "\$pid" 2>/dev/null
     # Wait for the process itself: it removes the pidfile before it exits.
     waited=0
-    while kill -0 "\$pid" 2>/dev/null && [ "\$waited" -lt 10 ]; do
+    while kill -0 "\$pid" 2>/dev/null && [ "\$waited" -lt 5 ]; do
       sleep 1
       waited=\$((waited + 1))
     done
