@@ -73,7 +73,7 @@ ROUTE_BACKOFF = 300.0
 WS_PROBE_BACKOFF = (300.0, 6 * 3600.0)
 # Ready WebSockets per route, how long one may wait (Cloudflare closes idle
 # WebSockets after 100 s), and how long a route unused is kept warm.
-POOL_SIZE = 2
+POOL_SIZE = 4
 POOL_MAX_AGE = 50.0
 POOL_KEEP = 600.0
 POOL_TICK = 15.0
@@ -88,6 +88,11 @@ CF_STAGGER = 1.0
 IP_ATTEMPTS = 3
 IP_STAGGER = 1.0
 IP_BACKOFF = 1800.0
+# An address that worked before and then timed out is retried sooner: the
+# provider also drops bursts of new connections to addresses that work.
+IP_RETRY = 60.0
+# New TCP connections at once; more only provoke that throttling.
+CONNECT_LIMIT = 8
 CF_REFRESH_INTERVAL = 6 * 3600
 
 # The default Cloudflare domains of tg-ws-proxy, encoded as in its
@@ -127,6 +132,10 @@ CF_DEFAULT_DOMAINS = [decode_cf_domain(item) for item in _CF_ENCODED]
 
 class AddressRejected(ConnectionError):
     """A substituted Cloudflare address connected but did not serve the host."""
+
+
+class DomainError(ConnectionError):
+    """The domain itself failed: no DNS answer, or a wrong answer on its own address."""
 
 
 async def race(factories, stagger: float, discard):
@@ -254,6 +263,43 @@ def ws_frame(opcode: int, payload: bytes) -> bytes:
     return bytes(header) + mask + masked
 
 
+def parse_frame(buffer, offset: int):
+    """(opcode, payload, next offset) of the frame at offset, or None if incomplete.
+
+    The payload is a slice of buffer (a memoryview over the received data) for
+    unmasked frames, as servers send them, so no copy is made here.
+    """
+    available = len(buffer) - offset
+    if available < 2:
+        return None
+    first, second = buffer[offset], buffer[offset + 1]
+    length = second & 0x7F
+    start = offset + 2
+    if length == 126:
+        if available < 4:
+            return None
+        length = int.from_bytes(buffer[offset + 2:offset + 4], "big")
+        start += 2
+    elif length == 127:
+        if available < 10:
+            return None
+        length = int.from_bytes(buffer[offset + 2:offset + 10], "big")
+        start += 8
+    if length > 16 * 1024 * 1024:
+        raise ConnectionError("WebSocket frame too large")
+    masked = second & 0x80
+    end = start + (4 if masked else 0) + length
+    if len(buffer) < end:
+        return None
+    if masked:
+        mask = bytes(buffer[start:start + 4])
+        payload = bytes(buffer[start + 4:end])
+        repeated = (mask * (length // 4 + 1))[:length]
+        payload = (int.from_bytes(payload, "big") ^ int.from_bytes(repeated, "big")).to_bytes(length, "big")
+        return first & 0x0F, payload, end
+    return first & 0x0F, buffer[start:end], end
+
+
 async def read_ws_frame(reader: asyncio.StreamReader) -> tuple[int, bytes]:
     first, second = await reader.readexactly(2)
     opcode = first & 0x0F
@@ -291,6 +337,7 @@ class Relay:
         self.cf_ips = list(cf_ips or [])
         self.cf_ip_rtt: dict[str, float] = {}
         self.failed_until: dict[tuple, float] = {}
+        self.connect_slots = asyncio.Semaphore(CONNECT_LIMIT)
         # Direct WebSocket per DC: "ok" or "blocked"; unknown until probed.
         self.ws_state: dict[int, str] = {}
         self.ws_failures: dict[int, int] = {}
@@ -408,12 +455,14 @@ class Relay:
 
     async def refill(self, key: tuple) -> None:
         bucket = self.pool.setdefault(key, deque())
-        while len([entry for entry in bucket if self.fresh(entry)]) < self.pool_size:
-            try:
-                reader, writer, host = await self.connect_route(key)
-            except ConnectionError:
-                return
-            bucket.append((reader, writer, host, time.monotonic()))
+        missing = self.pool_size - len([entry for entry in bucket if self.fresh(entry)])
+        if missing <= 0:
+            return
+        results = await asyncio.gather(*(self.connect_route(key) for _ in range(missing)),
+                                       return_exceptions=True)
+        for result in results:
+            if isinstance(result, tuple):
+                bucket.append((*result, time.monotonic()))
 
     async def maintain(self) -> None:
         """Drops stale pooled WebSockets, keeps used routes warm, re-probes."""
@@ -463,22 +512,23 @@ class Relay:
             if not resolved:
                 raise OSError("no IPv4 address")
         except (OSError, asyncio.TimeoutError) as error:
-            raise ConnectionError(f"{host}: DNS {describe(error)}") from None
+            raise DomainError(f"{host}: DNS {describe(error)}") from None
         legacy_tls = self.use_tls and not hasattr(asyncio.StreamWriter, "start_tls")
 
         def tcp_attempt(ip):
             async def attempt():
-                started = time.monotonic()
                 try:
-                    if legacy_tls:  # Python < 3.11: TCP and TLS in one step.
-                        connection = asyncio.open_connection(
-                            ip, self.ws_port, ssl=self.ssl_context, server_hostname=host)
-                    else:
-                        connection = asyncio.open_connection(ip, self.ws_port)
-                    reader, writer = await asyncio.wait_for(connection, self.connect_timeout)
+                    async with self.connect_slots:
+                        started = time.monotonic()
+                        if legacy_tls:  # Python < 3.11: TCP and TLS in one step.
+                            connection = asyncio.open_connection(
+                                ip, self.ws_port, ssl=self.ssl_context, server_hostname=host)
+                        else:
+                            connection = asyncio.open_connection(ip, self.ws_port)
+                        reader, writer = await asyncio.wait_for(connection, self.connect_timeout)
                 except (OSError, asyncio.TimeoutError, ssl.SSLError) as error:
                     if cloudflare:
-                        self.mark_failed(("ip", ip), IP_BACKOFF)
+                        self.mark_failed(("ip", ip), IP_RETRY if ip in self.cf_ip_rtt else IP_BACKOFF)
                     step = "TCP/TLS" if legacy_tls else "TCP"
                     raise ConnectionError(f"{host} via {ip}: {step} {describe(error)}") from None
                 if cloudflare:
@@ -493,20 +543,23 @@ class Relay:
         substituted = cloudflare and ip not in resolved
 
         def rejected(message):
-            # An address that is not the DNS answer and does not serve the
-            # host: drop the address, not the domain.
+            # A wrong answer: on an address that is not the DNS answer the
+            # address is at fault, on the domain's own address the domain.
             if substituted:
                 self.mark_failed(("ip", ip), IP_BACKOFF)
                 self.cf_ip_rtt.pop(ip, None)
                 return AddressRejected(message)
-            return ConnectionError(message)
+            return DomainError(message)
 
         if self.use_tls and not legacy_tls:
             try:
                 await asyncio.wait_for(writer.start_tls(self.ssl_context, server_hostname=host), self.connect_timeout)
-            except (OSError, asyncio.TimeoutError, ssl.SSLError) as error:
+            except ssl.SSLError as error:  # a certificate or protocol error: a wrong answer
                 writer.close()
                 raise rejected(f"{host} via {ip}: TLS {describe(error)}") from None
+            except (OSError, asyncio.TimeoutError) as error:  # a stall: nobody's fault for long
+                writer.close()
+                raise ConnectionError(f"{host} via {ip}: TLS {describe(error)}") from None
         key = base64.b64encode(os.urandom(16))
         writer.write(
             b"GET /apiws HTTP/1.1\r\nHost: " + host.encode()
@@ -524,8 +577,10 @@ class Relay:
                 name, _, value = line.decode("latin-1").partition(":")
                 headers[name.strip().lower()] = value.strip()
         except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ssl.SSLError) as error:
+            # No answer to the upgrade: Cloudflare's own way to the data
+            # center stalled; neither the address nor the domain is blamed.
             writer.close()
-            raise rejected(f"{host} via {ip}: upgrade {describe(error)}") from None
+            raise ConnectionError(f"{host} via {ip}: upgrade {describe(error)}") from None
         accept = base64.b64encode(hashlib.sha1(key + WS_GUID).digest()).decode()
         if status.split(b" ")[1:2] == [b"101"] and headers.get("sec-websocket-accept") == accept:
             return reader, writer
@@ -560,9 +615,7 @@ class Relay:
                 started = time.monotonic()
                 try:
                     reader, writer = await self.upgrade(self.address_override or host, host, cloudflare=True)
-                except AddressRejected:
-                    raise
-                except ConnectionError:
+                except DomainError:
                     self.mark_failed(("cf", domain))
                     raise
                 self.note_rtt(domain, time.monotonic() - started)
@@ -621,7 +674,8 @@ class Relay:
                 reasons.append(f"Cloudflare {error}")
             else:
                 self.stats["cf"] += 1
-                log(f"{label} via Cloudflare {host}{' (ready)' if pooled else ''}")
+                peer = (ws_writer.get_extra_info("peername") or ("?",))[0]
+                log(f"{label} via Cloudflare {host} {peer}{' (ready)' if pooled else ''}")
                 await self.pipe_websocket(header, client_reader, client_writer, ws_reader, ws_writer)
                 return
 
@@ -639,17 +693,52 @@ class Relay:
             ws_writer.write(ws_frame(OP_CLOSE, struct.pack(">H", 1000)))
 
         async def downstream():
+            # Frames are parsed from whatever arrived and their payloads go to
+            # the client in one write: far fewer steps per byte than awaiting
+            # every header and payload, which mattered on the router's CPU.
+            buffer = bytearray()
             while True:
-                opcode, payload = await read_ws_frame(ws_reader)
-                if opcode in (OP_BINARY, OP_CONT, OP_TEXT):
-                    client_writer.write(payload)
+                data = await ws_reader.read(CHUNK)
+                if not data:
+                    break
+                buffer += data
+                joined, offset, closing = self.take_frames(buffer, ws_writer)
+                del buffer[:offset]
+                if joined:
+                    client_writer.write(joined)
                     await client_writer.drain()
-                elif opcode == OP_PING:
-                    ws_writer.write(ws_frame(OP_PONG, payload))
-                elif opcode == OP_CLOSE:
+                if closing:
                     break
 
         await self.run_pair(upstream(), downstream(), client_writer, ws_writer)
+
+    @staticmethod
+    def take_frames(buffer: bytearray, ws_writer) -> tuple[bytes, int, bool]:
+        """Payloads of the complete frames in buffer, the bytes they used, and
+        whether a close frame came; pings are answered on the way."""
+        view = memoryview(buffer)
+        payloads = []
+        offset = 0
+        closing = False
+        try:
+            while True:
+                frame = parse_frame(view, offset)
+                if frame is None:
+                    break
+                opcode, payload, offset = frame
+                if opcode in (OP_BINARY, OP_CONT, OP_TEXT):
+                    payloads.append(payload)
+                elif opcode == OP_PING:
+                    ws_writer.write(ws_frame(OP_PONG, bytes(payload)))
+                elif opcode == OP_CLOSE:
+                    closing = True
+                    break
+            joined = b"".join(payloads)
+        finally:
+            # Every slice must be gone before the caller trims the buffer.
+            del payloads, frame
+            view.release()
+        return joined, offset, closing
 
     async def relay_direct(self, dc, header, client_reader, client_writer, reason: str) -> None:
         address = self.address_override or DIRECT_ADDRESSES[dc]

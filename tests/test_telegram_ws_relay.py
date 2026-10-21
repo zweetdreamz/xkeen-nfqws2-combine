@@ -156,10 +156,11 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, b"direct-answer")
         self.assertEqual(bytes(received), header + b"abc")
         self.assertEqual(relay.stats["direct"], 1)
-        # The refused WebSocket and Cloudflare routes are now skipped.
+        # The refused WebSocket is re-probed later; for Cloudflare the
+        # address is skipped, the domain is not blamed for a TCP failure.
         self.assertEqual(relay.ws_state[2], "blocked")
-        self.assertTrue(relay.blocked(("cf", "cf.example.test")))
-        self.assertEqual(relay.cf_order(2), [])
+        self.assertTrue(relay.blocked(("ip", "127.0.0.1")))
+        self.assertFalse(relay.blocked(("cf", "cf.example.test")))
 
     async def test_cloudflare_carries_dcs_without_a_fixed_address(self):
         fake = FakeWebSocketServer(reply=b"resPQ")
@@ -348,6 +349,31 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(RELAY.DIRECT_ADDRESSES[203], "91.105.192.100")
         self.assertNotIn(203, relay.ws_state)  # no direct WebSocket probe for DC203
 
+    async def test_upgrade_timeout_blames_neither_address_nor_domain(self):
+        async def silent(reader, writer):
+            await reader.read(4096)  # takes the upgrade, never answers
+            await asyncio.sleep(5)
+            writer.close()
+
+        server = await asyncio.start_server(silent, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1], connect_timeout=0.5,
+                            address_override="127.0.0.1", cf_domains=["cf.example.test"], pool_size=0)
+        relay.note_ip_rtt("127.0.0.1", 0.01)
+        with self.assertRaisesRegex(ConnectionError, "upgrade timeout"):
+            await relay.open_cloudflare(2)
+        self.assertFalse(relay.blocked(("ip", "127.0.0.1")))
+        self.assertFalse(relay.blocked(("cf", "cf.example.test")))
+
+    async def test_known_address_that_times_out_is_retried_soon(self):
+        relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1",
+                            cf_domains=["cf.example.test"], pool_size=0, connect_timeout=0.5)
+        relay.note_ip_rtt("127.0.0.1", 0.01)  # it worked before
+        with self.assertRaises(ConnectionError):
+            await relay.open_cloudflare(2)
+        remaining = relay.failed_until[("ip", "127.0.0.1")] - time.monotonic()
+        self.assertLessEqual(remaining, RELAY.IP_RETRY)
+
     @staticmethod
     async def wait_for(condition, timeout=5.0):
         deadline = time.monotonic() + timeout
@@ -433,6 +459,33 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(RELAY.ws_hosts(2, False), ["kws2.web.telegram.org"])
         self.assertEqual(RELAY.ws_hosts(5, True), ["kws5-1.web.telegram.org", "kws5.web.telegram.org"])
         self.assertEqual(RELAY.WS_FIXED_ADDRESS, {2: "149.154.167.220", 4: "149.154.167.220"})
+
+    def test_frames_are_taken_in_batches(self):
+        frames = b"".join(bytes([0x82, len(p)]) + p for p in (b"one", b"two"))
+        frames += bytes([0x89, 1]) + b"p"  # a ping
+        frames += bytes([0x82, 126]) + (300).to_bytes(2, "big") + b"x" * 300
+        partial = bytes([0x82, 10]) + b"half"
+        buffer = bytearray(frames + partial)
+
+        class Writer:
+            sent = []
+
+            def write(self, data):
+                self.sent.append(data)
+
+        writer = Writer()
+        joined, offset, closing = RELAY.Relay.take_frames(buffer, writer)
+        self.assertEqual(joined, b"onetwo" + b"x" * 300)
+        self.assertEqual(offset, len(frames))
+        self.assertFalse(closing)
+        self.assertEqual(len(writer.sent), 1)  # the pong
+        del buffer[:offset]  # no slice of the buffer is left alive
+        self.assertEqual(bytes(buffer), partial)
+        buffer += b"-rest!"
+        self.assertEqual(RELAY.Relay.take_frames(buffer, writer)[0], b"half-rest!")
+        closing_frames = bytearray(bytes([0x82, 1]) + b"a" + bytes([0x88, 2]) + b"\x03\xe8" + bytes([0x82, 1]) + b"b")
+        joined, _, closing = RELAY.Relay.take_frames(closing_frames, writer)
+        self.assertEqual((joined, closing), (b"a", True))
 
     def test_frame_round_trip(self):
         for size in (0, 5, 200, 70000):
