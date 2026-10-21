@@ -282,10 +282,10 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         relay.note_rtt("slow.example.org", 0.01)  # tried first
         original = relay.upgrade
 
-        async def upgrade(address, host):
+        async def upgrade(address, host, cloudflare=False):
             if host.endswith("slow.example.org"):
                 await asyncio.sleep(30)  # hangs like a throttled domain
-            return await original(address, host)
+            return await original(address, host, cloudflare)
 
         relay.upgrade = upgrade
         started = time.monotonic()
@@ -294,6 +294,59 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(host, "kws2.fast.example.org")
         self.assertLess(time.monotonic() - started, RELAY.CF_STAGGER + 2)
         self.assertEqual(relay.cf_active[2], "fast.example.org")
+
+    async def test_dead_cloudflare_address_is_replaced(self):
+        fake = FakeWebSocketServer(reply=b"ok")
+        server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        # 127.0.0.2 refuses (nothing listens there), like a blocked range.
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
+                            address_override="127.0.0.1", cf_domains=["cf.example.test"],
+                            cf_ips=["127.0.0.2"], pool_size=0)
+        _, writer, _ = await relay.open_cloudflare(2)
+        self.assertEqual(writer.get_extra_info("peername")[0], "127.0.0.1")
+        writer.close()
+        self.assertTrue(relay.blocked(("ip", "127.0.0.2")))
+        self.assertIn("127.0.0.1", relay.cf_ip_rtt)
+        self.assertFalse(relay.blocked(("cf", "cf.example.test")))
+        self.assertEqual(relay.ip_candidates(["127.0.0.9"], True)[0], "127.0.0.1")  # learned first
+        self.assertEqual(relay.ip_candidates(["127.0.0.9"], False), ["127.0.0.9"])  # not Cloudflare
+
+    async def test_substituted_address_that_rejects_the_host_is_dropped(self):
+        good = FakeWebSocketServer(reply=b"ok")
+        server = await asyncio.start_server(good.handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        port = server.sockets[0].getsockname()[1]
+        bad = FakeWebSocketServer(reply=b"", status=b"403 Forbidden")
+        bad_server = await asyncio.start_server(bad.handle, "127.0.0.3", port)
+        self.addAsyncCleanup(self.close_server, bad_server)
+        relay = RELAY.Relay(use_tls=False, ws_port=port, address_override="127.0.0.1",
+                            cf_domains=["cf.example.test"], cf_ips=["127.0.0.3"], pool_size=0)
+        with self.assertRaisesRegex(ConnectionError, "via 127.0.0.3: HTTP/1.1 403"):
+            await relay.open_cloudflare(2)
+        # The address is dropped, the domain is not.
+        self.assertTrue(relay.blocked(("ip", "127.0.0.3")))
+        self.assertFalse(relay.blocked(("cf", "cf.example.test")))
+        _, writer, _ = await relay.open_cloudflare(2)
+        self.assertEqual(writer.get_extra_info("peername")[0], "127.0.0.1")
+        writer.close()
+
+    async def test_dc203_goes_through_cloudflare(self):
+        fake = FakeWebSocketServer(reply=b"ok")
+        server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
+                            address_override="127.0.0.1", cf_domains=["cf.example.test"], pool_size=0)
+        port = await self.start_relay(relay)
+        header, _, _ = MT.make_header(-203)
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(header + b"hello")
+        await writer.drain()
+        self.assertEqual(await asyncio.wait_for(reader.read(100), 5), b"ok")
+        writer.close()
+        self.assertIn(b"Host: kws203.cf.example.test", fake.requests[0])
+        self.assertEqual(RELAY.DIRECT_ADDRESSES[203], "91.105.192.100")
+        self.assertNotIn(203, relay.ws_state)  # no direct WebSocket probe for DC203
 
     @staticmethod
     async def wait_for(condition, timeout=5.0):
@@ -379,7 +432,6 @@ class HelperTests(unittest.TestCase):
     def test_hosts(self):
         self.assertEqual(RELAY.ws_hosts(2, False), ["kws2.web.telegram.org"])
         self.assertEqual(RELAY.ws_hosts(5, True), ["kws5-1.web.telegram.org", "kws5.web.telegram.org"])
-        self.assertEqual(RELAY.ws_hosts(203, False), ["kws2.web.telegram.org"])
         self.assertEqual(RELAY.WS_FIXED_ADDRESS, {2: "149.154.167.220", 4: "149.154.167.220"})
 
     def test_frame_round_trip(self):
@@ -424,11 +476,25 @@ class HelperTests(unittest.TestCase):
             code = asyncio.run(RELAY.self_test(relay))
         lines = out.getvalue().splitlines()
         self.assertEqual(code, 1)
-        self.assertEqual([line.split(":")[0] for line in lines], ["DC1", "DC2", "DC3", "DC4", "DC5"])
+        self.assertEqual([line.split(":")[0] for line in lines], ["DC1", "DC2", "DC3", "DC4", "DC5", "DC203"])
+        self.assertIn("TCP 127.0.0.1:", lines[5])
         self.assertNotIn("WebSocket", lines[0])  # DC1 has no fixed WebSocket address
         self.assertIn("Cloudflare failed (kws1.cf.example.test via 127.0.0.1:", lines[0])
         self.assertIn("WebSocket failed (kws2.web.telegram.org via 127.0.0.1:", lines[1])
         self.assertIn("TCP 127.0.0.1:", lines[0])
+
+    def test_own_addresses_file(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ips.txt"
+            path.write_text("# fast\n104.16.0.1\nnot-an-ip\n::1\n104.16.0.1 # twice\n172.64.0.2\n", encoding="utf-8")
+            self.assertEqual(RELAY.read_ips_file(path), ["104.16.0.1", "172.64.0.2"])
+            self.assertEqual(RELAY.read_ips_file(Path(directory) / "missing"), [])
+        relay = RELAY.Relay(use_tls=False, cf_ips=["104.16.0.1"])
+        self.assertEqual(relay.ip_candidates(["188.114.96.3"], True), ["104.16.0.1", "188.114.96.3"])
+        relay.mark_failed(("ip", "188.114.96.3"), RELAY.IP_BACKOFF)
+        relay.note_ip_rtt("172.67.0.5", 0.2)
+        self.assertEqual(relay.ip_candidates(["188.114.96.3"], True), ["172.67.0.5", "104.16.0.1"])
 
     def test_cloudflare_domains(self):
         self.assertEqual(len(RELAY.CF_DEFAULT_DOMAINS), 20)

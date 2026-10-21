@@ -25,7 +25,8 @@ endpoints, headers, fixed address and default Cloudflare domains (kept encoded
 as there). Here no secret is involved and the bytes are not re-encrypted.
 
 Usage: telegram_ws_relay.py [--listen 127.0.0.1:18443] [--pidfile PATH]
-                            [--log PATH] [--cf-domains-file PATH] [--no-cf]
+                            [--log PATH] [--cf-domains-file PATH]
+                            [--cf-ips-file PATH] [--no-cf]
        telegram_ws_relay.py --self-test
        telegram_ws_relay.py --print-cf-domains
 """
@@ -38,6 +39,7 @@ import base64
 import contextlib
 import hashlib
 import importlib.util
+import ipaddress
 import os
 import random
 import re
@@ -59,6 +61,9 @@ _SPEC.loader.exec_module(mtproto)
 
 # DC2 and DC4 answer WebSocket on this address for every kws{N} name.
 WS_FIXED_ADDRESS = {2: "149.154.167.220", 4: "149.154.167.220"}
+# Data centers for the plain TCP route; DC203 is a separate one (CDN), as in
+# tg-ws-proxy, reached through Cloudflare as kws203.<domain>.
+DIRECT_ADDRESSES = {**mtproto.DATA_CENTERS, 203: "91.105.192.100"}
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 OP_CONT, OP_TEXT, OP_BINARY, OP_CLOSE, OP_PING, OP_PONG = 0, 1, 2, 8, 9, 10
 CHUNK = 65536
@@ -76,6 +81,13 @@ POOL_TICK = 15.0
 # after the previous one if that has not answered yet.
 CF_ATTEMPTS = 3
 CF_STAGGER = 1.0
+# Cloudflare serves every domain on every edge address, so an address that
+# does not connect (the provider blocks some Cloudflare ranges) is replaced
+# by another: the DNS answer, the user's own addresses and those that
+# worked before, fastest first. A dead address is skipped for 30 minutes.
+IP_ATTEMPTS = 3
+IP_STAGGER = 1.0
+IP_BACKOFF = 1800.0
 CF_REFRESH_INTERVAL = 6 * 3600
 
 # The default Cloudflare domains of tg-ws-proxy, encoded as in its
@@ -111,6 +123,62 @@ def valid_domain(value: str) -> bool:
 
 
 CF_DEFAULT_DOMAINS = [decode_cf_domain(item) for item in _CF_ENCODED]
+
+
+class AddressRejected(ConnectionError):
+    """A substituted Cloudflare address connected but did not serve the host."""
+
+
+async def race(factories, stagger: float, discard):
+    """Starts factories[i]() i * stagger seconds in, unless one has succeeded.
+
+    Returns the first result; ConnectionErrors of the others are collected,
+    and results that arrive after the winner are passed to discard().
+    """
+    async def run(index, factory):
+        await asyncio.sleep(index * stagger)
+        return await factory()
+
+    tasks = [asyncio.ensure_future(run(index, factory)) for index, factory in enumerate(factories)]
+    errors = []
+    winner = None
+    won = False
+    try:
+        for future in asyncio.as_completed(tasks):
+            try:
+                winner = await future
+                won = True
+                break
+            except ConnectionError as error:
+                errors.append(str(error))
+    finally:
+        for task in tasks:
+            task.cancel()
+        for result in await asyncio.gather(*tasks, return_exceptions=True):
+            if not isinstance(result, BaseException) and not (won and result is winner):
+                discard(result)
+    if not won:
+        raise ConnectionError("; ".join(errors) or "nothing to try")
+    return winner
+
+
+def read_ips_file(path: Path | None) -> list[str]:
+    """The user's own Cloudflare addresses (IPv4), one per line; '#' comments."""
+    if path is None:
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    addresses = []
+    for line in text.splitlines():
+        item = line.split("#", 1)[0].strip()
+        try:
+            if item and ipaddress.ip_address(item).version == 4 and item not in addresses:
+                addresses.append(item)
+        except ValueError:
+            continue
+    return addresses
 
 
 def read_domains_file(path: Path | None) -> list[str]:
@@ -166,8 +234,6 @@ def describe(error: BaseException | None) -> str:
 
 
 def ws_hosts(dc: int, media: bool) -> list[str]:
-    if dc == 203:  # Telegram's test alias of DC2.
-        dc = 2
     names = [f"kws{dc}.web.telegram.org"]
     return [f"kws{dc}-1.web.telegram.org", *names] if media else names
 
@@ -210,7 +276,8 @@ class Relay:
     def __init__(self, *, connect_timeout: float = 5.0, ws_port: int = 443,
                  use_tls: bool = True, address_override: str | None = None,
                  fallback_port: int = 443, cf_domains: list[str] | None = None,
-                 cf_enabled: bool = True, pool_size: int = POOL_SIZE) -> None:
+                 cf_enabled: bool = True, pool_size: int = POOL_SIZE,
+                 cf_ips: list[str] | None = None) -> None:
         self.connect_timeout = connect_timeout
         self.ws_port = ws_port
         self.use_tls = use_tls
@@ -221,6 +288,8 @@ class Relay:
         self.cf_domains = list(cf_domains if cf_domains is not None else CF_DEFAULT_DOMAINS)
         self.cf_active: dict[int, str] = {}
         self.cf_rtt: dict[str, float] = {}
+        self.cf_ips = list(cf_ips or [])
+        self.cf_ip_rtt: dict[str, float] = {}
         self.failed_until: dict[tuple, float] = {}
         # Direct WebSocket per DC: "ok" or "blocked"; unknown until probed.
         self.ws_state: dict[int, str] = {}
@@ -237,8 +306,24 @@ class Relay:
     def blocked(self, key: tuple) -> bool:
         return time.monotonic() < self.failed_until.get(key, 0.0)
 
-    def mark_failed(self, key: tuple) -> None:
-        self.failed_until[key] = time.monotonic() + ROUTE_BACKOFF
+    def mark_failed(self, key: tuple, seconds: float = ROUTE_BACKOFF) -> None:
+        self.failed_until[key] = time.monotonic() + seconds
+
+    def ip_candidates(self, resolved: list[str], cloudflare: bool) -> list[str]:
+        """Addresses to try: for Cloudflare the user's, DNS and learned ones."""
+        if not cloudflare:
+            return resolved[:1]
+        pool = list(dict.fromkeys([*self.cf_ips, *resolved, *self.cf_ip_rtt]))
+        usable = [ip for ip in pool if not self.blocked(("ip", ip))]
+        if not usable:
+            return resolved[:IP_ATTEMPTS]
+        known = sorted((ip for ip in usable if ip in self.cf_ip_rtt), key=self.cf_ip_rtt.__getitem__)
+        unknown = [ip for ip in usable if ip not in self.cf_ip_rtt]
+        return (known + unknown)[:IP_ATTEMPTS]
+
+    def note_ip_rtt(self, ip: str, seconds: float) -> None:
+        previous = self.cf_ip_rtt.get(ip)
+        self.cf_ip_rtt[ip] = seconds if previous is None else 0.7 * previous + 0.3 * seconds
 
     def cf_order(self, dc: int) -> list[str]:
         """Domains that answered, fastest first, then untried ones shuffled."""
@@ -362,10 +447,11 @@ class Relay:
 
     # -- WebSocket ---------------------------------------------------------
 
-    async def upgrade(self, address: str, host: str):
+    async def upgrade(self, address: str, host: str, cloudflare: bool = False):
         """DNS (IPv4), TCP, TLS (SNI = host), then the WebSocket upgrade to /apiws.
 
-        The steps are timed separately so an error says where it stalled.
+        The steps are timed separately so an error says where it stalled. For
+        Cloudflare several addresses race (see IP_ATTEMPTS).
         """
         loop = asyncio.get_running_loop()
         try:
@@ -373,31 +459,54 @@ class Relay:
                 loop.getaddrinfo(address, self.ws_port, family=socket.AF_INET, type=socket.SOCK_STREAM),
                 self.connect_timeout,
             )
-            ip = infos[0][4][0]
-        except (OSError, asyncio.TimeoutError, IndexError) as error:
+            resolved = list(dict.fromkeys(info[4][0] for info in infos))
+            if not resolved:
+                raise OSError("no IPv4 address")
+        except (OSError, asyncio.TimeoutError) as error:
             raise ConnectionError(f"{host}: DNS {describe(error)}") from None
-        if self.use_tls and not hasattr(asyncio.StreamWriter, "start_tls"):
-            # Python < 3.11: TCP and TLS in one step.
-            try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(ip, self.ws_port, ssl=self.ssl_context, server_hostname=host),
-                    self.connect_timeout,
-                )
-            except (OSError, asyncio.TimeoutError, ssl.SSLError) as error:
-                raise ConnectionError(f"{host} via {ip}: TCP/TLS {describe(error)}") from None
-        else:
-            try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(ip, self.ws_port), self.connect_timeout
-                )
-            except (OSError, asyncio.TimeoutError) as error:
-                raise ConnectionError(f"{host} via {ip}: TCP {describe(error)}") from None
-        if self.use_tls and hasattr(asyncio.StreamWriter, "start_tls"):
+        legacy_tls = self.use_tls and not hasattr(asyncio.StreamWriter, "start_tls")
+
+        def tcp_attempt(ip):
+            async def attempt():
+                started = time.monotonic()
+                try:
+                    if legacy_tls:  # Python < 3.11: TCP and TLS in one step.
+                        connection = asyncio.open_connection(
+                            ip, self.ws_port, ssl=self.ssl_context, server_hostname=host)
+                    else:
+                        connection = asyncio.open_connection(ip, self.ws_port)
+                    reader, writer = await asyncio.wait_for(connection, self.connect_timeout)
+                except (OSError, asyncio.TimeoutError, ssl.SSLError) as error:
+                    if cloudflare:
+                        self.mark_failed(("ip", ip), IP_BACKOFF)
+                    step = "TCP/TLS" if legacy_tls else "TCP"
+                    raise ConnectionError(f"{host} via {ip}: {step} {describe(error)}") from None
+                if cloudflare:
+                    self.note_ip_rtt(ip, time.monotonic() - started)
+                return ip, reader, writer
+            return attempt
+
+        ip, reader, writer = await race(
+            [tcp_attempt(ip) for ip in self.ip_candidates(resolved, cloudflare)],
+            IP_STAGGER, lambda result: result[2].close(),
+        )
+        substituted = cloudflare and ip not in resolved
+
+        def rejected(message):
+            # An address that is not the DNS answer and does not serve the
+            # host: drop the address, not the domain.
+            if substituted:
+                self.mark_failed(("ip", ip), IP_BACKOFF)
+                self.cf_ip_rtt.pop(ip, None)
+                return AddressRejected(message)
+            return ConnectionError(message)
+
+        if self.use_tls and not legacy_tls:
             try:
                 await asyncio.wait_for(writer.start_tls(self.ssl_context, server_hostname=host), self.connect_timeout)
             except (OSError, asyncio.TimeoutError, ssl.SSLError) as error:
                 writer.close()
-                raise ConnectionError(f"{host} via {ip}: TLS {describe(error)}") from None
+                raise rejected(f"{host} via {ip}: TLS {describe(error)}") from None
         key = base64.b64encode(os.urandom(16))
         writer.write(
             b"GET /apiws HTTP/1.1\r\nHost: " + host.encode()
@@ -416,16 +525,16 @@ class Relay:
                 headers[name.strip().lower()] = value.strip()
         except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ssl.SSLError) as error:
             writer.close()
-            raise ConnectionError(f"{host}: upgrade {describe(error)}") from None
+            raise rejected(f"{host} via {ip}: upgrade {describe(error)}") from None
         accept = base64.b64encode(hashlib.sha1(key + WS_GUID).digest()).decode()
         if status.split(b" ")[1:2] == [b"101"] and headers.get("sec-websocket-accept") == accept:
             return reader, writer
         writer.close()
-        raise ConnectionError(f"{host}: {status.strip().decode('latin-1') or 'no answer'}")
+        raise rejected(f"{host} via {ip}: {status.strip().decode('latin-1') or 'no answer'}")
 
     async def open_websocket(self, dc: int, media: bool):
         """kws{N}.web.telegram.org on the fixed address (DC2/DC4)."""
-        address = self.address_override or WS_FIXED_ADDRESS[2 if dc == 203 else dc]
+        address = self.address_override or WS_FIXED_ADDRESS[dc]
         last = "no host"
         for host in ws_hosts(dc, media):
             try:
@@ -445,36 +554,23 @@ class Relay:
         if not domains:
             raise ConnectionError("no Cloudflare domain left")
 
-        async def attempt(index: int, domain: str):
-            await asyncio.sleep(index * CF_STAGGER)
-            host = f"kws{dc}.{domain}"
-            started = time.monotonic()
-            try:
-                reader, writer = await self.upgrade(self.address_override or host, host)
-            except ConnectionError:
-                self.mark_failed(("cf", domain))
-                raise
-            self.note_rtt(domain, time.monotonic() - started)
-            return domain, host, reader, writer
-
-        tasks = [asyncio.ensure_future(attempt(index, domain)) for index, domain in enumerate(domains)]
-        errors = []
-        winner = None
-        try:
-            for future in asyncio.as_completed(tasks):
+        def domain_attempt(domain):
+            async def attempt():
+                host = f"kws{dc}.{domain}"
+                started = time.monotonic()
                 try:
-                    winner = await future
-                    break
-                except ConnectionError as error:
-                    errors.append(str(error))
-        finally:
-            for task in tasks:
-                task.cancel()
-            for result in await asyncio.gather(*tasks, return_exceptions=True):
-                if isinstance(result, tuple) and result is not winner:
-                    result[3].close()  # a second domain that answered too
-        if winner is None:
-            raise ConnectionError("; ".join(errors))
+                    reader, writer = await self.upgrade(self.address_override or host, host, cloudflare=True)
+                except AddressRejected:
+                    raise
+                except ConnectionError:
+                    self.mark_failed(("cf", domain))
+                    raise
+                self.note_rtt(domain, time.monotonic() - started)
+                return domain, host, reader, writer
+            return attempt
+
+        winner = await race([domain_attempt(domain) for domain in domains], CF_STAGGER,
+                            lambda result: result[3].close())
         domain, host, reader, writer = winner
         self.cf_active[dc] = domain
         return reader, writer, host
@@ -495,14 +591,14 @@ class Relay:
             return
         _, raw_dc = parsed
         dc, media = abs(raw_dc), raw_dc < 0
-        if dc == 0 or (dc not in mtproto.DATA_CENTERS and dc != 203):
+        if dc not in DIRECT_ADDRESSES:
             self.stats["rejected"] += 1
             client_writer.close()
             return
         label = f"DC{dc}{' media' if media else ''}"
         reasons = []
 
-        if (2 if dc == 203 else dc) in WS_FIXED_ADDRESS:
+        if dc in WS_FIXED_ADDRESS:
             if self.ws_state.get(dc) == "ok":
                 try:
                     ws_reader, ws_writer, host, pooled = await self.take(("ws", dc, media))
@@ -518,7 +614,7 @@ class Relay:
                 # Unknown or blocked: Cloudflare now, the probe in the background.
                 self.schedule_probe(dc)
 
-        if self.cf_enabled and self.cf_domains and dc != 203:
+        if self.cf_enabled and self.cf_domains:
             try:
                 ws_reader, ws_writer, host, pooled = await self.take(("cf", dc))
             except ConnectionError as error:
@@ -556,7 +652,7 @@ class Relay:
         await self.run_pair(upstream(), downstream(), client_writer, ws_writer)
 
     async def relay_direct(self, dc, header, client_reader, client_writer, reason: str) -> None:
-        address = self.address_override or mtproto.DATA_CENTERS.get(dc, mtproto.DATA_CENTERS[2])
+        address = self.address_override or DIRECT_ADDRESSES[dc]
         if self.blocked(("tcp", dc)):
             log(f"DC{dc}: {reason}; direct to {address} skipped (failed recently)")
             client_writer.close()
@@ -643,12 +739,13 @@ async def self_test(relay: Relay) -> int:
             begun = time.monotonic()
             try:
                 _, writer, host = await relay.open_cloudflare(dc)
+                peer = (writer.get_extra_info("peername") or ("?",))[0]
                 writer.close()
-                parts.append(f"Cloudflare ok {host} ({(time.monotonic() - begun) * 1000:.0f} ms)")
+                parts.append(f"Cloudflare ok {host} via {peer} ({(time.monotonic() - begun) * 1000:.0f} ms)")
                 working = True
             except ConnectionError as error:
                 parts.append(f"Cloudflare failed ({error})")
-        address = relay.address_override or mtproto.DATA_CENTERS[dc]
+        address = relay.address_override or DIRECT_ADDRESSES[dc]
         try:
             _, writer = await asyncio.wait_for(
                 asyncio.open_connection(address, relay.fallback_port), relay.connect_timeout
@@ -659,7 +756,7 @@ async def self_test(relay: Relay) -> int:
             parts.append(f"TCP {address}:{relay.fallback_port} failed ({describe(error)})")
         return f"DC{dc}: {'; '.join(parts)} [{time.monotonic() - started:.1f}s]", working
 
-    results = await asyncio.gather(*(one(dc) for dc in sorted(mtproto.DATA_CENTERS)))
+    results = await asyncio.gather(*(one(dc) for dc in sorted(DIRECT_ADDRESSES)))
     print("\n".join(line for line, _ in results), flush=True)
     return 0 if any(working for _, working in results) else 1
 
@@ -704,6 +801,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log", type=Path)
     parser.add_argument("--cf-domains-file", type=Path,
                         help="own Cloudflare domains, one per line (replaces the defaults)")
+    parser.add_argument("--cf-ips-file", type=Path,
+                        help="own Cloudflare addresses (IPv4), one per line, tried first")
     parser.add_argument("--no-cf", action="store_true", help="do not use Cloudflare")
     parser.add_argument("--self-test", action="store_true",
                         help="try WebSocket, Cloudflare and TCP to every data center, then exit")
@@ -716,7 +815,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.no_cf:
             print("\n".join(domains))
         return 0
-    relay = Relay(cf_domains=domains, cf_enabled=not args.no_cf)
+    relay = Relay(cf_domains=domains, cf_enabled=not args.no_cf, cf_ips=read_ips_file(args.cf_ips_file))
     if args.self_test:
         return asyncio.run(self_test(relay))
     global LOG_PATH

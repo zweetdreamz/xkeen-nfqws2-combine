@@ -46,7 +46,8 @@ NFQWS_CONF="$(root_path /opt/etc/nfqws2/nfqws2.conf)"
 NFQWS_LIST="$(root_path /opt/etc/nfqws2/lists/user.list)"
 NFQWS_YOUTUBE_LIST="$(root_path /opt/etc/nfqws2/lists/youtube.list)"
 NFQWS_TELEGRAM_LIST="$(root_path /opt/etc/nfqws2/lists/kdn-telegram.list)"
-# Cloudflare domains of the Telegram WS relay (ws only).
+# Left by an earlier version that ran the relay's Cloudflare domains through
+# nfqws2; measured on a router it only slowed the TLS handshake.
 NFQWS_TELEGRAM_CF_LIST="$(root_path /opt/etc/nfqws2/lists/kdn-telegram-cf.list)"
 NFQWS_TELEGRAM_IPSET="$(root_path /opt/etc/nfqws2/lists/kdn-telegram-ip.list)"
 NFQWS_DISCORD_UDP_BLOB="$(root_path /opt/etc/nfqws2/blobs/discord_udp.bin)"
@@ -69,8 +70,9 @@ TELEGRAM_WS_PIDFILE="$(root_path /opt/var/run/kdn-telegram-ws.pid)"
 TELEGRAM_WS_LOG="$(root_path /opt/var/log/kdn-telegram-ws.log)"
 TELEGRAM_WS_PYTHON="$(root_path /opt/bin/python3)"
 TELEGRAM_WS_RELAY="$SCRIPT_DIR/tools/router/telegram_ws_relay.py"
-# Optional own Cloudflare domains of the relay, one per line.
+# Optional own Cloudflare domains and addresses of the relay, one per line.
 TELEGRAM_WS_DOMAINS="$STATE_ROOT/telegram-ws-domains.txt"
+TELEGRAM_WS_CF_IPS="$STATE_ROOT/telegram-ws-cf-ips.txt"
 TELEGRAM_WS_PORT=18443
 if [ -n "$TEST_ROOT" ] && [ -n "${KD_TEST_TELEGRAM_WS_PORT:-}" ]; then
   TELEGRAM_WS_PORT="$KD_TEST_TELEGRAM_WS_PORT"
@@ -2044,6 +2046,7 @@ PIDFILE="$TELEGRAM_WS_PIDFILE"
 LOG="$TELEGRAM_WS_LOG"
 LISTEN="127.0.0.1:$TELEGRAM_WS_PORT"
 CF_DOMAINS="$TELEGRAM_WS_DOMAINS"
+CF_IPS="$TELEGRAM_WS_CF_IPS"
 
 running() {
   [ -f "\$PIDFILE" ] && kill -0 "\$(cat "\$PIDFILE" 2>/dev/null)" 2>/dev/null
@@ -2054,7 +2057,7 @@ start() {
   mkdir -p "\$(dirname "\$PIDFILE")" "\$(dirname "\$LOG")"
   echo "Starting Telegram WS relay on \$LISTEN..."
   "\$PYTHON" "\$RELAY" --listen "\$LISTEN" --pidfile "\$PIDFILE" --log "\$LOG" \\
-    --cf-domains-file "\$CF_DOMAINS" </dev/null >/dev/null 2>&1 &
+    --cf-domains-file "\$CF_DOMAINS" --cf-ips-file "\$CF_IPS" </dev/null >/dev/null 2>&1 &
   waited=0
   while [ "\$waited" -lt 10 ]; do
     running && { echo "Telegram WS relay started."; return 0; }
@@ -3561,22 +3564,10 @@ patch_nfqws() {
   telegram_list_tmp="$(make_tmp)"
   telegram_domains > "$telegram_list_tmp"
   atomic_replace_file "$NFQWS_TELEGRAM_LIST" "$telegram_list_tmp" 0644
-  if [ "$TELEGRAM_ROUTE_MODE" = ws ]; then
-    # The relay's Cloudflare domains get the TLS profile too: the Cloudflare
-    # networks can be throttled as well.
-    telegram_cf_tmp="$(make_tmp)"
-    "$TELEGRAM_WS_PYTHON" "$TELEGRAM_WS_RELAY" --print-cf-domains \
-      --cf-domains-file "$TELEGRAM_WS_DOMAINS" > "$telegram_cf_tmp" || {
-      echo "ERROR: cannot list the Cloudflare domains of the Telegram WS relay." >&2
-      return 1
-    }
-    atomic_replace_file "$NFQWS_TELEGRAM_CF_LIST" "$telegram_cf_tmp" 0644
-  else
-    rm -f "$NFQWS_TELEGRAM_CF_LIST"
-  fi
   # Left over from the removed Telegram Zapret route (MTProto ipset and an
-  # imported Telegram profile); nothing reads them any more.
-  rm -f "$NFQWS_TELEGRAM_IPSET" "$IMPORTED_PROFILE_DIR/telegram.json"
+  # imported Telegram profile) and from the Cloudflare hostlist; nothing
+  # reads them any more.
+  rm -f "$NFQWS_TELEGRAM_IPSET" "$IMPORTED_PROFILE_DIR/telegram.json" "$NFQWS_TELEGRAM_CF_LIST"
 
   discord_tcp_import=""
   discord_voice_import=""
@@ -3713,7 +3704,6 @@ fi
 NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
 --filter-tcp=443 --filter-l7=tls
 --hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list
---hostlist=/opt/etc/nfqws2/lists/kdn-telegram-cf.list
 --out-range=-d10
 --payload=tls_client_hello
 --lua-desync=fake:blob=telegram_tls:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000
