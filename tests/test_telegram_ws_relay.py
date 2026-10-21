@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import io
 import os
+import shutil
 import socket
 import sys
 import time
@@ -237,6 +238,62 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         await connect()
         self.assertEqual(relay.stats["ws"], 1)
         self.assertTrue(any(b"Host: kws2.web.telegram.org" in r for r in fake.requests))
+
+    @unittest.skipIf(shutil.which("openssl") is None, "openssl not installed")
+    async def test_tls_websocket_and_stage_names(self):
+        import ssl
+        import subprocess
+        import tempfile
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        cert, key = Path(directory) / "cert.pem", Path(directory) / "key.pem"
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=kws2.cf.example.test",
+             "-addext", "subjectAltName=DNS:kws2.cf.example.test", "-keyout", str(key), "-out", str(cert)],
+            check=True, capture_output=True,
+        )
+        server_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        server_context.load_cert_chain(cert, key)
+        fake = FakeWebSocketServer(reply=b"ok")
+        server = await asyncio.start_server(fake.handle, "127.0.0.1", 0, ssl=server_context)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(ws_port=server.sockets[0].getsockname()[1], address_override="127.0.0.1",
+                            cf_domains=["cf.example.test"], pool_size=0)
+        relay.ssl_context = ssl.create_default_context(cafile=str(cert))
+        _, writer, host = await relay.open_cloudflare(2)
+        writer.close()
+        self.assertEqual(host, "kws2.cf.example.test")
+        self.assertIn(b"Host: kws2.cf.example.test", fake.requests[0])
+        # A certificate for another name fails at the TLS step.
+        with self.assertRaisesRegex(ConnectionError, r"kws4\.cf\.example\.test via 127\.0\.0\.1: (TCP/)?TLS "):
+            await relay.open_cloudflare(4)
+        # Nothing listening: the TCP step.
+        relay.ws_port = free_port()
+        with self.assertRaisesRegex(ConnectionError, r"via 127\.0\.0\.1: TCP"):
+            await relay.upgrade("127.0.0.1", "kws5.cf.example.test")
+
+    async def test_cloudflare_domains_race_and_the_first_answer_wins(self):
+        fake = FakeWebSocketServer(reply=b"ok")
+        server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
+                            address_override="127.0.0.1", pool_size=0,
+                            cf_domains=["slow.example.org", "fast.example.org"])
+        relay.note_rtt("slow.example.org", 0.01)  # tried first
+        original = relay.upgrade
+
+        async def upgrade(address, host):
+            if host.endswith("slow.example.org"):
+                await asyncio.sleep(30)  # hangs like a throttled domain
+            return await original(address, host)
+
+        relay.upgrade = upgrade
+        started = time.monotonic()
+        _, writer, host = await relay.open_cloudflare(2)
+        writer.close()
+        self.assertEqual(host, "kws2.fast.example.org")
+        self.assertLess(time.monotonic() - started, RELAY.CF_STAGGER + 2)
+        self.assertEqual(relay.cf_active[2], "fast.example.org")
 
     @staticmethod
     async def wait_for(condition, timeout=5.0):

@@ -42,6 +42,7 @@ import os
 import random
 import re
 import signal
+import socket
 import ssl
 import struct
 import sys
@@ -71,8 +72,10 @@ POOL_SIZE = 2
 POOL_MAX_AGE = 50.0
 POOL_KEEP = 600.0
 POOL_TICK = 15.0
-# Cloudflare domains tried for one connection.
+# Cloudflare domains tried for one connection; the next one starts this long
+# after the previous one if that has not answered yet.
 CF_ATTEMPTS = 3
+CF_STAGGER = 1.0
 CF_REFRESH_INTERVAL = 6 * 3600
 
 # The default Cloudflare domains of tg-ws-proxy, encoded as in its
@@ -360,17 +363,41 @@ class Relay:
     # -- WebSocket ---------------------------------------------------------
 
     async def upgrade(self, address: str, host: str):
-        """TLS (SNI = host) to address, then the WebSocket upgrade to /apiws."""
+        """DNS (IPv4), TCP, TLS (SNI = host), then the WebSocket upgrade to /apiws.
+
+        The steps are timed separately so an error says where it stalled.
+        """
+        loop = asyncio.get_running_loop()
         try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(
-                    address, self.ws_port, ssl=self.ssl_context,
-                    server_hostname=host if self.use_tls else None,
-                ),
+            infos = await asyncio.wait_for(
+                loop.getaddrinfo(address, self.ws_port, family=socket.AF_INET, type=socket.SOCK_STREAM),
                 self.connect_timeout,
             )
-        except (OSError, asyncio.TimeoutError, ssl.SSLError) as error:
-            raise ConnectionError(f"{host} via {address}: {describe(error)}") from None
+            ip = infos[0][4][0]
+        except (OSError, asyncio.TimeoutError, IndexError) as error:
+            raise ConnectionError(f"{host}: DNS {describe(error)}") from None
+        if self.use_tls and not hasattr(asyncio.StreamWriter, "start_tls"):
+            # Python < 3.11: TCP and TLS in one step.
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(ip, self.ws_port, ssl=self.ssl_context, server_hostname=host),
+                    self.connect_timeout,
+                )
+            except (OSError, asyncio.TimeoutError, ssl.SSLError) as error:
+                raise ConnectionError(f"{host} via {ip}: TCP/TLS {describe(error)}") from None
+        else:
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(ip, self.ws_port), self.connect_timeout
+                )
+            except (OSError, asyncio.TimeoutError) as error:
+                raise ConnectionError(f"{host} via {ip}: TCP {describe(error)}") from None
+        if self.use_tls and hasattr(asyncio.StreamWriter, "start_tls"):
+            try:
+                await asyncio.wait_for(writer.start_tls(self.ssl_context, server_hostname=host), self.connect_timeout)
+            except (OSError, asyncio.TimeoutError, ssl.SSLError) as error:
+                writer.close()
+                raise ConnectionError(f"{host} via {ip}: TLS {describe(error)}") from None
         key = base64.b64encode(os.urandom(16))
         writer.write(
             b"GET /apiws HTTP/1.1\r\nHost: " + host.encode()
@@ -409,21 +436,48 @@ class Relay:
         raise ConnectionError(last)
 
     async def open_cloudflare(self, dc: int):
-        """kws{N}.<domain> through Cloudflare, which connects to the data center."""
-        errors = []
-        for domain in self.cf_order(dc):
+        """kws{N}.<domain> through Cloudflare, which connects to the data center.
+
+        Domains are tried staggered: the next starts CF_STAGGER seconds after
+        the previous unless that one has answered; the first to answer wins.
+        """
+        domains = self.cf_order(dc)
+        if not domains:
+            raise ConnectionError("no Cloudflare domain left")
+
+        async def attempt(index: int, domain: str):
+            await asyncio.sleep(index * CF_STAGGER)
             host = f"kws{dc}.{domain}"
             started = time.monotonic()
             try:
                 reader, writer = await self.upgrade(self.address_override or host, host)
-            except ConnectionError as error:
-                errors.append(str(error))
+            except ConnectionError:
                 self.mark_failed(("cf", domain))
-                continue
+                raise
             self.note_rtt(domain, time.monotonic() - started)
-            self.cf_active[dc] = domain
-            return reader, writer, host
-        raise ConnectionError("; ".join(errors) or "no Cloudflare domain left")
+            return domain, host, reader, writer
+
+        tasks = [asyncio.ensure_future(attempt(index, domain)) for index, domain in enumerate(domains)]
+        errors = []
+        winner = None
+        try:
+            for future in asyncio.as_completed(tasks):
+                try:
+                    winner = await future
+                    break
+                except ConnectionError as error:
+                    errors.append(str(error))
+        finally:
+            for task in tasks:
+                task.cancel()
+            for result in await asyncio.gather(*tasks, return_exceptions=True):
+                if isinstance(result, tuple) and result is not winner:
+                    result[3].close()  # a second domain that answered too
+        if winner is None:
+            raise ConnectionError("; ".join(errors))
+        domain, host, reader, writer = winner
+        self.cf_active[dc] = domain
+        return reader, writer, host
 
     # -- connections -------------------------------------------------------
 
