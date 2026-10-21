@@ -283,10 +283,10 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         relay.note_rtt("slow.example.org", 0.01)  # tried first
         original = relay.upgrade
 
-        async def upgrade(address, host, cloudflare=False):
+        async def upgrade(address, host, cloudflare=False, rotate=0):
             if host.endswith("slow.example.org"):
                 await asyncio.sleep(30)  # hangs like a throttled domain
-            return await original(address, host, cloudflare)
+            return await original(address, host, cloudflare, rotate)
 
         relay.upgrade = upgrade
         started = time.monotonic()
@@ -349,7 +349,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(RELAY.DIRECT_ADDRESSES[203], "91.105.192.100")
         self.assertNotIn(203, relay.ws_state)  # no direct WebSocket probe for DC203
 
-    async def test_upgrade_timeout_blames_neither_address_nor_domain(self):
+    async def test_upgrade_timeout_pauses_the_address_not_the_domain(self):
         async def silent(reader, writer):
             await reader.read(4096)  # takes the upgrade, never answers
             await asyncio.sleep(5)
@@ -362,7 +362,10 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         relay.note_ip_rtt("127.0.0.1", 0.01)
         with self.assertRaisesRegex(ConnectionError, "upgrade timeout"):
             await relay.open_cloudflare(2)
-        self.assertFalse(relay.blocked(("ip", "127.0.0.1")))
+        # A nearby edge that cannot reach Telegram: the address pauses
+        # briefly (it worked before), the domain stays.
+        self.assertTrue(relay.blocked(("ip", "127.0.0.1")))
+        self.assertLessEqual(relay.failed_until[("ip", "127.0.0.1")] - time.monotonic(), RELAY.IP_RETRY)
         self.assertFalse(relay.blocked(("cf", "cf.example.test")))
 
     async def test_known_address_that_times_out_is_retried_soon(self):
@@ -535,6 +538,25 @@ class HelperTests(unittest.TestCase):
         self.assertIn("Cloudflare failed (kws1.cf.example.test via 127.0.0.1:", lines[0])
         self.assertIn("WebSocket failed (kws2.web.telegram.org via 127.0.0.1:", lines[1])
         self.assertIn("TCP 127.0.0.1:", lines[0])
+
+    def test_address_failures_back_off_and_parallel_attempts_spread(self):
+        relay = RELAY.Relay(use_tls=False)
+        relay.ip_failed("188.114.96.3")  # never worked: 30 minutes
+        self.assertAlmostEqual(relay.failed_until[("ip", "188.114.96.3")] - time.monotonic(), RELAY.IP_BACKOFF, delta=1)
+        relay.note_ip_rtt("172.64.0.1", 0.3)
+        relay.note_ip_rtt("104.21.0.1", 1.2)
+        delays = []
+        for _ in range(3):
+            relay.ip_failed("172.64.0.1")
+            delays.append(round(relay.failed_until[("ip", "172.64.0.1")] - time.monotonic()))
+        self.assertEqual(delays, [60, 120, 240])
+        relay.note_ip_rtt("172.64.0.1", 0.3)  # a success resets the count
+        self.assertNotIn("172.64.0.1", relay.ip_failures)
+        relay.failed_until.clear()
+        first = relay.ip_candidates(["104.21.0.2"], True, rotate=0)
+        second = relay.ip_candidates(["104.21.0.2"], True, rotate=1)
+        self.assertEqual(first[0], "172.64.0.1")  # the fastest whole WebSocket first
+        self.assertNotEqual(first[0], second[0])
 
     def test_own_addresses_file(self):
         import tempfile
