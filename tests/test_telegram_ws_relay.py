@@ -11,6 +11,7 @@ import io
 import os
 import socket
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -38,13 +39,19 @@ class FakeWebSocketServer:
         self.status = status
         self.received = bytearray()
         self.request = b""
+        self.requests = []
+        self.sessions = 0
         self.masked = []
         self.done = asyncio.Event()
 
     async def handle(self, reader, writer):
         request = b""
         while not request.endswith(b"\r\n\r\n"):
-            request += await reader.read(1)
+            chunk = await reader.read(1)
+            if not chunk:
+                return
+            request += chunk
+        self.requests.append(request)
         self.request = request
         key = next(
             line.split(b":", 1)[1].strip()
@@ -58,15 +65,21 @@ class FakeWebSocketServer:
         if not self.status.startswith(b"101"):
             writer.close()
             return
-        while len(self.received) < 64 + 5:
-            first = await reader.readexactly(2)
+        received = bytearray()
+        while len(received) < 64 + 5:
+            try:
+                first = await reader.readexactly(2)
+            except asyncio.IncompleteReadError:
+                return  # a pooled WebSocket closed unused
             self.masked.append(bool(first[1] & 0x80))
             length = first[1] & 0x7F
             if length == 126:
                 length = int.from_bytes(await reader.readexactly(2), "big")
             mask = await reader.readexactly(4)
             payload = await reader.readexactly(length)
-            self.received += bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            received += bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        self.received += received
+        self.sessions += 1
         writer.write(bytes([0x82, len(self.reply)]) + self.reply)  # unmasked server frame
         await writer.drain()
         self.done.set()
@@ -97,6 +110,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.close_server, server)
         ws_port = server.sockets[0].getsockname()[1]
         relay = RELAY.Relay(use_tls=False, ws_port=ws_port, address_override="127.0.0.1")
+        relay.ws_state[4] = "ok"  # as after a successful probe
         port = await self.start_relay(relay)
 
         header, encryptor, _ = MT.make_header(-4)  # media connection to DC4
@@ -109,9 +123,9 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, b"resPQ")
         self.assertEqual(bytes(fake.received), header + b"hello")
         self.assertTrue(all(fake.masked))
-        self.assertIn(b"GET /apiws HTTP/1.1", fake.request)
-        self.assertIn(b"Host: kws4-1.web.telegram.org", fake.request)
-        self.assertIn(b"Sec-WebSocket-Protocol: binary", fake.request)
+        self.assertIn(b"GET /apiws HTTP/1.1", fake.requests[0])
+        self.assertIn(b"Host: kws4-1.web.telegram.org", fake.requests[0])
+        self.assertIn(b"Sec-WebSocket-Protocol: binary", fake.requests[0])
         self.assertEqual(relay.stats["ws"], 1)
 
     async def test_falls_back_to_direct_when_websocket_fails(self):
@@ -130,6 +144,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
             fallback_port=dc_server.sockets[0].getsockname()[1], connect_timeout=2,
             cf_domains=["cf.example.test"],
         )
+        relay.ws_state[2] = "ok"
         port = await self.start_relay(relay)
         header, _, _ = MT.make_header(2)
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -141,7 +156,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bytes(received), header + b"abc")
         self.assertEqual(relay.stats["direct"], 1)
         # The refused WebSocket and Cloudflare routes are now skipped.
-        self.assertTrue(relay.blocked(("ws", 2)))
+        self.assertEqual(relay.ws_state[2], "blocked")
         self.assertTrue(relay.blocked(("cf", "cf.example.test")))
         self.assertEqual(relay.cf_order(2), [])
 
@@ -160,7 +175,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         writer.close()
         self.assertEqual(answer, b"resPQ")
         self.assertEqual(bytes(fake.received), header + b"hello")
-        self.assertIn(b"Host: kws1.cf.example.test", fake.request)
+        self.assertIn(b"Host: kws1.cf.example.test", fake.requests[0])
         self.assertEqual((relay.stats["ws"], relay.stats["cf"]), (0, 1))
         self.assertEqual(relay.cf_active, {1: "cf.example.test"})
 
@@ -170,7 +185,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.close_server, server)
         relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
                             address_override="127.0.0.1", cf_domains=["cf.example.test"])
-        relay.mark_failed(("ws", 4))  # as after a timeout to 149.154.167.220
+        relay.ws_failed(4)  # as after a timeout to 149.154.167.220
         port = await self.start_relay(relay)
         header, _, _ = MT.make_header(4)
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -178,8 +193,58 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         await writer.drain()
         self.assertEqual(await asyncio.wait_for(reader.read(100), 5), b"ok")
         writer.close()
-        self.assertIn(b"Host: kws4.cf.example.test", fake.request)
+        self.assertIn(b"Host: kws4.cf.example.test", fake.requests[0])
         self.assertEqual(relay.stats["cf"], 1)
+
+    async def test_new_connections_get_a_ready_websocket(self):
+        fake = FakeWebSocketServer(reply=b"ok")
+        server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
+                            address_override="127.0.0.1", cf_domains=["cf.example.test"], pool_size=1)
+        port = await self.start_relay(relay)
+        for number in range(2):
+            header, _, _ = MT.make_header(3)
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(header + b"hello")
+            await writer.drain()
+            self.assertEqual(await asyncio.wait_for(reader.read(100), 5), b"ok")
+            writer.close()
+            if number == 0:
+                await self.wait_for(lambda: len(relay.pool.get(("cf", 3), ())) == 1)
+        self.assertEqual((relay.stats["cf"], relay.stats["pooled"]), (2, 1))
+        self.assertEqual(fake.sessions, 2)
+
+    async def test_unknown_websocket_is_probed_in_the_background(self):
+        fake = FakeWebSocketServer(reply=b"ok")
+        server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
+                            address_override="127.0.0.1", cf_domains=["cf.example.test"], pool_size=0)
+        port = await self.start_relay(relay)
+
+        async def connect():
+            header, _, _ = MT.make_header(2)
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(header + b"hello")
+            await writer.drain()
+            self.assertEqual(await asyncio.wait_for(reader.read(100), 5), b"ok")
+            writer.close()
+
+        await connect()  # does not wait for the direct WebSocket
+        self.assertEqual(relay.stats["cf"], 1)
+        await self.wait_for(lambda: relay.ws_state.get(2) == "ok")
+        await connect()
+        self.assertEqual(relay.stats["ws"], 1)
+        self.assertTrue(any(b"Host: kws2.web.telegram.org" in r for r in fake.requests))
+
+    @staticmethod
+    async def wait_for(condition, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while not condition():
+            if time.monotonic() > deadline:
+                raise AssertionError("condition not reached")
+            await asyncio.sleep(0.05)
 
     async def test_rejected_upgrade_falls_back_too(self):
         fake = FakeWebSocketServer(reply=b"", status=b"403 Forbidden")
@@ -188,6 +253,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
                             address_override="127.0.0.1", fallback_port=free_port(), connect_timeout=2,
                             cf_enabled=False)
+        relay.ws_state[2] = "ok"
         port = await self.start_relay(relay)
         header, _, _ = MT.make_header(2)
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -195,9 +261,9 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         await writer.drain()
         self.assertEqual(await asyncio.wait_for(reader.read(10), 5), b"")
         writer.close()
-        self.assertEqual(relay.stats, {"ws": 0, "cf": 0, "direct": 0, "rejected": 0})
-        # A refused upgrade is an answer, not a blocked address: no backoff.
-        self.assertFalse(relay.blocked(("ws", 2)))
+        self.assertEqual(relay.stats, {"ws": 0, "cf": 0, "direct": 0, "rejected": 0, "pooled": 0})
+        # The route is unusable either way; it is re-probed later.
+        self.assertEqual(relay.ws_state[2], "blocked")
 
     async def test_non_mtproto_and_unknown_dc_are_closed(self):
         relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1")
@@ -355,14 +421,30 @@ class HelperTests(unittest.TestCase):
         asyncio.run(run_once(["a.example.org", "b.example.org", "c.example.org"]))
         self.assertEqual(relay.cf_domains, ["a.example.org", "b.example.org", "c.example.org"])
 
-    def test_cf_order_prefers_the_working_domain(self):
+    def test_cf_order_prefers_the_fastest_domain(self):
         relay = RELAY.Relay(use_tls=False, cf_domains=[f"d{n}.example.org" for n in range(6)])
-        relay.cf_active[2] = "d4.example.org"
+        relay.note_rtt("d4.example.org", 0.3)
+        relay.note_rtt("d1.example.org", 0.1)
         order = relay.cf_order(2)
-        self.assertEqual(order[0], "d4.example.org")
+        self.assertEqual(order[:2], ["d1.example.org", "d4.example.org"])
         self.assertEqual(len(order), RELAY.CF_ATTEMPTS)
+        relay.note_rtt("d1.example.org", 1.0)  # 0.7 * 0.1 + 0.3 * 1.0 = 0.37
+        self.assertEqual(relay.cf_order(2)[:2], ["d4.example.org", "d1.example.org"])
         relay.mark_failed(("cf", "d4.example.org"))
         self.assertNotIn("d4.example.org", relay.cf_order(2))
+
+    def test_blocked_websocket_is_probed_less_and_less_often(self):
+        relay = RELAY.Relay(use_tls=False)
+        delays = []
+        for _ in range(9):
+            relay.ws_failed(2)
+            delays.append(round(relay.ws_next_probe[2] - time.monotonic()))
+        self.assertEqual(delays[:4], [300, 600, 1200, 2400])
+        self.assertEqual(delays[-1], 6 * 3600)
+        relay.ws_worked(2)
+        self.assertEqual(relay.ws_state[2], "ok")
+        relay.ws_failed(2)
+        self.assertEqual(round(relay.ws_next_probe[2] - time.monotonic()), 300)
 
     def test_listen_validation(self):
         self.assertEqual(RELAY.parse_listen("127.0.0.1:18443"), ("127.0.0.1", 18443))

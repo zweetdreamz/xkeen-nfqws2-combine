@@ -8,13 +8,17 @@ keys are in the header itself, so the relay reads the data-center number from
 it and carries the stream unchanged inside a WebSocket to /apiws, as Telegram
 Web does. For each connection it tries, in this order:
 
-1. kws{N}.web.telegram.org on 149.154.167.220 (DC2 and DC4 only);
+1. kws{N}.web.telegram.org on 149.154.167.220 (DC2 and DC4 only), once a
+   background probe has found it reachable;
 2. kws{N}.<domain> through Cloudflare: Cloudflare opens the WebSocket to the
    data center, so this works when the provider blocks Telegram's addresses;
 3. a plain TCP connection to the data center.
 
-A route that failed to connect is skipped for a while, so a blocked one does
-not delay every new connection.
+Speed: a blocked direct WebSocket is re-probed in the background (5 minutes
+up to 6 hours apart), never on a client's connection; a few WebSockets per
+data center in use are kept open in advance (as tg-ws-proxy's pool), so a new
+connection does not wait for TLS and the upgrade; the Cloudflare domain that
+answers fastest is used first.
 
 The WebSocket and Cloudflare parts follow Flowseal/tg-ws-proxy (MIT): the same
 endpoints, headers, fixed address and default Cloudflare domains (kept encoded
@@ -43,6 +47,7 @@ import struct
 import sys
 import time
 import urllib.request
+from collections import deque
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -58,6 +63,14 @@ OP_CONT, OP_TEXT, OP_BINARY, OP_CLOSE, OP_PING, OP_PONG = 0, 1, 2, 8, 9, 10
 CHUNK = 65536
 # A route that failed to connect is skipped for this long.
 ROUTE_BACKOFF = 300.0
+# A blocked direct WebSocket is probed again after 5 min, 10 min, ... 6 h.
+WS_PROBE_BACKOFF = (300.0, 6 * 3600.0)
+# Ready WebSockets per route, how long one may wait (Cloudflare closes idle
+# WebSockets after 100 s), and how long a route unused is kept warm.
+POOL_SIZE = 2
+POOL_MAX_AGE = 50.0
+POOL_KEEP = 600.0
+POOL_TICK = 15.0
 # Cloudflare domains tried for one connection.
 CF_ATTEMPTS = 3
 CF_REFRESH_INTERVAL = 6 * 3600
@@ -194,7 +207,7 @@ class Relay:
     def __init__(self, *, connect_timeout: float = 5.0, ws_port: int = 443,
                  use_tls: bool = True, address_override: str | None = None,
                  fallback_port: int = 443, cf_domains: list[str] | None = None,
-                 cf_enabled: bool = True) -> None:
+                 cf_enabled: bool = True, pool_size: int = POOL_SIZE) -> None:
         self.connect_timeout = connect_timeout
         self.ws_port = ws_port
         self.use_tls = use_tls
@@ -204,8 +217,17 @@ class Relay:
         self.cf_enabled = cf_enabled
         self.cf_domains = list(cf_domains if cf_domains is not None else CF_DEFAULT_DOMAINS)
         self.cf_active: dict[int, str] = {}
+        self.cf_rtt: dict[str, float] = {}
         self.failed_until: dict[tuple, float] = {}
-        self.stats = {"ws": 0, "cf": 0, "direct": 0, "rejected": 0}
+        # Direct WebSocket per DC: "ok" or "blocked"; unknown until probed.
+        self.ws_state: dict[int, str] = {}
+        self.ws_failures: dict[int, int] = {}
+        self.ws_next_probe: dict[int, float] = {}
+        self.pool_size = pool_size
+        self.pool: dict[tuple, deque] = {}
+        self.pool_used: dict[tuple, float] = {}
+        self.tasks: dict[tuple, asyncio.Future] = {}
+        self.stats = {"ws": 0, "cf": 0, "direct": 0, "rejected": 0, "pooled": 0}
 
     # -- route bookkeeping -------------------------------------------------
 
@@ -216,12 +238,124 @@ class Relay:
         self.failed_until[key] = time.monotonic() + ROUTE_BACKOFF
 
     def cf_order(self, dc: int) -> list[str]:
-        """The domain that worked for this DC first, then the rest shuffled."""
-        current = self.cf_active.get(dc)
-        others = [domain for domain in self.cf_domains if domain != current and not self.blocked(("cf", domain))]
-        random.shuffle(others)
-        ordered = ([current] if current in self.cf_domains and not self.blocked(("cf", current)) else []) + others
-        return ordered[:CF_ATTEMPTS]
+        """Domains that answered, fastest first, then untried ones shuffled."""
+        usable = [domain for domain in self.cf_domains if not self.blocked(("cf", domain))]
+        known = sorted((domain for domain in usable if domain in self.cf_rtt), key=self.cf_rtt.__getitem__)
+        unknown = [domain for domain in usable if domain not in self.cf_rtt]
+        random.shuffle(unknown)
+        return (known + unknown)[:CF_ATTEMPTS]
+
+    def note_rtt(self, domain: str, seconds: float) -> None:
+        previous = self.cf_rtt.get(domain)
+        self.cf_rtt[domain] = seconds if previous is None else 0.7 * previous + 0.3 * seconds
+
+    def ws_failed(self, dc: int) -> None:
+        failures = self.ws_failures.get(dc, 0) + 1
+        self.ws_failures[dc] = failures
+        self.ws_state[dc] = "blocked"
+        first, limit = WS_PROBE_BACKOFF
+        self.ws_next_probe[dc] = time.monotonic() + min(first * 2 ** (failures - 1), limit)
+
+    def ws_worked(self, dc: int) -> None:
+        self.ws_state[dc] = "ok"
+        self.ws_failures.pop(dc, None)
+
+    def background(self, key: tuple, coroutine) -> None:
+        """One task per key: a probe or a pool refill."""
+        if key in self.tasks:
+            coroutine.close()
+            return
+        task = asyncio.ensure_future(coroutine)
+        self.tasks[key] = task
+        task.add_done_callback(lambda _task, key=key: self.tasks.pop(key, None))
+
+    def schedule_probe(self, dc: int) -> None:
+        if time.monotonic() >= self.ws_next_probe.get(dc, 0.0):
+            self.background(("probe", dc), self.probe(dc))
+
+    async def probe(self, dc: int) -> None:
+        try:
+            _, writer, _ = await self.open_websocket(dc, False)
+        except ConnectionError as error:
+            self.ws_failed(dc)
+            log(f"DC{dc}: direct WebSocket unavailable ({error}); next check in "
+                f"{(self.ws_next_probe[dc] - time.monotonic()) / 60:.0f} min")
+            return
+        writer.close()
+        if self.ws_state.get(dc) != "ok":
+            log(f"DC{dc}: direct WebSocket available")
+        self.ws_worked(dc)
+
+    # -- pool of ready WebSockets ------------------------------------------
+
+    async def connect_route(self, key: tuple):
+        if key[0] == "cf":
+            return await self.open_cloudflare(key[1])
+        return await self.open_websocket(key[1], key[2])
+
+    @staticmethod
+    def fresh(entry) -> bool:
+        reader, writer, _, created = entry
+        return (time.monotonic() - created < POOL_MAX_AGE and not writer.is_closing()
+                and not reader.at_eof() and reader.exception() is None)
+
+    async def take(self, key: tuple):
+        """A ready WebSocket for this route, or one opened now; refills the pool."""
+        self.pool_used[key] = time.monotonic()
+        bucket = self.pool.get(key)
+        while bucket:
+            entry = bucket.popleft()
+            if self.fresh(entry):
+                self.schedule_refill(key)
+                self.stats["pooled"] += 1
+                return entry[0], entry[1], entry[2], True
+            entry[1].close()
+        reader, writer, host = await self.connect_route(key)
+        self.schedule_refill(key)
+        return reader, writer, host, False
+
+    def schedule_refill(self, key: tuple) -> None:
+        if self.pool_size > 0:
+            self.background(("refill", *key), self.refill(key))
+
+    async def refill(self, key: tuple) -> None:
+        bucket = self.pool.setdefault(key, deque())
+        while len([entry for entry in bucket if self.fresh(entry)]) < self.pool_size:
+            try:
+                reader, writer, host = await self.connect_route(key)
+            except ConnectionError:
+                return
+            bucket.append((reader, writer, host, time.monotonic()))
+
+    async def maintain(self) -> None:
+        """Drops stale pooled WebSockets, keeps used routes warm, re-probes."""
+        while True:
+            await asyncio.sleep(POOL_TICK)
+            now = time.monotonic()
+            for key, used in list(self.pool_used.items()):
+                bucket = self.pool.get(key, deque())
+                keep = now - used < POOL_KEEP
+                for entry in list(bucket):
+                    if not keep or not self.fresh(entry):
+                        bucket.remove(entry)
+                        entry[1].close()
+                if keep:
+                    self.schedule_refill(key)
+                else:
+                    del self.pool_used[key]
+            for dc in WS_FIXED_ADDRESS:
+                if self.ws_state.get(dc) == "blocked" and any(
+                    key[1] == dc for key in self.pool_used
+                ):
+                    self.schedule_probe(dc)
+
+    def close(self) -> None:
+        for task in list(self.tasks.values()):
+            task.cancel()
+        for bucket in self.pool.values():
+            for entry in bucket:
+                entry[1].close()
+        self.pool.clear()
 
     # -- WebSocket ---------------------------------------------------------
 
@@ -279,12 +413,14 @@ class Relay:
         errors = []
         for domain in self.cf_order(dc):
             host = f"kws{dc}.{domain}"
+            started = time.monotonic()
             try:
                 reader, writer = await self.upgrade(self.address_override or host, host)
             except ConnectionError as error:
                 errors.append(str(error))
                 self.mark_failed(("cf", domain))
                 continue
+            self.note_rtt(domain, time.monotonic() - started)
             self.cf_active[dc] = domain
             return reader, writer, host
         raise ConnectionError("; ".join(errors) or "no Cloudflare domain left")
@@ -312,27 +448,30 @@ class Relay:
         label = f"DC{dc}{' media' if media else ''}"
         reasons = []
 
-        if (2 if dc == 203 else dc) in WS_FIXED_ADDRESS and not self.blocked(("ws", dc)):
-            try:
-                ws_reader, ws_writer, host = await self.open_websocket(dc, media)
-            except ConnectionError as error:
-                reasons.append(f"WebSocket {error}")
-                if "timeout" in str(error) or " via " in str(error):
-                    self.mark_failed(("ws", dc))
+        if (2 if dc == 203 else dc) in WS_FIXED_ADDRESS:
+            if self.ws_state.get(dc) == "ok":
+                try:
+                    ws_reader, ws_writer, host, pooled = await self.take(("ws", dc, media))
+                except ConnectionError as error:
+                    reasons.append(f"WebSocket {error}")
+                    self.ws_failed(dc)
+                else:
+                    self.stats["ws"] += 1
+                    log(f"{label} via WebSocket {host}{' (ready)' if pooled else ''}")
+                    await self.pipe_websocket(header, client_reader, client_writer, ws_reader, ws_writer)
+                    return
             else:
-                self.stats["ws"] += 1
-                log(f"{label} via WebSocket {host}")
-                await self.pipe_websocket(header, client_reader, client_writer, ws_reader, ws_writer)
-                return
+                # Unknown or blocked: Cloudflare now, the probe in the background.
+                self.schedule_probe(dc)
 
         if self.cf_enabled and self.cf_domains and dc != 203:
             try:
-                ws_reader, ws_writer, host = await self.open_cloudflare(dc)
+                ws_reader, ws_writer, host, pooled = await self.take(("cf", dc))
             except ConnectionError as error:
                 reasons.append(f"Cloudflare {error}")
             else:
                 self.stats["cf"] += 1
-                log(f"{label} via Cloudflare {host}")
+                log(f"{label} via Cloudflare {host}{' (ready)' if pooled else ''}")
                 await self.pipe_websocket(header, client_reader, client_writer, ws_reader, ws_writer)
                 return
 
@@ -438,18 +577,20 @@ async def self_test(relay: Relay) -> int:
         parts = []
         working = False
         if dc in WS_FIXED_ADDRESS:
+            begun = time.monotonic()
             try:
                 _, writer, host = await relay.open_websocket(dc, False)
                 writer.close()
-                parts.append(f"WebSocket ok {host}")
+                parts.append(f"WebSocket ok {host} ({(time.monotonic() - begun) * 1000:.0f} ms)")
                 working = True
             except ConnectionError as error:
                 parts.append(f"WebSocket failed ({error})")
         if relay.cf_enabled and relay.cf_domains:
+            begun = time.monotonic()
             try:
                 _, writer, host = await relay.open_cloudflare(dc)
                 writer.close()
-                parts.append(f"Cloudflare ok {host}")
+                parts.append(f"Cloudflare ok {host} ({(time.monotonic() - begun) * 1000:.0f} ms)")
                 working = True
             except ConnectionError as error:
                 parts.append(f"Cloudflare failed ({error})")
@@ -484,6 +625,7 @@ async def serve(listen: tuple[str, int], relay: Relay, ready: asyncio.Event | No
     if ready is not None:
         ready.set()
     refresher = asyncio.create_task(refresh_cf_domains(relay)) if refresh else None
+    maintainer = asyncio.create_task(relay.maintain())
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -496,6 +638,8 @@ async def serve(listen: tuple[str, int], relay: Relay, ready: asyncio.Event | No
         # keeps them open. asyncio.run() cancels the handlers on the way out.
         if refresher is not None:
             refresher.cancel()
+        maintainer.cancel()
+        relay.close()
         server.close()
 
 
