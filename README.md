@@ -25,15 +25,16 @@
 
 ## Текущее состояние
 
-Основная конфигурация проверена 15.08.2026; пакет nfqws2 обновлён 20.10.2026:
+Основная конфигурация проверена 15.08.2026; пакет nfqws2 обновлён 20.10.2026,
+Telegram в режиме `ws` проверен 21.10.2026:
 
 | Компонент | Состояние |
 |---|---|
 | Роутер | Keenetic Giga KN-1011, KeeneticOS 5.0.12 |
-| XKeen | 2.0, Xray 26.7.28, режим Hybrid |
+| XKeen | 2.0, Xray 26.10.17, режим Hybrid |
 | nfqws2 | `nfqws2-keenetic 1.3.1`, ядро `v1.0.5.2`, очередь 300, WAN `eth3` |
-| Управляющий скрипт | `3.0.0` |
-| Активный режим | `both`: Discord TCP/Voice и YouTube через DIRECT + nfqws2 |
+| Управляющий скрипт | `3.1.0` ([CHANGELOG.md](CHANGELOG.md)) |
+| Активный режим | Discord TCP/Voice и YouTube через DIRECT + nfqws2, Telegram — `ws` (через Cloudflare) |
 | Web-панель | `http://192.168.2.1:8088`, только LAN |
 | IPv6 nfqws2 | выключен: рабочего IPv6 WAN-маршрута нет |
 | Откат | baseline и последний pre-apply присутствуют |
@@ -336,6 +337,7 @@ UDP-портов `3478-3481,5349,19294-19344,50000-50100`; в nfqws2 —
 
 ## Документация
 
+- [`CHANGELOG.md`](CHANGELOG.md) — изменения по версиям.
 - [`docs/guide.html`](docs/guide.html) — короткая автономная памятка.
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — применение, перезагрузка,
   диагностика и восстановление.

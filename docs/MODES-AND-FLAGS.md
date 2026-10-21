@@ -20,11 +20,11 @@ policy marks или hardware offload.
 | Поле | Значение |
 |---|---|
 | Роутер | Keenetic Giga KN-1011, KeeneticOS 5.0.12 |
-| XKeen/core | XKeen 2.0, Xray 26.7.28, Hybrid |
+| XKeen/core | XKeen 2.0, Xray 26.10.17, Hybrid |
 | WAN | `eth3` |
 | nfqws2 | пакет 1.2.4, NFQUEUE 300 (20.10.2026 обновлён до 1.3.1) |
-| Скрипт на роутере и в рабочей папке | 3.0.0 |
-| Активный режим | `both` |
+| Скрипт на роутере и в рабочей папке | 3.1.0 |
+| Активный режим | Discord TCP/Voice и YouTube `zapret`, Telegram `ws` |
 | Discord UDP | `flowseal`, узкий диапазон |
 | IPv6 nfqws2 | `off`: usable IPv6 WAN route отсутствует |
 | Runtime | Xray и nfqws2 запущены |
