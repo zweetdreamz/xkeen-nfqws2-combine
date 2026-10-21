@@ -128,6 +128,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         relay = RELAY.Relay(
             use_tls=False, ws_port=free_port(), address_override="127.0.0.1",
             fallback_port=dc_server.sockets[0].getsockname()[1], connect_timeout=2,
+            cf_domains=["cf.example.test"],
         )
         port = await self.start_relay(relay)
         header, _, _ = MT.make_header(2)
@@ -139,13 +140,54 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, b"direct-answer")
         self.assertEqual(bytes(received), header + b"abc")
         self.assertEqual(relay.stats["direct"], 1)
+        # The refused WebSocket and Cloudflare routes are now skipped.
+        self.assertTrue(relay.blocked(("ws", 2)))
+        self.assertTrue(relay.blocked(("cf", "cf.example.test")))
+        self.assertEqual(relay.cf_order(2), [])
+
+    async def test_cloudflare_carries_dcs_without_a_fixed_address(self):
+        fake = FakeWebSocketServer(reply=b"resPQ")
+        server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
+                            address_override="127.0.0.1", cf_domains=["cf.example.test"])
+        port = await self.start_relay(relay)
+        header, _, _ = MT.make_header(-1)
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(header + b"hello")
+        await writer.drain()
+        answer = await asyncio.wait_for(reader.read(100), 5)
+        writer.close()
+        self.assertEqual(answer, b"resPQ")
+        self.assertEqual(bytes(fake.received), header + b"hello")
+        self.assertIn(b"Host: kws1.cf.example.test", fake.request)
+        self.assertEqual((relay.stats["ws"], relay.stats["cf"]), (0, 1))
+        self.assertEqual(relay.cf_active, {1: "cf.example.test"})
+
+    async def test_cloudflare_follows_a_failed_websocket(self):
+        fake = FakeWebSocketServer(reply=b"ok")
+        server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
+                            address_override="127.0.0.1", cf_domains=["cf.example.test"])
+        relay.mark_failed(("ws", 4))  # as after a timeout to 149.154.167.220
+        port = await self.start_relay(relay)
+        header, _, _ = MT.make_header(4)
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(header + b"hello")
+        await writer.drain()
+        self.assertEqual(await asyncio.wait_for(reader.read(100), 5), b"ok")
+        writer.close()
+        self.assertIn(b"Host: kws4.cf.example.test", fake.request)
+        self.assertEqual(relay.stats["cf"], 1)
 
     async def test_rejected_upgrade_falls_back_too(self):
         fake = FakeWebSocketServer(reply=b"", status=b"403 Forbidden")
         server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
         self.addAsyncCleanup(self.close_server, server)
         relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
-                            address_override="127.0.0.1", fallback_port=free_port(), connect_timeout=2)
+                            address_override="127.0.0.1", fallback_port=free_port(), connect_timeout=2,
+                            cf_enabled=False)
         port = await self.start_relay(relay)
         header, _, _ = MT.make_header(2)
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -153,7 +195,9 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         await writer.drain()
         self.assertEqual(await asyncio.wait_for(reader.read(10), 5), b"")
         writer.close()
-        self.assertEqual(relay.stats, {"ws": 0, "direct": 0, "rejected": 0})
+        self.assertEqual(relay.stats, {"ws": 0, "cf": 0, "direct": 0, "rejected": 0})
+        # A refused upgrade is an answer, not a blocked address: no backoff.
+        self.assertFalse(relay.blocked(("ws", 2)))
 
     async def test_non_mtproto_and_unknown_dc_are_closed(self):
         relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1")
@@ -251,15 +295,74 @@ class HelperTests(unittest.TestCase):
 
     def test_self_test_reports_every_data_center(self):
         relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1",
-                            fallback_port=free_port(), connect_timeout=1)
+                            fallback_port=free_port(), connect_timeout=1, cf_domains=["cf.example.test"])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = asyncio.run(RELAY.self_test(relay))
         lines = out.getvalue().splitlines()
         self.assertEqual(code, 1)
         self.assertEqual([line.split(":")[0] for line in lines], ["DC1", "DC2", "DC3", "DC4", "DC5"])
-        self.assertIn("WebSocket failed (kws1.web.telegram.org via 127.0.0.1:", lines[0])
+        self.assertNotIn("WebSocket", lines[0])  # DC1 has no fixed WebSocket address
+        self.assertIn("Cloudflare failed (kws1.cf.example.test via 127.0.0.1:", lines[0])
+        self.assertIn("WebSocket failed (kws2.web.telegram.org via 127.0.0.1:", lines[1])
         self.assertIn("TCP 127.0.0.1:", lines[0])
+
+    def test_cloudflare_domains(self):
+        self.assertEqual(len(RELAY.CF_DEFAULT_DOMAINS), 20)
+        self.assertTrue(all(RELAY.valid_domain(d) and d.endswith(".co.uk") for d in RELAY.CF_DEFAULT_DOMAINS))
+        self.assertEqual(RELAY.decode_cf_domain("own.example.org"), "own.example.org")
+        self.assertFalse(RELAY.valid_domain("bad domain"))
+        self.assertFalse(RELAY.valid_domain("x"))
+
+    def test_own_domains_file_replaces_the_defaults(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "domains.txt"
+            path.write_text("# mine\nTg.Example.org\nbad domain\ntg.example.org  # twice\nsecond.example.net\n",
+                            encoding="utf-8")
+            self.assertEqual(RELAY.read_domains_file(path), ["tg.example.org", "second.example.net"])
+            self.assertEqual(RELAY.read_domains_file(Path(directory) / "missing"), [])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                RELAY.main(["--print-cf-domains", "--cf-domains-file", str(path)])
+            self.assertEqual(out.getvalue().split(), ["tg.example.org", "second.example.net"])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                RELAY.main(["--print-cf-domains", "--cf-domains-file", str(Path(directory) / "missing")])
+            self.assertEqual(out.getvalue().split(), RELAY.CF_DEFAULT_DOMAINS)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                RELAY.main(["--print-cf-domains", "--no-cf"])
+            self.assertEqual(out.getvalue(), "")
+
+    def test_refresh_replaces_domains_only_with_a_usable_list(self):
+        relay = RELAY.Relay(use_tls=False, cf_domains=["old.example.org"])
+
+        async def run_once(fetched):
+            original = RELAY.fetch_cf_domains
+            RELAY.fetch_cf_domains = lambda: fetched
+            try:
+                task = asyncio.ensure_future(RELAY.refresh_cf_domains(relay, interval=60))
+                await asyncio.sleep(0.2)
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            finally:
+                RELAY.fetch_cf_domains = original
+
+        asyncio.run(run_once(["a.example.org", "b.example.org"]))
+        self.assertEqual(relay.cf_domains, ["old.example.org"])
+        asyncio.run(run_once(["a.example.org", "b.example.org", "c.example.org"]))
+        self.assertEqual(relay.cf_domains, ["a.example.org", "b.example.org", "c.example.org"])
+
+    def test_cf_order_prefers_the_working_domain(self):
+        relay = RELAY.Relay(use_tls=False, cf_domains=[f"d{n}.example.org" for n in range(6)])
+        relay.cf_active[2] = "d4.example.org"
+        order = relay.cf_order(2)
+        self.assertEqual(order[0], "d4.example.org")
+        self.assertEqual(len(order), RELAY.CF_ATTEMPTS)
+        relay.mark_failed(("cf", "d4.example.org"))
+        self.assertNotIn("d4.example.org", relay.cf_order(2))
 
     def test_listen_validation(self):
         self.assertEqual(RELAY.parse_listen("127.0.0.1:18443"), ("127.0.0.1", 18443))

@@ -558,6 +558,7 @@ assert_telegram() {
         and any(.outbounds[]; .tag == "telegram-direct")
       ' "$telegram_outbound_file" >/dev/null
       [ -x "$ROOT/opt/etc/init.d/S99kdn-telegram-ws" ]
+      grep -Fq -- '--cf-domains-file "$CF_DOMAINS"' "$ROOT/opt/etc/init.d/S99kdn-telegram-ws"
       kill -0 "$(cat "$ROOT/opt/var/run/kdn-telegram-ws.pid")"
       python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 3).close()' \
         "$KD_TEST_TELEGRAM_WS_PORT"
@@ -578,8 +579,13 @@ assert_telegram() {
     exit 1
   fi
   if [ "$1" = "ws" ]; then
-    # The TLS profile stays for the domains and the relay's own TLS.
+    # The TLS profile stays for the domains and the relay's own TLS,
+    # including its Cloudflare domains.
     grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list' "$nfqws_file"
+    grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/kdn-telegram-cf.list' "$nfqws_file"
+    python3 "$SCRIPT_DIR/tools/router/telegram_ws_relay.py" --print-cf-domains \
+      --cf-domains-file "$ROOT/opt/etc/keenetic-discord-nfqws2/telegram-ws-domains.txt" |
+      cmp -s - "$ROOT/opt/etc/nfqws2/lists/kdn-telegram-cf.list"
     if grep -Fq -- '--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list' "$nfqws_file"; then
       echo "ERROR: MTProto profile active although MTProto goes through the WS relay" >&2
       exit 1
@@ -593,6 +599,7 @@ assert_telegram() {
 
   # The MTProto ipset belonged to the removed Telegram Zapret route.
   [ ! -e "$ROOT/opt/etc/nfqws2/lists/kdn-telegram-ip.list" ]
+  [ "$1" = ws ] || [ ! -e "$ROOT/opt/etc/nfqws2/lists/kdn-telegram-cf.list" ]
 
   # A restrictive port_proxying.lst gets 5222 for managed Telegram only.
   if grep -qx '# BEGIN keenetic-discord-nfqws2' "$ROOT/opt/etc/xkeen/port_proxying.lst"; then
@@ -819,6 +826,13 @@ if kill -0 "$relay_pid" 2>/dev/null; then
 fi
 run_service_tool telegram ws --yes-router --core xray >/dev/null
 assert_mode vless zapret direct ws
+[ "$(wc -l < "$ROOT/opt/etc/nfqws2/lists/kdn-telegram-cf.list" | tr -d ' ')" = 20 ]
+# Own Cloudflare domains replace the defaults in the hostlist.
+printf '%s\n' '# own' tg.example.org > "$ROOT/opt/etc/keenetic-discord-nfqws2/telegram-ws-domains.txt"
+run_service_tool telegram ws --yes-router --core xray >/dev/null
+assert_mode vless zapret direct ws
+[ "$(cat "$ROOT/opt/etc/nfqws2/lists/kdn-telegram-cf.list")" = tg.example.org ]
+rm "$ROOT/opt/etc/keenetic-discord-nfqws2/telegram-ws-domains.txt"
 run_service_tool telegram direct --yes-router --core xray >/dev/null
 assert_mode vless zapret direct direct
 run_service_tool telegram vpn --yes-router --core xray >/dev/null
