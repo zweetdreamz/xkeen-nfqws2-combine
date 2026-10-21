@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import importlib.util
+import io
 import os
 import socket
 import sys
@@ -205,6 +207,23 @@ class HelperTests(unittest.TestCase):
                 RELAY.LOG_PATH, RELAY.LOG_LIMIT = original
             self.assertTrue(path.with_name("relay.log.1").exists())
             self.assertLessEqual(path.stat().st_size, 200)
+
+    def test_describe_names_timeouts(self):
+        self.assertEqual(RELAY.describe(asyncio.TimeoutError()), "timeout")
+        self.assertEqual(RELAY.describe(ConnectionResetError()), "ConnectionResetError")
+        self.assertEqual(RELAY.describe(OSError(101, "Network unreachable")), "[Errno 101] Network unreachable")
+
+    def test_self_test_reports_every_data_center(self):
+        relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1",
+                            fallback_port=free_port(), connect_timeout=1)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = asyncio.run(RELAY.self_test(relay))
+        lines = out.getvalue().splitlines()
+        self.assertEqual(code, 1)
+        self.assertEqual([line.split(":")[0] for line in lines], ["DC1", "DC2", "DC3", "DC4", "DC5"])
+        self.assertIn("WebSocket failed (kws1.web.telegram.org via 127.0.0.1:", lines[0])
+        self.assertIn("TCP 127.0.0.1:", lines[0])
 
     def test_listen_validation(self):
         self.assertEqual(RELAY.parse_listen("127.0.0.1:18443"), ("127.0.0.1", 18443))

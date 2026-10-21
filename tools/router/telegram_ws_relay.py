@@ -14,6 +14,7 @@ headers and the fixed address 149.154.167.220 for DC2/DC4; here no secret is
 involved and the bytes are not re-encrypted.
 
 Usage: telegram_ws_relay.py [--listen 127.0.0.1:18443] [--pidfile PATH]
+       telegram_ws_relay.py --self-test
 """
 
 from __future__ import annotations
@@ -60,6 +61,14 @@ def log(message: str) -> None:
             LOG_PATH.replace(LOG_PATH.with_name(LOG_PATH.name + ".1"))
         with LOG_PATH.open("a", encoding="utf-8") as stream:
             stream.write(line)
+
+
+def describe(error: BaseException | None) -> str:
+    """Error text for the log; timeouts have none of their own."""
+    if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+        return "timeout"
+    text = str(error)
+    return text if text else type(error).__name__
 
 
 def ws_hosts(dc: int, media: bool) -> list[str]:
@@ -128,7 +137,7 @@ class Relay:
                     self.connect_timeout,
                 )
             except (OSError, asyncio.TimeoutError, ssl.SSLError) as error:
-                last_error = error
+                last_error = ConnectionError(f"{host} via {address}: {describe(error)}")
                 continue
             key = base64.b64encode(os.urandom(16))
             writer.write(
@@ -149,14 +158,14 @@ class Relay:
                     headers[name.strip().lower()] = value.strip()
             except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError) as error:
                 writer.close()
-                last_error = error
+                last_error = ConnectionError(f"{host}: upgrade {describe(error)}")
                 continue
             accept = base64.b64encode(hashlib.sha1(key + WS_GUID).digest()).decode()
             if status.split(b" ")[1:2] == [b"101"] and headers.get("sec-websocket-accept") == accept:
                 return reader, writer, host
             writer.close()
             last_error = ConnectionError(f"{host}: {status.strip().decode('latin-1')}")
-        raise ConnectionError(str(last_error))
+        raise ConnectionError(describe(last_error))
 
     async def handle(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
         try:
@@ -216,7 +225,7 @@ class Relay:
                 asyncio.open_connection(address, self.fallback_port), self.connect_timeout
             )
         except (OSError, asyncio.TimeoutError) as error:
-            log(f"DC{dc}: WebSocket failed ({reason}); direct failed too ({error})")
+            log(f"DC{dc}: WebSocket failed ({reason}); direct to {address} failed too ({describe(error)})")
             client_writer.close()
             return
         self.stats["direct"] += 1
@@ -256,6 +265,32 @@ class Relay:
                 writer.close()
 
 
+async def self_test(relay: Relay) -> int:
+    """Open a WebSocket and a direct TCP connection to every data center."""
+    async def one(dc: int) -> str:
+        started = time.monotonic()
+        try:
+            _, writer, host = await relay.open_websocket(dc, False)
+            writer.close()
+            ws = f"ok {host}"
+        except ConnectionError as error:
+            ws = f"failed ({error})"
+        address = relay.address_override or mtproto.DATA_CENTERS[dc]
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(address, relay.fallback_port), relay.connect_timeout
+            )
+            writer.close()
+            direct = "ok"
+        except (OSError, asyncio.TimeoutError) as error:
+            direct = f"failed ({describe(error)})"
+        return f"DC{dc}: WebSocket {ws}; TCP {address}:{relay.fallback_port} {direct} [{time.monotonic() - started:.1f}s]"
+
+    lines = await asyncio.gather(*(one(dc) for dc in sorted(mtproto.DATA_CENTERS)))
+    print("\n".join(lines), flush=True)
+    return 0 if any(" WebSocket ok " in line for line in lines) else 1
+
+
 def parse_listen(value: str) -> tuple[str, int]:
     host, _, port = value.rpartition(":")
     if host not in {"127.0.0.1", "0.0.0.0"} or not port.isdigit() or not 1 <= int(port) <= 65535:
@@ -282,7 +317,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--listen", type=parse_listen, default=("127.0.0.1", 18443))
     parser.add_argument("--pidfile", type=Path)
     parser.add_argument("--log", type=Path)
+    parser.add_argument("--self-test", action="store_true",
+                        help="check WebSocket and direct TCP to every data center, then exit")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.self_test:
+        return asyncio.run(self_test(Relay()))
     global LOG_PATH
     LOG_PATH = args.log
     if args.pidfile:
