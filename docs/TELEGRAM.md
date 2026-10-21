@@ -11,7 +11,6 @@ Telegram — четвёртый сервис проекта. Вся настро
 |---|---|---|---|
 | `unmanaged` (по умолчанию, «Выкл» в панели) | правил проекта нет | правил проекта нет | профиля нет |
 | `direct` | два правила в freedom outbound `telegram-direct` | `DOMAIN-SUFFIX`/`IP-CIDR … ,DIRECT` | профиля нет |
-| `zapret` | как `direct` | как `direct` | TLS-профиль по hostlist и MTProto-профиль по ipset |
 | `vpn` / `vless` | два правила в proxy outbound | обычные правила пользователя | профиля нет |
 | `ws` | четыре правила: MTProto в ретранслятор `telegram-ws`, остальное в `telegram-direct` | не поддерживается | только TLS-профиль по hostlist |
 
@@ -19,15 +18,24 @@ Telegram включается только явно. Пока маршрут `un
 не трогает: его трафик идёт по правилам пользователя в XKeen. Существующие
 установки после обновления остаются в `unmanaged`.
 
+Режима `zapret` у Telegram нет. Он был, но на роутере с блокировкой Telegram
+не заработал: провайдер не пропускал даже TCP-соединения к адресам
+дата-центров, а nfqws2 меняет только содержимое уже установленного
+соединения. `--telegram-route zapret` и `set-service-route.sh telegram zapret`
+дают ошибку. Если в `nfqws2.conf` записан `Telegram=zapret` (установка
+старой версии или откат к старому снимку), следующий apply переводит Telegram
+в `direct` с предупреждением: правила Xray у этих режимов одинаковые. Тот же
+apply удаляет оставшиеся от режима `kdn-telegram-ip.list` и
+`imported-profiles/telegram.json`.
+
 ```sh
 sh set-service-route.sh telegram direct    --core auto --wan-interface eth3 --yes-router
-sh set-service-route.sh telegram zapret    --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh telegram vpn       --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh telegram ws        --core xray --wan-interface eth3 --yes-router
 sh set-service-route.sh telegram unmanaged --core auto --wan-interface eth3 --yes-router
 ```
 
-Низкоуровневый флаг: `--telegram-route direct|zapret|vless|ws|unmanaged`. Без
+Низкоуровневый флаг: `--telegram-route direct|vless|ws|unmanaged`. Без
 флага apply сохраняет записанный маршрут, поэтому preset
 `set-zapret-mode.sh` и переключение других сервисов Telegram не меняют.
 `--status` печатает `telegram_route=`; в `nfqws2.conf` маршрут записан в
@@ -114,78 +122,35 @@ MTProto-соединение внутри WebSocket на `kws{N}.web.telegram.or
 
 ## Mihomo
 
-В `direct` и `zapret` проект добавляет `DOMAIN-SUFFIX,<домен>,DIRECT`,
+В `direct` проект добавляет `DOMAIN-SUFFIX,<домен>,DIRECT`,
 `IP-CIDR,<сеть>,DIRECT,no-resolve` и `IP-CIDR6,…`. Пометить их, как в Xray,
 нельзя, поэтому они удаляются по точному совпадению текста и только тогда,
-когда Telegram управлялся до этого apply (`direct`/`zapret`) или управляется
-сейчас. Пока Telegram остаётся `unmanaged` или `vpn`, пользовательские
-правила Mihomo для Telegram не трогаются; при выходе из `direct`/`zapret`
-пропадёт и пользовательское правило, совпадающее с правилом проекта символ
-в символ.
+когда Telegram управлялся до этого apply (`direct` или прежний `zapret`) или
+управляется сейчас. Пока Telegram остаётся `unmanaged` или `vpn`,
+пользовательские правила Mihomo для Telegram не трогаются; при выходе из
+`direct` пропадёт и пользовательское правило, совпадающее с правилом проекта
+символ в символ.
 
-## nfqws2 (режим Zapret)
+## nfqws2
 
-В `NFQWS_ARGS_CUSTOM` добавляются два профиля:
-
-```text
---filter-tcp=443 --filter-l7=tls
---hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list
---out-range=-d10 --payload=tls_client_hello
---lua-desync=fake:blob=telegram_tls:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000
---lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=telegram_tls:tcp_ts_up
---new
---filter-tcp=80,443,5222
---ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list
---filter-l7=mtproto
---out-range=-d10 --payload=mtproto_initial
---lua-desync=fake:blob=telegram_tls:repeats=6
---lua-desync=multisplit:pos=1
-```
-
-Первый профиль повторяет TLS-стратегию YouTube для сайта и CDN. Второй
-обрабатывает только начало MTProto-соединения к сетям Telegram (zapret2
-распознаёт obfuscated2-init с 0.1.2). `TCP_PORTS` при этом расширяется на
-80 и 5222; фильтр `NFQWS_ARGS` Discord не меняется. Fake-пакет —
+Профиль Telegram в nfqws2 есть только в режиме `ws`: TLS-стратегия YouTube
+для сайта и CDN по `kdn-telegram.list` (см. «Режим WS»). Fake-пакет —
 собственный blob `telegram_tls` (файл пакета `tls_clienthello.bin`,
-проверяется SHA-256), поэтому профиль не зависит от того, регистрирует ли
-конфиг пакета `tls_clienthello`. Файлы
-`kdn-telegram.list` и `kdn-telegram-ip.list` пишутся всегда, без профиля они ни на
-что не влияют; префикс `kdn-` не даёт затереть собственные списки
+проверяется SHA-256). `kdn-telegram.list` пишется всегда, без профиля он ни
+на что не влияет; префикс `kdn-` не даёт затереть собственный список
 пользователя с именем `telegram.list`.
 
-## Автоподбор Zapret
-
-Во вкладке **Автоподбор** есть сервис **Telegram** (Telegram должен быть в
-режиме Zapret). Кандидат — TLS-стратегия, применённая к обоим профилям:
-сайту по `kdn-telegram.list` и MTProto по `kdn-telegram-ip.list`, как
-штатный конфиг пакета применяет стратегии к `http,tls,mtproto`. Источники:
-профиль проекта по умолчанию, стратегии Discord TCP из BAT-файлов Flowseal и
-их вариации `Safe`/`Extended`; выбранный BAT-файл работает как у других
-сервисов. Все кандидаты проверены запуском nfqws2 v1.0.5.2 (ядро пакета
-1.3.1).
-
-Проверки с роутера, два прохода на кандидата:
-
-- HTTPS к `telegram.org`, `web.telegram.org` и картинке CDN — нужно 2 из 3;
-- MTProto-рукопожатие (`req_pq_multi` → `resPQ`) с пятью дата-центрами
-  через obfuscated2, как у приложения, — нужно не меньше двух ответов
-  (`tools/router/telegram_mtproto.py`, AES на чистом Python).
-
-Перед кандидатами выполняется калибровка: рукопожатие при остановленном
-nfqws2. Если дата-центры отвечают и без обхода, MTProto у провайдера не
-блокируется; если не отвечают ни без обхода, ни с одним кандидатом, панель
-советует проверить сеть роутера. Найденный профиль применяется кнопкой
-**Применить найденный профиль** и хранится как
-`imported-profiles/telegram.json`; движок принимает только две части (TLS по
-`kdn-telegram.list`, MTProto по `kdn-telegram-ip.list`), `--ipset` разрешён
-лишь в профиле Telegram.
+Автоподбора для Telegram нет: подбирать стратегию бесполезно, пока
+провайдер блокирует адреса Telegram. `tools/router/telegram_mtproto.py`
+остался как ручная проверка: `python3 tools/router/telegram_mtproto.py
+--label raw --timeout 5` показывает, отвечает ли каждый дата-центр на
+MTProto-рукопожатие с роутера.
 
 ## Ограничения
 
-- MTProto-стратегия Zapret — отправная точка, на реальной блокировке она не
-  проверена. Если приложение не подключается, используйте `vpn`.
-  Автоподбор проверяет MTProto-рукопожатие, но не звонки и не загрузку медиа.
-- Звонки Telegram идут по UDP на другие адреса. В `direct`/`zapret` они не
+- Если провайдер блокирует адреса Telegram, `direct` не работает; используйте
+  `ws` или `vpn`.
+- Звонки Telegram идут по UDP на другие адреса. В `direct`/`ws` они не
   обрабатываются и, скорее всего, не работают; в `vpn` работают, если VLESS
   передаёт UDP.
 - IPv6-сети в nfqws2 не обрабатываются, пока IPv6 в nfqws2 выключен.

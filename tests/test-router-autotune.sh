@@ -58,7 +58,7 @@ NFQWS_BASE_ARGS="--qnum=300"
 NFQWS_ARGS="--filter-tcp=443 --hostlist=/fixture/discord-tcp-preserved.list"
 NFQWS_ARGS_QUIC="--filter-udp=443 --hostlist=/fixture/quic-preserved.list"
 NFQWS_ARGS_UDP="--filter-udp=50000-50100 --filter-l7=stun,discord"
-NFQWS_ARGS_CUSTOM="--filter-tcp=443 --hostlist=/opt/etc/nfqws2/lists/youtube.list --lua-desync=fake:repeats=33 --new --filter-tcp=80 --hostlist=/fixture/custom-preserved.list --new --filter-tcp=80,443,5222 --ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list --lua-desync=fake:repeats=44"
+NFQWS_ARGS_CUSTOM="--filter-tcp=443 --hostlist=/opt/etc/nfqws2/lists/youtube.list --lua-desync=fake:repeats=33 --new --filter-tcp=80 --hostlist=/fixture/custom-preserved.list"
 
 _startup_args() {
   echo "$NFQWS_BASE_ARGS $NFQWS_ARGS_CUSTOM --new $NFQWS_ARGS_UDP --new $NFQWS_ARGS_QUIC --new $NFQWS_ARGS"
@@ -541,59 +541,49 @@ fi
 printf '%s\n' "$traffic_output" | grep -Fq 'EVENT|FOUND|2|'
 [ "$(sha256sum "$ROOT/opt/etc/nfqws2/nfqws2.conf" | awk '{print $1}')" = "$config_hash_before" ]
 
-# Telegram: HTTPS to its sites plus MTProto handshakes. The probe fixture:
-# no data center answers with nfqws2 stopped (calibration), two answer with
-# a candidate running.
-mkdir -p "$ROOT/opt/root/keenetic-discord-nfqws2/tools/router"
-cat > "$ROOT/opt/root/keenetic-discord-nfqws2/tools/router/telegram_mtproto.py" <<'EOF'
-import sys
-label = sys.argv[sys.argv.index("--label") + 1]
-ok = label != "raw"
-for dc, ip in ((1, "149.154.175.53"), (2, "149.154.167.51"), (4, "149.154.167.91")):
-    status = "ok" if ok and dc != 1 else "timeout"
-    print(f"EVENT|TG_MTPROTO|{label}|{dc}|{ip}|{status}|50", flush=True)
-sys.exit(0 if ok else 1)
-EOF
+# Telegram is blocked by IP and is not tuned: the job refuses the service
+# even when the recorded route still says zapret (older engines), and a
+# runner rendered for it stops before touching nfqws2.
 sed -i 's/^# Active routes: .*/# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=zapret, Telegram=zapret./' \
   "$ROOT/opt/etc/nfqws2/nfqws2.conf"
 config_hash_before="$(sha256sum "$ROOT/opt/etc/nfqws2/nfqws2.conf" | awk '{print $1}')"
-rm -rf "$ROOT/opt/tmp/xkeen-zapret-tuner"
-mkdir "$ROOT/opt/tmp/xkeen-zapret-tuner"
 : > "$ROOT/nfqws-candidates.log"
+set +e
 PATH="$MOCK_BIN:$PATH" \
 KD_TUNER_TEST_ROOT="$ROOT" \
   python3 "$TARGET" \
     --service telegram \
     --job-id 5555555555555555 \
-    --mix-level off \
-    --max-candidates 1 \
-    --http-timeout 4 \
-    --source-dir "$SOURCE_DIR"
-python3 - "$state" "$report" "$ROOT/opt/tmp/xkeen-zapret-tuner/events.log" <<'PY'
-import json
+    --source-dir "$SOURCE_DIR" 2>"$FIXTURE/telegram-stderr"
+telegram_rc=$?
+set -e
+[ "$telegram_rc" -eq 2 ] || {
+  echo "ERROR: the job accepted --service telegram (exit $telegram_rc)" >&2
+  exit 1
+}
+grep -Fq 'invalid choice' "$FIXTURE/telegram-stderr"
+telegram_runner="$FIXTURE/telegram-runner.sh"
+python3 - "$SCRIPT_DIR/tools/windows" "$telegram_runner" <<'PY'
 import sys
-
-state = json.load(open(sys.argv[1], encoding="utf-8"))
-report = json.load(open(sys.argv[2], encoding="utf-8"))
-events = open(sys.argv[3], encoding="utf-8").read()
-assert state.get("status") == "found", state
-assert state.get("nfqws_restored") == "running", state
-assert state["telegram_raw"] == "fail", state
-assert state["last_mtproto_result"] == {"candidate": 1, "phase": "confirm", "answered": 2, "verdict": "pass"}, state
-assert report["found"]["service"] == "telegram", report
-assert report["verification"]["method"] == "router-http-and-mtproto-handshake-two-rounds", report
-assert len(report["verification"]["mtproto_handshakes"]) == 12, report
-assert "Калибровка MTProto без nfqws2: ответили 0 из 5" in events, events
-assert "MTProto (confirm 1): ответили 2 из 5" in events, events
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import zapret_tuner as tuner
+template = (Path(sys.argv[1]) / "router-candidate-runner.sh").read_text(encoding="utf-8")
+Path(sys.argv[2]).write_text(
+    tuner.render_runner(
+        template, service="telegram", candidates=[],
+        client_ip="127.0.0.1", voice_duration=10, http_timeout=6,
+    ),
+    encoding="utf-8",
+)
 PY
-candidate_line="$(tail -n 1 "$ROOT/nfqws-candidates.log")"
-case "$candidate_line" in
-  *kdn-telegram-ip.list*repeats=33*custom-preserved*) ;;
-  *) echo "ERROR: Telegram candidate did not replace only the Telegram profile: $candidate_line" >&2; exit 1 ;;
-esac
-case "$candidate_line" in
-  *repeats=44*) echo "ERROR: the router's own Telegram profile ran next to the candidate" >&2; exit 1 ;;
-esac
+set +e
+telegram_output="$(PATH="$MOCK_BIN:$PATH" KD_TUNER_TEST_ROOT="$ROOT" sh "$telegram_runner" </dev/null)"
+telegram_rc=$?
+set -e
+[ "$telegram_rc" -eq 2 ]
+printf '%s\n' "$telegram_output" | grep -Fqx 'EVENT|FATAL|unsupported-service'
+[ ! -s "$ROOT/nfqws-candidates.log" ]
 [ "$(sha256sum "$ROOT/opt/etc/nfqws2/nfqws2.conf" | awk '{print $1}')" = "$config_hash_before" ]
 
 echo "router-autotune-tests-ok"

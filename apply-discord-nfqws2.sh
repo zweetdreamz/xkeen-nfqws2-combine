@@ -165,10 +165,11 @@ Routing options:
   --discord-route direct|zapret|vless
                              Shorthand that sets both Discord routes.
   --youtube-route direct|zapret|vless
-  --telegram-route direct|zapret|vless|ws|unmanaged
+  --telegram-route direct|vless|ws|unmanaged
                              Telegram domains and DC networks. Without the
                              option the recorded route is kept (initially
                              unmanaged: the project does not touch Telegram).
+                             There is no Zapret route for Telegram.
                              ws: MTProto through the router's WebSocket relay
                              (tools/router/telegram_ws_relay.py), Xray only.
   --proxy-outbound TAG       Xray proxy outbound used for vless modes;
@@ -185,7 +186,7 @@ Imported tuner profiles:
       Validate and install one sanitized tuner descriptor from /opt/tmp.
       The matching service must already use route=zapret.
       Only nfqws2 is restarted; XKeen/Xray is not changed or restarted.
-  --clear-imported-profile youtube|discord-tcp|discord-voice|telegram
+  --clear-imported-profile youtube|discord-tcp|discord-voice
       Restore the built-in profile for this protocol family.
   --rollback-import
       Restore nfqws2 to the state before the latest profile import/clear.
@@ -538,7 +539,7 @@ while [ "$#" -gt 0 ]; do
     --telegram-route)
       shift
       [ "$#" -gt 0 ] || {
-        echo "ERROR: --telegram-route requires direct, zapret, vless or unmanaged." >&2
+        echo "ERROR: --telegram-route requires direct, vless, ws or unmanaged." >&2
         exit 2
       }
       TELEGRAM_ROUTE_MODE="$1"
@@ -590,8 +591,24 @@ done
 # the project may have added them.
 PREVIOUS_TELEGRAM_ROUTE="$(recorded_telegram_route)"
 [ -n "$TELEGRAM_ROUTE_MODE" ] || TELEGRAM_ROUTE_MODE="$PREVIOUS_TELEGRAM_ROUTE"
+# The Telegram Zapret route was removed: the DPI tricks cannot help when the
+# provider blocks the Telegram networks by address.
+case "$TELEGRAM_ROUTE_MODE:$TELEGRAM_ROUTE_EXPLICIT" in
+  zapret:1)
+    echo "ERROR: Telegram has no Zapret route any more; use ws, vless or direct." >&2
+    exit 2
+    ;;
+  zapret:0)
+    case "$MODE" in
+      apply|preflight)
+        echo "WARNING: the recorded Telegram route zapret was removed; Telegram becomes direct." >&2
+        ;;
+    esac
+    TELEGRAM_ROUTE_MODE="direct"
+    ;;
+esac
 case "$TELEGRAM_ROUTE_MODE" in
-  direct|zapret|vless|ws|unmanaged) ;;
+  direct|vless|ws|unmanaged) ;;
   *)
     echo "ERROR: unsupported Telegram route: $TELEGRAM_ROUTE_MODE" >&2
     exit 2
@@ -719,7 +736,7 @@ verify_discord_udp_blob_source() {
 # Telegram registers its own copy of the package TLS blob, so its profiles do
 # not depend on the package config registering tls_clienthello.
 verify_telegram_blob() {
-  case "$TELEGRAM_ROUTE_MODE" in zapret|ws) ;; *) return 0 ;; esac
+  [ "$TELEGRAM_ROUTE_MODE" = ws ] || return 0
   have sha256sum || {
     echo "ERROR: sha256sum is required to verify the Telegram TLS blob." >&2
     return 1
@@ -836,7 +853,7 @@ $(dirname "$MIHOMO_CONFIG")"
 imported_profile_path() {
   imported_service="$1"
   case "$imported_service" in
-    youtube|discord-tcp|discord-voice|telegram)
+    youtube|discord-tcp|discord-voice)
       printf '%s/%s.json\n' "$IMPORTED_PROFILE_DIR" "$imported_service"
       ;;
     *) return 1 ;;
@@ -923,7 +940,7 @@ validate_imported_profile() {
     type == "object"
     and .format == 1
     and (.service == "youtube" or .service == "discord-tcp" or
-         .service == "discord-voice" or .service == "telegram")
+         .service == "discord-voice")
     and (.candidate_id | type == "string" and length == 12)
     and (.source_name | type == "string" and length > 0 and length <= 160 and
          index("\n") == null and index("\r") == null)
@@ -979,12 +996,6 @@ validate_imported_profile() {
     profile_option="${profile_option#--}"
     case "$profile_option" in
       filter-tcp|filter-udp|filter-l7|hostlist|out-range|payload|lua-desync) ;;
-      ipset)
-        [ "$profile_service" = telegram ] || {
-          echo "ERROR: --ipset is allowed in a Telegram profile only." >&2
-          return 1
-        }
-        ;;
       *)
         echo "ERROR: unsupported imported nfqws2 option: --$profile_option" >&2
         return 1
@@ -1078,27 +1089,6 @@ validate_imported_profile() {
       }
       voice_ports_allowed "$profile_voice_filters" "$VOICE_HIGH" || {
         echo "ERROR: Discord Voice UDP ports exceed the currently configured safe ranges." >&2
-        return 1
-      }
-      ;;
-    telegram)
-      # Exactly two profiles: TLS for the Telegram domains, then MTProto for
-      # its DC networks. The selectors of each part must be exactly these.
-      [ "$profile_new_count" -eq 1 ] && awk '
-        BEGIN { part = 0 }
-        $0 == "--new" { part++; next }
-        /^--(filter-tcp|filter-udp|filter-l7|hostlist|ipset|payload)=/ { seen[part, $0] = 1; count[part]++ }
-        END {
-          if (count[0] != 4 || count[1] != 4) exit 1
-          if (!seen[0, "--filter-tcp=443"] || !seen[0, "--filter-l7=tls"] ||
-              !seen[0, "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list"] ||
-              !seen[0, "--payload=tls_client_hello"]) exit 1
-          if (!seen[1, "--filter-tcp=80,443,5222"] || !seen[1, "--filter-l7=mtproto"] ||
-              !seen[1, "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list"] ||
-              !seen[1, "--payload=mtproto_initial"]) exit 1
-        }
-      ' "$profile_tokens" || {
-        echo "ERROR: Telegram profile must be TLS (kdn-telegram.list) + MTProto (kdn-telegram-ip.list)." >&2
         return 1
       }
       ;;
@@ -2597,6 +2587,8 @@ load_current_nfqws_context() {
   done
 
   TELEGRAM_ROUTE_MODE="$(recorded_telegram_route)"
+  # The removed Telegram Zapret route has the same Xray rules as direct.
+  [ "$TELEGRAM_ROUTE_MODE" != zapret ] || TELEGRAM_ROUTE_MODE="direct"
   recorded_udp_settings
   UDP_STRATEGY="${RECORDED_UDP_STRATEGY:-flowseal}"
   if [ "$RECORDED_UDP_RANGE" = "wide" ]; then
@@ -3356,7 +3348,7 @@ patch_xray() {
 
   telegram_outbound_file="$XRAY_CONFIG_DIR/04_telegram_nfqws2_outbound.json"
   case "$TELEGRAM_ROUTE_MODE" in
-    direct|zapret) write_xray_direct_outbound "$telegram_outbound_file" "telegram-direct" ;;
+    direct) write_xray_direct_outbound "$telegram_outbound_file" "telegram-direct" ;;
     ws)
       write_xray_direct_outbound "$telegram_outbound_file" "telegram-direct"
       telegram_ws_outbound="$(make_tmp)"
@@ -3389,7 +3381,7 @@ make_mihomo_rules_json() {
       youtube_domains | awk '{ print "DOMAIN-SUFFIX," $0 ",DIRECT" }'
     fi
     case "$TELEGRAM_ROUTE_MODE" in
-      direct|zapret) telegram_mihomo_rules ;;
+      direct) telegram_mihomo_rules ;;
     esac
   } | jq -Rsc 'split("\n") | map(select(length > 0))' > "$mihomo_rules_file"
 }
@@ -3407,7 +3399,7 @@ make_mihomo_removal_rules_json() {
     # Mihomo rules carry no tag: identical user rules are left alone unless
     # the project managed Telegram before (or manages it now).
     case "$PREVIOUS_TELEGRAM_ROUTE:$TELEGRAM_ROUTE_MODE" in
-      direct:*|zapret:*|*:direct|*:zapret) telegram_mihomo_rules ;;
+      direct:*|zapret:*|*:direct) telegram_mihomo_rules ;;
     esac
   } | jq -Rsc 'split("\n") | map(select(length > 0))' > "$mihomo_removal_file"
 }
@@ -3563,17 +3555,13 @@ patch_nfqws() {
   telegram_list_tmp="$(make_tmp)"
   telegram_domains > "$telegram_list_tmp"
   atomic_replace_file "$NFQWS_TELEGRAM_LIST" "$telegram_list_tmp" 0644
-  telegram_ipset_tmp="$(make_tmp)"
-  telegram_networks > "$telegram_ipset_tmp"
-  atomic_replace_file "$NFQWS_TELEGRAM_IPSET" "$telegram_ipset_tmp" 0644
+  # Left over from the removed Telegram Zapret route (MTProto ipset and an
+  # imported Telegram profile); nothing reads them any more.
+  rm -f "$NFQWS_TELEGRAM_IPSET" "$IMPORTED_PROFILE_DIR/telegram.json"
 
   discord_tcp_import=""
   discord_voice_import=""
   youtube_import=""
-  telegram_import=""
-  if [ "$TELEGRAM_ROUTE_MODE" = "zapret" ]; then
-    telegram_import="$(active_imported_profile telegram 2>/dev/null || true)"
-  fi
   if [ "$DISCORD_TCP_ROUTE_MODE" = "zapret" ]; then
     discord_tcp_import="$(active_imported_profile discord-tcp 2>/dev/null || true)"
   fi
@@ -3586,8 +3574,7 @@ patch_nfqws() {
   for expected_import in \
     "$IMPORTED_PROFILE_DIR/discord-tcp.json" \
     "$IMPORTED_PROFILE_DIR/discord-voice.json" \
-    "$IMPORTED_PROFILE_DIR/youtube.json" \
-    "$IMPORTED_PROFILE_DIR/telegram.json"
+    "$IMPORTED_PROFILE_DIR/youtube.json"
   do
     if [ -e "$expected_import" ]; then
       validate_imported_profile "$expected_import"
@@ -3605,14 +3592,6 @@ patch_nfqws() {
   fi
 
   base_tcp_filter="$selected_tcp_ports"
-  if [ "$TELEGRAM_ROUTE_MODE" = "zapret" ]; then
-    # MTProto also uses 80 and 5222; only the netfilter port list grows.
-    case ",$selected_tcp_ports," in
-      *,80,*) ;;
-      *) selected_tcp_ports="80,$selected_tcp_ports" ;;
-    esac
-    selected_tcp_ports="$selected_tcp_ports,5222"
-  fi
 
   if grep -q '^NFQWS_ARGS="--filter-tcp=' "$nfqws_tmp"; then
     sed "s/^NFQWS_ARGS=\"--filter-tcp=[^ ]*/NFQWS_ARGS=\"--filter-tcp=$base_tcp_filter/" \
@@ -3702,42 +3681,7 @@ NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
 
   telegram_base_append=""
   telegram_custom_append=""
-  if [ "$TELEGRAM_ROUTE_MODE" = "zapret" ]; then
-    verify_telegram_blob
-    telegram_base_append='NFQWS_BASE_ARGS="$NFQWS_BASE_ARGS
-                 --blob=telegram_tls:@/opt/etc/nfqws2/blobs/tls_clienthello.bin"'
-    # Web/CDN by hostlist (TLS) and MTProto to the Telegram DC networks.
-    # The MTProto strategy is a starting point; the autotuner can replace it.
-    if [ -n "$telegram_import" ]; then
-      telegram_import_args="$(jq -r '.args[]' "$telegram_import")"
-      telegram_custom_append="if [ -n \"\$NFQWS_ARGS_CUSTOM\" ]; then
-  NFQWS_ARGS_CUSTOM=\"\$NFQWS_ARGS_CUSTOM
---new\"
-fi
-NFQWS_ARGS_CUSTOM=\"\$NFQWS_ARGS_CUSTOM
-$telegram_import_args\""
-    else
-    telegram_custom_append='if [ -n "$NFQWS_ARGS_CUSTOM" ]; then
-  NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
---new"
-fi
-NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
---filter-tcp=443 --filter-l7=tls
---hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list
---out-range=-d10
---payload=tls_client_hello
---lua-desync=fake:blob=telegram_tls:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000
---lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=telegram_tls:tcp_ts_up
---new
---filter-tcp=80,443,5222
---ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list
---filter-l7=mtproto
---out-range=-d10
---payload=mtproto_initial
---lua-desync=fake:blob=telegram_tls:repeats=6
---lua-desync=multisplit:pos=1"'
-    fi
-  elif [ "$TELEGRAM_ROUTE_MODE" = "ws" ]; then
+  if [ "$TELEGRAM_ROUTE_MODE" = "ws" ]; then
     # WS: MTProto goes through the relay; only the TLS profile stays. It also
     # covers the relay's own TLS to kws*.web.telegram.org (telegram.org).
     verify_telegram_blob
@@ -3992,7 +3936,6 @@ apply_import_profile_transaction() {
     youtube) import_route="$YOUTUBE_ROUTE_MODE" ;;
     discord-tcp) import_route="$DISCORD_TCP_ROUTE_MODE" ;;
     discord-voice) import_route="$DISCORD_VOICE_ROUTE_MODE" ;;
-    telegram) import_route="$TELEGRAM_ROUTE_MODE" ;;
   esac
   [ "$import_route" = "zapret" ] || {
     echo "ERROR: $import_service currently uses route=$import_route." >&2
@@ -4036,7 +3979,7 @@ apply_import_profile_transaction() {
 
 clear_import_profile_transaction() {
   case "$CLEAR_IMPORTED_PROFILE" in
-    youtube|discord-tcp|discord-voice|telegram) ;;
+    youtube|discord-tcp|discord-voice) ;;
     *)
       echo "ERROR: unsupported imported profile service: $CLEAR_IMPORTED_PROFILE" >&2
       return 1

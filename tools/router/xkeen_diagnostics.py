@@ -204,6 +204,7 @@ def make_check(name: str, status: str, detail: str) -> dict[str, str]:
 
 
 ROUTE_VALUES = {"direct", "zapret", "vless"}
+# "zapret" is still parsed from old Telegram headers but is no longer a valid mode.
 TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"ws", "unmanaged"}
 
 
@@ -346,11 +347,14 @@ def route_consistency(config: str, tags: set[str], discord_list: str) -> list[di
             "Telegram route", "ok" if okay else "error",
             f"route=ws, nfqws={'on' if telegram_active else 'off'}",
         ))
+    elif telegram == "zapret":
+        # Recorded by an older apply or an old snapshot; the mode no longer exists.
+        checks.append(make_check("Telegram route", "error", "route=zapret (режим удалён, выберите другой)"))
     elif telegram != "unmanaged":
         okay = (
-            telegram in ROUTE_VALUES
+            telegram in {"direct", "vless"}
             and (telegram == "vless" or "telegram-direct" in tags)
-            and telegram_active == (telegram == "zapret")
+            and not telegram_active
         )
         checks.append(
             make_check(
@@ -412,7 +416,7 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
             expected.add("discord-direct")
         if youtube_route != "vless":
             expected.add("youtube-direct")
-        if telegram_route(config) in {"direct", "zapret", "ws"}:
+        if telegram_route(config) in {"direct", "ws"}:
             expected.add("telegram-direct")
         if telegram_route(config) == "ws":
             expected.add("telegram-ws")

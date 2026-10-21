@@ -191,7 +191,6 @@ Voice out-range: <n2, <n3, <n4
 
 ## Telegram
 
-Профили Telegram включаются только в режиме `zapret` и описаны в
-[TELEGRAM.md](TELEGRAM.md): TLS-профиль сайта/CDN повторяет TCP-профиль
-YouTube, MTProto-профиль (`--filter-l7=mtproto --payload=mtproto_initial`
-по ipset сетей Telegram) — непроверенная отправная точка.
+Режима Zapret у Telegram нет (см. [TELEGRAM.md](TELEGRAM.md)): провайдер
+блокирует адреса Telegram, и стратегии nfqws2 тут не помогают. В режиме `ws`
+остаётся TLS-профиль сайта/CDN, повторяющий TCP-профиль YouTube.

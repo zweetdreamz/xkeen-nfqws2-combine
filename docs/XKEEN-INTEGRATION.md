@@ -96,7 +96,7 @@ policy routing читается из runtime-hook, `ip rule` и Keenetic policy.
 Для активного zapret-режима скрипт:
 
 1. создаёт отдельный Freedom outbound `discord-direct`, `youtube-direct`
-   и/или `telegram-direct` (Telegram в `direct`/`zapret`/`ws`);
+   и/или `telegram-direct` (Telegram в `direct`/`ws`);
 2. не переиспользует обычный пользовательский `direct`, в котором могут быть
    bind/interface/mark;
 3. переносит подходящие доменные `.dat` selectors из proxy rules в первые
@@ -151,7 +151,7 @@ multi-WAN/PBR-схемы.
 Скрипт добавляет управляемые `DIRECT` rules в начало списка: домены Discord
 при Discord TCP ≠ `vless`, UDP-порты Voice при Discord Voice ≠ `vless`, домены
 YouTube при YouTube ≠ `vless`, домены и сети Telegram (`DOMAIN-SUFFIX`,
-`IP-CIDR`, `IP-CIDR6`) при Telegram `direct`/`zapret`. Затем
+`IP-CIDR`, `IP-CIDR6`) при Telegram `direct`. Затем
 запускает `xkeen -mtest`. YAML пересобирается через `yq`, поэтому формат и
 комментарии могут нормализоваться; baseline хранит исходный файл.
 

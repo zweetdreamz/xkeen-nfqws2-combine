@@ -1254,26 +1254,14 @@ class SourceSelectionTests(unittest.TestCase):
         self.assertTrue(without)
         self.assertTrue(all(candidate.source_name == SOURCE.name for candidate in without))
 
-    def test_telegram_candidates(self):
-        candidates = TUNER.build_candidates("telegram", [SOURCE], "safe")
-        # The engine default first (rank 0), then every Discord TCP strategy.
-        self.assertEqual(candidates[0].args, TUNER.TELEGRAM_KNOWN_ARGS)
-        tcp = TUNER.build_candidates("discord-tcp", [SOURCE], "safe")
-        self.assertEqual(len(candidates), len({c.args for c in tcp}) + 1)
-        for candidate in candidates:
-            with self.subTest(family=candidate.family):
-                args = list(candidate.args)
-                self.assertEqual(candidate.service, "telegram")
-                self.assertEqual(args.count("--new"), 1)
-                split = args.index("--new")
-                self.assertEqual(args[:3], list(TUNER.TELEGRAM_TLS_SELECTORS))
-                self.assertEqual(args[split + 1:split + 4], list(TUNER.TELEGRAM_MTPROTO_SELECTORS))
-                # The package blob name is replaced by the project's copy.
-                self.assertNotIn("tls_clienthello", " ".join(args))
-        self.assertIn("telegram", TUNER.source_services(SOURCE))
-        only_file = TUNER.build_candidates("telegram", [SOURCE], "off", include_builtin=False)
-        self.assertNotIn(TUNER.TELEGRAM_KNOWN_ARGS, [c.args for c in only_file])
-        self.assertTrue(all(c.pinned for c in only_file))
+    def test_telegram_is_not_a_tuner_service(self):
+        # Telegram is blocked by IP; Zapret autotune covers only these three.
+        self.assertEqual(TUNER.TUNER_SERVICES, ("youtube", "discord-tcp", "discord-voice"))
+        with self.assertRaises(ValueError):
+            TUNER.build_candidates("telegram", [SOURCE], "safe")
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                make_cli_args("telegram")
 
     def test_selected_file_is_the_base_of_the_sweep(self):
         exact = TUNER.build_candidates("discord-voice", [SOURCE], "off", include_builtin=False)
@@ -1311,7 +1299,7 @@ class SourceSelectionTests(unittest.TestCase):
 
     def test_source_services(self):
         self.assertEqual(
-            TUNER.source_services(SOURCE), ["discord-tcp", "discord-voice", "telegram", "youtube"]
+            TUNER.source_services(SOURCE), ["discord-tcp", "discord-voice", "youtube"]
         )
         empty = TUNER.SourceFile("general (EMPTY).bat", "@echo off\n", "0", "u")
         self.assertEqual(TUNER.source_services(empty), [])

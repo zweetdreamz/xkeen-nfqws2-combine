@@ -194,6 +194,14 @@ class ValidateArgsTests(unittest.TestCase):
                     with self.assertRaises(SystemExit):
                         parse_args(*argv)
 
+    def test_telegram_is_not_tuned(self):
+        # Telegram is blocked by IP: Zapret strategies cannot help, so the job
+        # refuses the service even when its route header still says zapret.
+        self.assertNotIn("telegram", TUNER.TUNER_SERVICES)
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                parse_args("--service", "telegram", "--job-id", "0123456789abcdef")
+
 
 class RecordedRouteTests(TempRootTestCase):
     def test_route_per_service(self):
@@ -214,7 +222,8 @@ class RecordedRouteTests(TempRootTestCase):
 
     def test_header_with_telegram(self):
         conf = self.write_conf()
-        for telegram in ("direct", "zapret", "vless", "unmanaged"):
+        # Telegram routes are only read; "zapret" is written by older engines.
+        for telegram in ("direct", "vless", "ws", "unmanaged", "zapret"):
             with self.subTest(telegram=telegram):
                 conf.write_text(
                     "# Active routes: DiscordTCP=direct, DiscordVoice=zapret, YouTube=vless, "
@@ -556,20 +565,16 @@ class ParseEventTests(unittest.TestCase):
         self.parse("EVENT|CANDIDATE|1|abc123")
         self.assertIn("встроенный профиль проекта", self.writer.logs[1])
 
-    def test_telegram_events(self):
-        for dc, status in (("1", "timeout"), ("2", "ok"), ("4", "ok")):
-            self.parse(f"EVENT|TG_MTPROTO|raw|{dc}|149.154.167.51|{status}|120")
-        self.parse("EVENT|TG_CALIBRATION|raw|pass")
-        self.assertEqual(self.writer.payload["telegram_raw"], "pass")
-        self.assertIn("ответили 2 из 5", self.writer.logs[-1])
-        self.assertIn("не блокируется", self.writer.logs[-1])
-        self.parse("EVENT|TG_MTPROTO|candidate-3-1|2|149.154.167.51|reset|40")
-        self.parse("EVENT|TG_RESULT|3|candidate|1|fail")
-        self.assertEqual(
-            self.writer.payload["last_mtproto_result"],
-            {"candidate": 3, "phase": "candidate", "answered": 0, "verdict": "fail"},
-        )
-        self.assertIn("DC2 reset", self.writer.logs[-1])
+    def test_telegram_events_are_ignored(self):
+        # The runner no longer emits them; stale lines must not touch the state.
+        for line in (
+            "EVENT|TG_MTPROTO|raw|2|149.154.167.51|ok|120",
+            "EVENT|TG_CALIBRATION|raw|pass",
+            "EVENT|TG_RESULT|3|candidate|1|fail",
+        ):
+            with self.subTest(line=line):
+                self.assertIsNone(self.parse(line))
+        self.assertEqual(self.writer.writes, [])
 
     def test_voice_traffic_events(self):
         self.parse("EVENT|VOICE_WATCH|0|25")

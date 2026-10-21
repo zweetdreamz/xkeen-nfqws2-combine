@@ -11,11 +11,11 @@ Usage:
   sh set-service-route.sh discord-voice direct|zapret|vpn --yes-router [apply options]
   sh set-service-route.sh discord       direct|zapret|vpn --yes-router [apply options]
   sh set-service-route.sh youtube       direct|zapret|vpn --yes-router [apply options]
-  sh set-service-route.sh telegram      direct|zapret|vpn|ws|unmanaged --yes-router [apply options]
+  sh set-service-route.sh telegram      direct|vpn|ws|unmanaged --yes-router [apply options]
 
 discord-tcp covers Discord domains (TCP/TLS and QUIC), discord-voice covers
 Discord Voice/STUN UDP ports, and discord switches both at once. telegram
-covers Telegram domains and DC networks; "ws" carries MTProto through the
+covers Telegram domains and DC networks (it has no zapret mode); "ws" carries MTProto through the
 router's WebSocket relay; "unmanaged" removes the project's Telegram rules and
 leaves Telegram to the user's own routing.
 
@@ -47,6 +47,11 @@ case "$service" in
     exit 2
     ;;
 esac
+
+if [ "$service:$requested_mode" = "telegram:zapret" ]; then
+  echo "ERROR: Telegram has no zapret mode; use ws, vpn or direct." >&2
+  exit 2
+fi
 
 case "$requested_mode" in
   direct|zapret) route_mode="$requested_mode" ;;
@@ -91,7 +96,9 @@ require_route "Discord TCP" "$current_discord_tcp"
 require_route "Discord Voice" "$current_discord_voice"
 require_route "YouTube" "$current_youtube"
 case "$current_telegram" in
-  direct|zapret|vless|ws|unmanaged) ;;
+  direct|vless|ws|unmanaged) ;;
+  # The removed Telegram Zapret route has the same Xray rules as direct.
+  zapret) current_telegram="direct" ;;
   *) current_telegram="unmanaged" ;;
 esac
 

@@ -52,21 +52,6 @@ VALID_ARGS = {
         "--payload=stun,discord_ip_discovery",
         "--lua-desync=fake:blob=discord_udp:repeats=6",
     ],
-    "telegram": [
-        "--filter-tcp=443",
-        "--filter-l7=tls",
-        "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list",
-        "--out-range=-d10",
-        "--payload=tls_client_hello",
-        "--lua-desync=fake:blob=telegram_tls:repeats=6",
-        "--new",
-        "--filter-tcp=80,443,5222",
-        "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list",
-        "--filter-l7=mtproto",
-        "--out-range=-d10",
-        "--payload=mtproto_initial",
-        "--lua-desync=fake:blob=telegram_tls:repeats=6",
-    ],
 }
 
 
@@ -286,10 +271,14 @@ class ParsingHelpersTests(PanelTestCase):
 
     def test_validate_route(self):
         validate = self.ns["validate_route"]
-        for service in ("discord-tcp", "discord-voice", "discord", "youtube", "telegram"):
+        for service in ("discord-tcp", "discord-voice", "discord", "youtube"):
             for mode in ("direct", "zapret", "vpn"):
                 self.assertEqual(validate(service, mode), (service, mode))
-        self.assertEqual(validate("telegram", "unmanaged"), ("telegram", "unmanaged"))
+        for mode in ("direct", "vpn", "ws", "unmanaged"):
+            self.assertEqual(validate("telegram", mode), ("telegram", mode))
+        # Telegram is blocked by IP; the Zapret mode was removed.
+        with self.assertRaisesRegex(ValueError, "Zapret для Telegram удалён"):
+            validate("telegram", "zapret")
         with self.assertRaisesRegex(ValueError, "неподдерживаемый сервис"):
             validate("discord-video", "direct")
         with self.assertRaisesRegex(ValueError, "неподдерживаемый маршрут"):
@@ -329,26 +318,21 @@ class CandidateValidationTests(PanelTestCase):
         with self.assertRaisesRegex(ValueError, pattern):
             self.validate(candidate, report)
 
-    def test_telegram_profile_must_keep_its_two_parts(self):
-        good = VALID_ARGS["telegram"]
-        split = good.index("--new")
-        bad_variants = {
-            "no MTProto part": good[:split],
-            "parts swapped": good[split + 1:] + ["--new"] + good[:split],
-            "Discord hostlist": [t.replace("kdn-telegram.list", "user.list") for t in good],
-            "wider ports": [t.replace("80,443,5222", "1-65535") for t in good],
-            "extra UDP filter": good + ["--filter-udp=443"],
-            "other ipset": [t.replace("kdn-telegram-ip.list", "ipset.list") for t in good],
-        }
-        for label, args in bad_variants.items():
-            with self.subTest(label=label):
-                self.assertRejected("Telegram", make_candidate("telegram", args=args))
-        # ipset belongs to Telegram only.
+    def test_telegram_profiles_are_no_longer_accepted(self):
+        args = [
+            "--filter-tcp=443",
+            "--filter-l7=tls",
+            "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list",
+            "--payload=tls_client_hello",
+            "--lua-desync=fake:blob=tls_clienthello_www_google_com:repeats=6",
+        ]
+        self.assertRejected("неподдерживаемый сервис", make_candidate("telegram", args=args))
+        # The MTProto ipset is not a profile option any more.
         tcp = VALID_ARGS["discord-tcp"] + ["--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list"]
-        self.assertRejected("ipset", make_candidate("discord-tcp", args=tcp))
+        self.assertRejected("неподдерживаемая опция: --ipset", make_candidate("discord-tcp", args=tcp))
 
     def test_accepts_each_service(self):
-        for service in ("youtube", "discord-tcp", "discord-voice", "telegram"):
+        for service in ("youtube", "discord-tcp", "discord-voice"):
             with self.subTest(service=service):
                 candidate = make_candidate(service)
                 profile = self.validate(candidate, make_report(service, candidate))
@@ -657,6 +641,8 @@ class TunerRequestTests(PanelTestCase):
             ({"service": "youtube", "extra": 1}, "неизвестные параметры подбора"),
             ({}, "неподдерживаемый сервис"),
             ({"service": "whatsapp"}, "неподдерживаемый сервис"),
+            # Telegram autotune was removed with its Zapret mode.
+            ({"service": "telegram"}, "неподдерживаемый сервис"),
             ({"service": "youtube", "mix_level": "max"}, "неподдерживаемый уровень смешивания"),
             ({"service": "youtube", "max_candidates": 0}, "число кандидатов"),
             ({"service": "youtube", "max_candidates": 65}, "число кандидатов"),
@@ -772,6 +758,7 @@ class FileHelperTests(PanelTestCase):
             "# Active routes: DiscordTCP=direct, DiscordVoice=zapret, YouTube=vless, Telegram=zapret.\n",
             encoding="utf-8",
         )
+        # Zapret is no longer selectable for Telegram, but an old header still reads.
         self.assertEqual(self.ns["current_routes_fast"]()["telegram"], "zapret")
         # Only Telegram may be unmanaged.
         config.write_text(
@@ -1797,7 +1784,6 @@ class ProfileStoreTests(PanelTestCase):
                 {"service": "youtube", "installed": False},
                 {"service": "discord-tcp", "installed": False},
                 {"service": "discord-voice", "installed": False},
-                {"service": "telegram", "installed": False},
             ],
         )
 
@@ -1988,16 +1974,26 @@ class ConfigHealthTests(PanelTestCase):
             ("unmanaged", [], True, False),
             ("direct", managed("telegram-direct"), False, True),
             ("direct", managed("telegram-direct"), True, False),
-            ("zapret", managed("telegram-direct"), True, True),
+            # Zapret was removed: a recorded header is never healthy.
+            ("zapret", managed("telegram-direct"), True, False),
             ("zapret", managed("telegram-direct"), False, False),
-            ("zapret", managed("telegram-direct")[:1], True, False),
             ("vless", managed("vless-reality"), False, True),
+            ("vless", managed("vless-reality"), True, False),
             ("vless", managed("telegram-direct"), False, False),
             ("direct", managed("vless-reality"), False, False),
         )
         for route, rules, profile, expected in cases:
             with self.subTest(route=route, rules=len(rules), profile=profile):
                 self.assertEqual(self.telegram_checks(route, rules, profile)["ok"], expected)
+
+    def test_recorded_telegram_zapret_is_reported_unhealthy(self):
+        rules = [
+            {"ruleTag": "kdn-telegram-domain", "outboundTag": "telegram-direct", "domain": ["x"]},
+            {"ruleTag": "kdn-telegram-ip", "outboundTag": "telegram-direct", "ip": ["y"]},
+        ]
+        check = self.telegram_checks("zapret", rules, True)
+        self.assertFalse(check["ok"])
+        self.assertEqual(check["detail"], "route=zapret (режим удалён, выберите другой)")
 
     def test_telegram_ws_route_needs_its_rules_and_relay(self):
         ws_rules = [
@@ -2189,7 +2185,7 @@ class HttpLayerTests(unittest.TestCase):
         response, data = self.request("GET", "/api/imported")
         payload = json.loads(data)
         self.assertFalse(payload["rollback_available"])
-        self.assertEqual([item["service"] for item in payload["profiles"]], ["youtube", "discord-tcp", "discord-voice", "telegram"])
+        self.assertEqual([item["service"] for item in payload["profiles"]], ["youtube", "discord-tcp", "discord-voice"])
         response, data = self.request("GET", "/api/route/status")
         self.assertEqual(json.loads(data)["status"], "idle")
         response, data = self.request("GET", "/api/tuner/status")
@@ -2319,6 +2315,10 @@ class HttpLayerTests(unittest.TestCase):
                 with mock.patch.dict(self.ns, {"start_route_job": mock.Mock(side_effect=exc)}):
                     response, data = self.post("/api/route/discord/direct")
                 self.assertJsonError(response, data, status, str(exc))
+
+    def test_route_post_rejects_telegram_zapret(self):
+        response, data = self.post("/api/route/telegram/zapret")
+        self.assertJsonError(response, data, 400, "Zapret для Telegram удалён")
 
     def test_import_validate_rejects_invalid_report(self):
         response, data = self.post("/api/import/validate", {"report_format": 2})

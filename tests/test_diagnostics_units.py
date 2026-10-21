@@ -223,6 +223,7 @@ class TelegramRouteTests(DiagnosticsUnitBase):
         return [check for check in checks if check["name"] == "Telegram route"]
 
     def test_header_with_telegram_is_parsed(self):
+        # Zapret is no longer a Telegram mode, but old headers still parse.
         text = self.HEADER.format("zapret")
         self.assertEqual(self.module.parse_routes(text), ("vless", "vless", "vless"))
         self.assertEqual(self.module.telegram_route(text), "zapret")
@@ -239,7 +240,8 @@ class TelegramRouteTests(DiagnosticsUnitBase):
         for route, tags, profile, status in (
             ("direct", {"telegram-direct"}, False, "ok"),
             ("direct", set(), False, "error"),
-            ("zapret", {"telegram-direct"}, True, "ok"),
+            ("direct", {"telegram-direct"}, True, "error"),
+            ("zapret", {"telegram-direct"}, True, "error"),
             ("zapret", {"telegram-direct"}, False, "error"),
             ("vless", set(), False, "ok"),
             ("vless", set(), True, "error"),
@@ -251,6 +253,15 @@ class TelegramRouteTests(DiagnosticsUnitBase):
                 [check] = self.telegram_check(route, tags, profile)
                 self.assertEqual(check["status"], status)
 
+    def test_recorded_zapret_route_is_an_error(self):
+        # Left by an older apply or restored from an old snapshot.
+        for profile in (True, False):
+            with self.subTest(profile=profile):
+                [check] = self.telegram_check("zapret", {"telegram-direct"}, profile)
+                self.assertEqual(
+                    (check["status"], check["detail"]),
+                    ("error", "route=zapret (режим удалён, выберите другой)"),
+                )
 
     def test_ws_route_must_not_keep_the_mtproto_ipset(self):
         config = (self.HEADER.format("ws") + self.PROFILE
@@ -720,6 +731,22 @@ class RunHealthTests(DiagnosticsUnitBase):
         self.assertEqual(by_name["YouTube route"]["status"], "ok")
         self.assertEqual(by_name["Discord TCP route"]["status"], "ok")
         self.assertEqual(by_name["Discord Voice route"]["status"], "ok")
+
+    def test_recorded_telegram_zapret_needs_no_direct_tag(self):
+        build_healthy_tree(self.tmp, self.module)
+        write_file(
+            self.tmp,
+            self.module.NFQWS_CONFIG_LOGICAL,
+            "# Active routes: Discord=vless, YouTube=vless, Telegram=zapret.\n",
+        )
+        write_file(self.tmp, self.module.DISCORD_LIST_LOGICAL, "")
+        write_file(self.tmp, self.module.XRAY_ROUTING_LOGICAL, json.dumps({"routing": {}}))
+        checks, _writer = self.run_health(healthy_run())
+        by_name = {check["name"]: check for check in checks}
+        self.assertEqual(by_name["Xray routing"]["status"], "ok")
+        self.assertIn("Telegram=zapret", by_name["Управляемые маршруты"]["detail"])
+        self.assertEqual(by_name["Telegram route"]["status"], "error")
+        self.assertIn("режим удалён", by_name["Telegram route"]["detail"])
 
     def test_invalid_routing_json_is_reported(self):
         build_healthy_tree(self.tmp, self.module)

@@ -82,12 +82,14 @@ FLOWSEAL_REPOSITORY = "Flowseal/zapret-discord-youtube"
 FLOWSEAL_REF = "main"
 MAX_REPORT_BYTES = 512 * 1024
 MAX_HISTORY_ITEMS = 50
-SERVICES = ("youtube", "discord-tcp", "discord-voice", "telegram")
+# Services with an nfqws2 profile that can be tuned and imported.
+SERVICES = ("youtube", "discord-tcp", "discord-voice")
 ROUTE_SERVICES = ("discord-tcp", "discord-voice", "youtube", "telegram")
 # "discord" is accepted as a shorthand that switches Discord TCP and Voice together.
 ROUTE_REQUEST_SERVICES = ROUTE_SERVICES + ("discord",)
 ROUTE_VALUES = {"direct", "zapret", "vless"}
 # Telegram is opt-in: "unmanaged" means the project leaves it to user rules.
+# "zapret" is still parsed from old headers but can no longer be selected.
 TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"ws", "unmanaged"}
 TELEGRAM_WS_PIDFILE = Path("/opt/var/run/kdn-telegram-ws.pid")
 STATUS_ROUTE_KEYS = {
@@ -107,7 +109,6 @@ SAFE_OPTIONS = {
     "out-range",
     "payload",
     "lua-desync",
-    "ipset",
 }
 SAFE_LUA = {"fake", "multisplit", "multidisorder", "fakedsplit", "hostfakesplit"}
 
@@ -188,7 +189,7 @@ button:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .service:has(.mode.active[data-mode=direct]) .current{background:color-mix(in srgb,var(--direct) 14%,transparent);color:var(--direct)}
 .service:has(.mode.active[data-mode=zapret]) .current{background:color-mix(in srgb,var(--zapret) 14%,transparent);color:var(--zapret)}
 .service:has(.mode.active[data-mode=vpn]) .current{background:color-mix(in srgb,var(--vpn) 14%,transparent);color:var(--vpn)}
-.modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(5,minmax(0,1fr))}
+.modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(4,minmax(0,1fr))}
 .mode{--mode:var(--accent);padding:9px 8px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted);box-shadow:none}
 .mode[data-mode=direct]{--mode:var(--direct)}.mode[data-mode=zapret]{--mode:var(--zapret)}.mode[data-mode=vpn]{--mode:var(--vpn)}.mode[data-mode=unmanaged]{--mode:var(--muted)}.mode[data-mode=ws]{--mode:#229ed9}
 .mode::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--mode);opacity:.55}
@@ -265,7 +266,7 @@ pre{min-height:120px;max-height:340px;overflow:auto;margin:0;padding:14px 16px;b
 #tunerVerification{margin:12px 0 0}
 footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
 @media(max-width:760px){.services{grid-template-columns:minmax(0,1fr)}.service .modes{max-width:460px}}
-@media(max-width:480px){.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:480px){.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){header{align-items:flex-start;flex-direction:column;padding-top:20px}.services,.profiles,.tuner-grid,.updates-grid,.diagnostic-grid,.legend,.meta{grid-template-columns:1fr}.card{padding:18px}.profile-head{flex-wrap:wrap}}
 @media(max-width:480px){.page{width:calc(100% - 24px)}.xkeen-actions,.upload{grid-template-columns:1fr}.tabs{display:grid;grid-template-columns:1fr 1fr}.tabs .tab{justify-content:center;padding:8px 10px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
@@ -297,7 +298,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
     <article class="service" data-service="discord-tcp"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">D</span><div><h3>Discord TCP</h3><div class="service-scope">Сайт, API, CDN, QUIC</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
     <article class="service" data-service="discord-voice"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">V</span><div><h3>Discord Voice</h3><div class="service-scope">Голос и STUN по UDP</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
     <article class="service" data-service="youtube"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">Y</span><div><h3>YouTube</h3><div class="service-scope">Сайт, видео, QUIC</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
-    <article class="service" data-service="telegram"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">T</span><div><h3>Telegram</h3><div class="service-scope">Сайт, CDN и MTProto · звонки только через VPN</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button><button class="mode" data-mode="ws" title="MTProto через WebSocket-ретранслятор на роутере (как Telegram Web)">WS</button><button class="mode" data-mode="unmanaged" title="Убрать правила проекта; Telegram идёт по вашим правилам XKeen">Выкл</button></div></article>
+    <article class="service" data-service="telegram"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">T</span><div><h3>Telegram</h3><div class="service-scope">Сайт, CDN и MTProto · звонки только через VPN</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="vpn">VPN</button><button class="mode" data-mode="ws" title="MTProto через WebSocket-ретранслятор на роутере (как Telegram Web)">WS</button><button class="mode" data-mode="unmanaged" title="Убрать правила проекта; Telegram идёт по вашим правилам XKeen">Выкл</button></div></article>
   </div><div class="legend"><div><b>Direct</b>Напрямую через WAN, без nfqws2.</div><div><b>Zapret</b>Через WAN с обработкой nfqws2.</div><div><b>VPN</b>Через существующий VLESS outbound Xray.</div></div><div class="warning">Смена маршрута выполняет полный транзакционный apply и перезапускает службы, включая Xkeen.</div><div id="routeProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="routeStage">Подготовка</b><span id="routePercent">0%</span></div><div class="bar"><span id="routeBar"></span></div></div></section>
   <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-check"/></svg><h2>Проверка после применения</h2></div><div id="postApplyStatus" class="hint">После переключения здесь появится краткий статус служб и конфигов.</div></div><button id="openDiagnostics" class="clear">Открыть диагностику</button></div></section>
   <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-history"/></svg><h2>История и откат</h2></div><div class="hint">Для каждой смены сохраняются режимы, результат и pre-apply snapshot.</div></div><button id="refreshHistory" class="clear">Обновить</button></div><div id="history" class="history-list"><div class="empty">История пуста.</div></div></section>
@@ -320,7 +321,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
     <div class="section-head"><svg class="i"><use href="#i-spark"/></svg><h2>Автоподбор стратегий</h2></div>
     <p class="hint">Актуальные general*.bat временно проверяются на роутере. Меняется только проверяемый профиль; остальные TCP/QUIC/UDP-профили сохраняются. Для TCP выполняются baseline и два прохода кандидата с проверкой API/CDN. Voice требует подтверждения звука.</p>
     <div class="tuner-grid">
-      <div class="field"><label for="tunerService">Сервис</label><select id="tunerService"><option value="youtube">YouTube</option><option value="discord-tcp">Discord TCP</option><option value="discord-voice">Discord Voice</option><option value="telegram">Telegram</option></select></div>
+      <div class="field"><label for="tunerService">Сервис</label><select id="tunerService"><option value="youtube">YouTube</option><option value="discord-tcp">Discord TCP</option><option value="discord-voice">Discord Voice</option></select></div>
       <div class="field"><label for="tunerSource">BAT-файл Flowseal</label><select id="tunerSource"><option value="">Все файлы и встроенный профиль</option></select><div id="tunerSourceHint" class="field-hint">Выберите файл, чтобы проверить только его конфиг. Список появится после «Проверить обновление».</div></div>
       <div class="field"><label for="tunerMix">Глубина перебора</label><select id="tunerMix"><option value="safe">Safe — по одному параметру</option><option value="extended">Extended — плюс сочетания</option><option value="off">Только прямой перевод BAT</option></select></div>
       <div class="field"><label for="tunerMax">Максимум кандидатов</label><input id="tunerMax" type="number" min="1" max="64" value="32"></div>
@@ -414,7 +415,6 @@ function updateVoiceHint(){const mode=document.getElementById("tunerVoiceCheck")
 async function refreshVoiceEndpoint(){const select=document.getElementById("tunerVoiceCheck"),probe=select.querySelector('option[value="probe"]');try{const d=await api("/api/tuner/voice-endpoint");voiceEndpoint=d.endpoint||null}catch(e){voiceEndpoint=null}probe.disabled=!voiceEndpoint;if(probe.disabled&&select.value==="probe")select.value="traffic";updateVoiceHint()}
 function tunerControls(active){tunerRunning=active;document.getElementById("startTuner").disabled=active;document.getElementById("cancelTuner").disabled=!active;document.querySelectorAll("[data-action],.mode").forEach(b=>b.disabled=active)}
 function tunerStateLabel(state){return ({idle:"Задание не запускалось",preparing:"Получение и разбор стратегий…",running:"Проверка кандидатов…",voice_window:"Окно проверки Discord Voice…",voice_watch:"Слежу за голосовым трафиком Discord…",awaiting_voice:"Ожидается ваш ответ",cancelling:"Остановка и восстановление nfqws2…",found:"Найден проходной профиль",none:"Проходной профиль не найден",cancelled:"Подбор остановлен, nfqws2 восстановлен",error:"Ошибка подбора"})[state]||state}
-function telegramSummary(d){const parts=[];const raw=(d.telegram_mtproto||{}).raw;if(raw){const ok=Object.values(raw).filter(v=>v==="ok").length;parts.push("Без nfqws2 MTProto ответили "+ok+" из 5 дата-центров"+(d.telegram_raw==="pass"?": MTProto у провайдера не блокируется.":"."))}const m=d.last_mtproto_result;if(m)parts.push("Кандидат "+m.candidate+": MTProto ответили "+m.answered+" из 5.");parts.push("Победитель должен дважды пройти HTTPS к сайтам Telegram (2 из 3) и MTProto-рукопожатие хотя бы с двумя дата-центрами. Звонки не проверяются.");if(d.status==="none"&&raw&&!Object.values(raw).includes("ok"))parts.push("Ни один дата-центр не ответил даже без nfqws2: проверьте сеть роутера.");return parts.join(" ")}
 const voiceTrafficText={connected:"голос подключился и держится",attempts:"Discord пытается подключиться, но соединение не держится",established:"голос уже подключён — новых попыток нет",idle:"голосового трафика нет — зайдите в голосовой канал",unavailable:"диагностика недоступна"};
 function voiceSummary(d){const parts=[];if(d.voice_traffic_baseline)parts.push("Проверка по трафику. Текущий профиль: "+(voiceTrafficText[d.voice_traffic_baseline]||d.voice_traffic_baseline)+".");if(d.voice_traffic_baseline==="established"||d.voice_traffic_baseline==="connected")parts.push("Голос уже работает с текущим профилем: подбор не нужен, либо выйдите из канала и зайдите снова.");const t=d.last_voice_traffic;if(t&&t.candidate>0)parts.push("Кандидат "+t.candidate+": "+(voiceTrafficText[t.state]||t.state)+".");if(d.voice_auto_mode==="auto")parts.push("Автопроверка: без обхода сервер не отвечает, кандидаты оцениваются пакетом с роутера.");else if(d.voice_auto_mode==="manual")parts.push("Автопроверка невозможна: сохранённый голосовой сервер отвечает даже без обхода (провайдер не блокирует пробный пакет), поэтому пакетом с роутера рабочую стратегию не отличить — каждый кандидат проверяется вручную.");if(d.last_voice_auto)parts.push("Кандидат "+d.last_voice_auto.candidate+": "+(d.last_voice_auto.result==="pass"?"сервер ответил":"нет ответа")+".");if(d.voice_unconfirmed)parts.push("Звук не подтверждён: перед применением проверьте голос вручную.");const active=(d.voice_calibration||{}).active;if(d.status==="none"&&d.voice_auto_mode==="auto"&&!(active&&active.valid>0))parts.push("Сохранённый голосовой сервер не ответил ни с одной стратегией, в том числе с текущей: адрес мог устареть. Повторите подбор без автопроверки.");parts.push(d.voice_auto_mode==="auto"?"Найденный профиль подтверждается звуком в конце.":"Voice: требуется подтверждение звука; UDP-пакеты сами по себе не доказывают качество голоса.");return parts.join(" ")}
 function renderTuner(d){
@@ -423,7 +423,7 @@ function renderTuner(d){
   document.getElementById("tunerCommit").textContent=[d.source_file||"",d.commit?d.commit.slice(0,12):""].filter(Boolean).join(" · ");
   document.getElementById("tunerProgress").textContent=d.candidate_count?("кандидат "+(d.current_candidate||0)+" из "+d.candidate_count):"—";
   const probe=d.last_probe_detail;document.getElementById("tunerProbe").textContent=probe?([probe.phase,"проход "+probe.round,probe.role,probe.http_code,probe.status,probe.seconds+" с",probe.bytes+" B"].join(" · ")):"";
-  const base=d.baseline_result,suite=d.last_suite_result;document.getElementById("tunerVerification").textContent=(base?"Исходный профиль: "+base.verdict+" ("+base.successes+"/"+base.total+"). ":"")+(suite?"Кандидат "+suite.candidate+": "+suite.phase+" · "+suite.verdict+". ":"")+(d.service==="discord-voice"?voiceSummary(d):d.service==="telegram"?telegramSummary(d):"Победитель должен пройти два HTTP-прохода. QUIC и воспроизведение видео не подтверждаются.");
+  const base=d.baseline_result,suite=d.last_suite_result;document.getElementById("tunerVerification").textContent=(base?"Исходный профиль: "+base.verdict+" ("+base.successes+"/"+base.total+"). ":"")+(suite?"Кандидат "+suite.candidate+": "+suite.phase+" · "+suite.verdict+". ":"")+(d.service==="discord-voice"?voiceSummary(d):"Победитель должен пройти два HTTP-прохода. QUIC и воспроизведение видео не подтверждаются.");
   document.getElementById("tunerLog").textContent=(d.log_tail||[]).join("\n");
   document.getElementById("voiceVerdict").classList.toggle("visible",state==="awaiting_voice");
   const found=d.found;document.getElementById("tunerFound").classList.toggle("visible",state==="found"&&!!found);
@@ -559,35 +559,6 @@ def voice_ports_allowed(value):
     return bool(value)
 
 
-TELEGRAM_TLS_PART = {
-    "--filter-tcp=443",
-    "--filter-l7=tls",
-    "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list",
-    "--payload=tls_client_hello",
-}
-TELEGRAM_MTPROTO_PART = {
-    "--filter-tcp=80,443,5222",
-    "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list",
-    "--filter-l7=mtproto",
-    "--payload=mtproto_initial",
-}
-
-
-def validate_telegram_args(args):
-    """Two profiles: TLS for the Telegram domains, then MTProto for its DCs."""
-    if args.count("--new") != 1:
-        raise ValueError("Telegram профиль должен состоять из двух частей")
-    split = args.index("--new")
-    for part, required in ((args[:split], TELEGRAM_TLS_PART), (args[split + 1:], TELEGRAM_MTPROTO_PART)):
-        selectors = {
-            token for token in part
-            if token.split("=", 1)[0] in {"--filter-tcp", "--filter-udp", "--filter-l7",
-                                          "--hostlist", "--ipset", "--payload"}
-        }
-        if selectors != required:
-            raise ValueError("Telegram профиль выходит за свои списки и порты")
-
-
 def validate_candidate(candidate, report):
     if not isinstance(candidate, dict):
         raise ValueError("в отчёте нет найденного кандидата")
@@ -624,8 +595,6 @@ def validate_candidate(candidate, report):
             raise ValueError(f"неподдерживаемая опция: --{name}")
         if name == "lua-desync" and value.split(":", 1)[0] not in SAFE_LUA:
             raise ValueError("неподдерживаемая Lua-стратегия")
-        if name == "ipset" and service != "telegram":
-            raise ValueError("ipset допустим только в профиле Telegram")
 
     def values(prefix):
         return [token[len(prefix):] for token in args if token.startswith(prefix)]
@@ -667,8 +636,6 @@ def validate_candidate(candidate, report):
             raise ValueError("лишний hostlist Discord TCP")
         if any("youtube" in token or "discord_udp" in token for token in args):
             raise ValueError("Discord TCP профиль пересекается с другим семейством")
-    elif service == "telegram":
-        validate_telegram_args(args)
     else:
         udp = values("--filter-udp=")
         lua = values("--lua-desync=")
@@ -1188,8 +1155,13 @@ def config_health():
         rule for rule in rules
         if isinstance(rule, dict) and str(rule.get("ruleTag", "")).startswith("kdn-telegram")
     ]
+    detail = f"route={telegram}, rules={len(telegram_rules)}, nfqws={'on' if telegram_profile else 'off'}"
     if telegram == "unmanaged":
         telegram_ok = not telegram_rules and not telegram_profile
+    elif telegram == "zapret":
+        # Recorded by an older apply or an old snapshot; the mode no longer exists.
+        telegram_ok = False
+        detail = "route=zapret (режим удалён, выберите другой)"
     elif telegram == "ws":
         # Four rules: domains, sniffed TLS/HTTP and UDP direct; MTProto to the relay.
         outbounds = sorted(str(rule.get("outboundTag")) for rule in telegram_rules)
@@ -1202,9 +1174,9 @@ def config_health():
         )
         add("Telegram WS relay", relay_running, "работает" if relay_running else "не запущен")
     else:
-        expected_outbound = "telegram-direct" if telegram != "vless" else None
+        expected_outbound = "telegram-direct" if telegram == "direct" else None
         telegram_ok = (
-            telegram in ROUTE_VALUES
+            telegram in {"direct", "vless"}
             and len(telegram_rules) == 2
             and all(
                 (rule.get("outboundTag") == expected_outbound)
@@ -1212,13 +1184,9 @@ def config_health():
                 else rule.get("outboundTag") != "telegram-direct"
                 for rule in telegram_rules
             )
-            and telegram_profile == (telegram == "zapret")
+            and not telegram_profile
         )
-    add(
-        "Telegram route",
-        telegram_ok,
-        f"route={telegram}, rules={len(telegram_rules)}, nfqws={'on' if telegram_profile else 'off'}",
-    )
+    add("Telegram route", telegram_ok, detail)
     return {"ok": True, "routes": routes, "checks": checks, "all_ok": all(item["ok"] for item in checks)}
 
 
@@ -1369,7 +1337,9 @@ def validate_route(service, mode):
         raise ValueError("неподдерживаемый сервис")
     allowed = {"direct", "zapret", "vpn"}
     if service == "telegram":
-        allowed = allowed | {"ws", "unmanaged"}
+        if mode == "zapret":
+            raise ValueError("режим Zapret для Telegram удалён: выберите Direct, VPN, WS или Выкл")
+        allowed = {"direct", "vpn", "ws", "unmanaged"}
     if mode not in allowed:
         raise ValueError("неподдерживаемый маршрут")
     return service, mode

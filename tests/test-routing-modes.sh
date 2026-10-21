@@ -398,15 +398,7 @@ assert_mode() {
     [ ! -s "$ROOT/opt/etc/nfqws2/lists/user.list" ]
     expected_tcp_ports="443"
   fi
-  # NFQWS_ARGS keeps the Discord ports; Telegram MTProto adds 80 and 5222
-  # to the netfilter list only.
   grep -Fq "NFQWS_ARGS=\"--filter-tcp=$expected_tcp_ports " "$nfqws_file"
-  if [ "$expected_telegram" = "zapret" ]; then
-    case "$expected_tcp_ports" in
-      80,*) expected_tcp_ports="$expected_tcp_ports,5222" ;;
-      *) expected_tcp_ports="80,$expected_tcp_ports,5222" ;;
-    esac
-  fi
   grep -Fqx "TCP_PORTS=$expected_tcp_ports" "$nfqws_file"
 
   if [ "$expected_voice" = "zapret" ]; then
@@ -532,10 +524,9 @@ EOF
 }
 
 assert_telegram() {
-  # Lists are always installed; they are inert without the profile.
+  # The list is always installed; it is inert without the profile.
   [ "$(ls -l "$ROOT/opt/etc/nfqws2/lists/kdn-telegram.list" | awk '{print $1}')" = "-rw-r--r--" ]
   cmp -s "$ROOT/opt/etc/nfqws2/lists/kdn-telegram.list" "$SCRIPT_DIR/config/telegram-user.list"
-  cmp -s "$ROOT/opt/etc/nfqws2/lists/kdn-telegram-ip.list" "$SCRIPT_DIR/config/telegram-ip.list"
 
   # The user's own Telegram rule (fixture) is never touched.
   jq -e '
@@ -571,7 +562,7 @@ assert_telegram() {
       python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 3).close()' \
         "$KD_TEST_TELEGRAM_WS_PORT"
       ;;
-    direct|zapret)
+    direct)
       jq -e '
         [.routing.rules[]? | select(((.ruleTag? // "") | tostring | startswith("kdn-telegram")))] as $rules
         | ($rules | map(.outboundTag)) == ["telegram-direct", "telegram-direct"]
@@ -593,18 +584,15 @@ assert_telegram() {
       echo "ERROR: MTProto profile active although MTProto goes through the WS relay" >&2
       exit 1
     fi
-  elif [ "$1" = "zapret" ]; then
-    grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list' "$nfqws_file"
-    grep -Fq -- '--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list' "$nfqws_file"
-    grep -Fq -- '--filter-l7=mtproto' "$nfqws_file"
-    grep -Fq -- '--payload=mtproto_initial' "$nfqws_file"
     # Telegram registers its own TLS blob and uses only that name.
     grep -Fq -- '--blob=telegram_tls:@/opt/etc/nfqws2/blobs/tls_clienthello.bin' "$nfqws_file"
-    grep -Fq -- '--lua-desync=fake:blob=telegram_tls:repeats=6' "$nfqws_file"
   elif grep -Fq -- 'telegram' "$nfqws_file"; then
     echo "ERROR: Telegram profile present with Telegram=$1" >&2
     exit 1
   fi
+
+  # The MTProto ipset belonged to the removed Telegram Zapret route.
+  [ ! -e "$ROOT/opt/etc/nfqws2/lists/kdn-telegram-ip.list" ]
 
   # A restrictive port_proxying.lst gets 5222 for managed Telegram only.
   if grep -qx '# BEGIN keenetic-discord-nfqws2' "$ROOT/opt/etc/xkeen/port_proxying.lst"; then
@@ -763,78 +751,70 @@ jq '.routing.rules = [
       {"type":"field","ruleTag":"kdn-telegram","outboundTag":"direct","ip":["ext:geoip_v2fly.dat:telegram"]}
     ] + .routing.rules' "$routing_file" > "$routing_file.tmp"
 mv "$routing_file.tmp" "$routing_file"
-run_service_tool telegram zapret --yes-router --core xray >/dev/null
-assert_mode zapret zapret vless zapret
+# Telegram has no Zapret route.
+if run_service_tool telegram zapret --yes-router --core xray >/dev/null 2>&1 ||
+   run_tool --apply --yes-router --core xray --telegram-route zapret >/dev/null 2>&1; then
+  echo "ERROR: the removed Telegram Zapret route was accepted" >&2
+  exit 1
+fi
+run_service_tool telegram direct --yes-router --core xray >/dev/null
+assert_mode zapret zapret vless direct
 
-# A Telegram profile found by the autotuner replaces the built-in one; it
-# must keep its two parts (TLS by kdn-telegram.list, MTProto by the ipset).
+# Imported profiles: Telegram has none, and --ipset is refused everywhere.
 make_telegram_stage() {
   printf '%s\n' "$@" > "$ROOT/opt/tmp/telegram-args"
   telegram_id="$(
-    { printf '%s\n' telegram "fixture BAT.bat" "fixture telegram"; cat "$ROOT/opt/tmp/telegram-args"; } |
+    { printf '%s\n' "$1" "fixture BAT.bat" "fixture"; tail -n +2 "$ROOT/opt/tmp/telegram-args"; } |
       awk 'NR == 1 { text=$0; next } { text=text "\n" $0 } END { printf "%s", text }' |
       sha256sum | cut -c1-12
   )"
-  jq -n --arg id "$telegram_id" --rawfile args "$ROOT/opt/tmp/telegram-args" '{
-    format: 1, service: "telegram", candidate_id: $id,
+  jq -n --arg id "$telegram_id" --arg service "$1" --rawfile args "$ROOT/opt/tmp/telegram-args" '{
+    format: 1, service: $service, candidate_id: $id,
     source_name: "fixture BAT.bat", source_sha: "s", source_url: "https://example.invalid/t",
-    family: "fixture telegram", args: ($args | split("\n") | map(select(length > 0))),
+    family: "fixture", args: ($args | split("\n") | map(select(length > 0)) | .[1:]),
     notes: [], rank: 5, report: {}
   }' > "$ROOT/opt/tmp/telegram-profile.json"
 }
-make_telegram_stage \
-  --filter-tcp=443 --filter-l7=tls --hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list \
-  --out-range=-d10 --payload=tls_client_hello --lua-desync=fake:blob=telegram_tls:repeats=3 \
-  --new \
-  --filter-tcp=80,443,5222 --ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list \
-  --filter-l7=mtproto --out-range=-d10 --payload=mtproto_initial --lua-desync=multisplit:pos=2
-run_tool --apply-import-profile "$ROOT/opt/tmp/telegram-profile.json" --yes-router >/dev/null
-grep -Fq -- '--lua-desync=fake:blob=telegram_tls:repeats=3' "$nfqws_file"
-grep -Fq -- '--lua-desync=multisplit:pos=2' "$nfqws_file"
-if grep -Fq -- '--lua-desync=fake:blob=telegram_tls:repeats=6' "$nfqws_file"; then
-  echo "ERROR: built-in Telegram profile remains next to the imported one" >&2
-  exit 1
-fi
-sh -n "$nfqws_file"
-# The import survives an unrelated route switch.
-run_service_tool youtube direct --yes-router --core xray >/dev/null
-grep -Fq -- '--lua-desync=fake:blob=telegram_tls:repeats=3' "$nfqws_file"
-run_service_tool youtube vpn --yes-router --core xray >/dev/null
-# A profile that leaves its lists or crosses into Discord is refused.
 before_bad="$(sha256sum "$nfqws_file" | awk '{print $1}')"
-make_telegram_stage \
-  --filter-tcp=443 --filter-l7=tls --hostlist=/opt/etc/nfqws2/lists/user.list \
-  --payload=tls_client_hello --lua-desync=fake:blob=telegram_tls:repeats=3 \
-  --new \
-  --filter-tcp=80,443,5222 --ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list \
-  --filter-l7=mtproto --payload=mtproto_initial --lua-desync=multisplit:pos=2
+make_telegram_stage telegram \
+  --filter-tcp=443 --filter-l7=tls --hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list \
+  --out-range=-d10 --payload=tls_client_hello --lua-desync=fake:blob=telegram_tls:repeats=3
 if run_tool --apply-import-profile "$ROOT/opt/tmp/telegram-profile.json" --yes-router >/dev/null 2>&1; then
-  echo "ERROR: a Telegram profile with the Discord hostlist was imported" >&2
+  echo "ERROR: a Telegram profile was imported" >&2
   exit 1
 fi
-make_telegram_stage --filter-tcp=443 --ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list \
+make_telegram_stage discord-tcp --filter-tcp=443 --ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list \
   --filter-l7=tls --hostlist=/opt/etc/nfqws2/lists/user.list --payload=tls_client_hello
-jq '.service = "discord-tcp"' "$ROOT/opt/tmp/telegram-profile.json" > "$ROOT/opt/tmp/tcp-ipset.json"
-if run_tool --apply-import-profile "$ROOT/opt/tmp/tcp-ipset.json" --yes-router >/dev/null 2>&1; then
-  echo "ERROR: --ipset was accepted outside a Telegram profile" >&2
+if run_tool --apply-import-profile "$ROOT/opt/tmp/telegram-profile.json" --yes-router >/dev/null 2>&1; then
+  echo "ERROR: --ipset was accepted in an imported profile" >&2
+  exit 1
+fi
+if run_tool --clear-imported-profile telegram --yes-router >/dev/null 2>&1; then
+  echo "ERROR: --clear-imported-profile accepted telegram" >&2
   exit 1
 fi
 [ "$(sha256sum "$nfqws_file" | awk '{print $1}')" = "$before_bad" ]
-run_tool --clear-imported-profile telegram --yes-router >/dev/null
-[ ! -e "$ROOT/opt/etc/nfqws2/imported-profiles/telegram.json" ]
-assert_mode zapret zapret vless zapret
+
+# A router upgraded from the Telegram Zapret route: the recorded zapret
+# becomes direct on the next apply, and its leftovers are removed.
+sed -i 's/Telegram=direct\./Telegram=zapret./' "$nfqws_file"
+printf '149.154.160.0/20\n' > "$ROOT/opt/etc/nfqws2/lists/kdn-telegram-ip.list"
+mkdir -p "$ROOT/opt/etc/nfqws2/imported-profiles"
+printf '{}\n' > "$ROOT/opt/etc/nfqws2/imported-profiles/telegram.json"
+run_tool --status | grep -Fqx 'telegram_route=zapret'
 run_service_tool youtube direct --yes-router --core xray >/dev/null
-assert_mode zapret zapret direct zapret
+assert_mode zapret zapret direct direct
+[ ! -e "$ROOT/opt/etc/nfqws2/imported-profiles/telegram.json" ]
 run_service_tool discord-tcp vpn --yes-router --core xray >/dev/null
-assert_mode vless zapret direct zapret
+assert_mode vless zapret direct direct
 run_service_tool telegram ws --yes-router --core xray >/dev/null
 assert_mode vless zapret direct ws
 relay_pid="$(cat "$ROOT/opt/var/run/kdn-telegram-ws.pid")"
 # Rollback: the relay is not in snapshots and follows the restored route.
 run_tool --rollback-latest --yes-router >/dev/null
-assert_mode vless zapret direct zapret
+assert_mode vless zapret direct direct
 if kill -0 "$relay_pid" 2>/dev/null; then
-  echo "ERROR: the WS relay still runs after rolling back to Telegram=zapret" >&2
+  echo "ERROR: the WS relay still runs after rolling back to Telegram=direct" >&2
   exit 1
 fi
 run_service_tool telegram ws --yes-router --core xray >/dev/null

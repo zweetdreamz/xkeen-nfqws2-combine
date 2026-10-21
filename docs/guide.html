@@ -183,7 +183,7 @@
       <div class="service"><span class="badge" style="background:#5865f2">D</span><div><b>Discord TCP</b><span>Домены Discord: сайт, API, CDN, QUIC</span></div></div>
       <div class="service"><span class="badge" style="background:#3ba55d">V</span><div><b>Discord Voice</b><span>Голос и STUN по UDP-портам</span></div></div>
       <div class="service"><span class="badge" style="background:#ff2d2d">Y</span><div><b>YouTube</b><span>Сайт, видео, QUIC</span></div></div>
-      <div class="service"><span class="badge" style="background:#229ed9">T</span><div><b>Telegram</b><span>Сайт, CDN, MTProto. По умолчанию не управляется</span></div></div>
+      <div class="service"><span class="badge" style="background:#229ed9">T</span><div><b>Telegram</b><span>Сайт, CDN, MTProto: напрямую, через WS-ретранслятор или VPN (без zapret). По умолчанию не управляется</span></div></div>
     </div>
 
     <h3>Переключить один сервис</h3>
@@ -193,7 +193,7 @@ sh set-service-route.sh discord-tcp   zapret --core auto --wan-interface eth3 --
 sh set-service-route.sh discord-voice direct --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh discord       vpn    --core auto --wan-interface eth3 --yes-router
 sh set-service-route.sh youtube       zapret --core auto --wan-interface eth3 --yes-router
-sh set-service-route.sh telegram      zapret --core auto --wan-interface eth3 --yes-router</code></pre></div>
+sh set-service-route.sh telegram      ws     --core xray --wan-interface eth3 --yes-router</code></pre></div>
     <p><code>discord</code> переключает Discord TCP и Voice вместе. Режимы
       остальных сервисов читаются из текущего состояния и сохраняются.
       Telegram включается явно; <code>telegram unmanaged</code> убирает его

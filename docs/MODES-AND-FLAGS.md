@@ -10,8 +10,8 @@ LAN → XKeen/Xray → VLESS
 ```
 
 Discord TCP, Discord Voice, YouTube и Telegram переключаются независимо
-между `direct`, `zapret` и `vless`; у Telegram есть ещё `unmanaged`
-(по умолчанию). Скрипт не должен без отдельного
+между `direct`, `zapret` и `vless`; у Telegram вместо `zapret` есть `ws`
+и ещё `unmanaged` (по умолчанию). Скрипт не должен без отдельного
 решения пользователя менять DNS, `proxy_router`, DSCP, IPv6 XKeen, общие
 policy marks или hardware offload.
 
@@ -99,7 +99,7 @@ sh set-service-route.sh youtube vpn    --core auto --wan-interface eth3 --yes-ro
 | Discord TCP | доменное правило `ext:geosite_v2fly.dat:discord` | hostlist `user.list`, `NFQWS_ARGS`, `TCP_PORTS` |
 | Discord Voice | правило UDP-портов Voice/STUN | `NFQWS_ARGS_UDP`, `UDP_PORTS`, blob `discord_udp` |
 | YouTube | доменные правила YouTube | `youtube.list` в `NFQWS_ARGS_CUSTOM` |
-| Telegram | правила `ruleTag: kdn-telegram` (домены и IP v2fly) | `kdn-telegram.list` и `kdn-telegram-ip.list` в `NFQWS_ARGS_CUSTOM` |
+| Telegram | правила с `ruleTag` `kdn-telegram-*` (домены и IP v2fly) | в `ws`: `kdn-telegram.list` в `NFQWS_ARGS_CUSTOM` |
 
 | Режим | Core route | nfqws2 сервиса |
 |---|---|---|
@@ -124,7 +124,7 @@ Wrapper сначала читает `--status` и сохраняет режим�
 --discord-voice-route direct|zapret|vless
 --discord-route direct|zapret|vless      сокращение: оба маршрута Discord
 --youtube-route direct|zapret|vless
---telegram-route direct|zapret|vless|ws|unmanaged без флага: записанный маршрут
+--telegram-route direct|vless|ws|unmanaged без флага: записанный маршрут
 --proxy-outbound TAG
 ```
 
