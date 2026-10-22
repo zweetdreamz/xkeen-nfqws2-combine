@@ -236,11 +236,12 @@ class FoolingTests(unittest.TestCase):
         self.assertEqual(
             params,
             [
-                "tcp_ts_up",
+                "tcp_ts=-600000",
                 "tcp_md5",
                 "badsum",
                 "tcp_flags_unset=ack",
                 "tcp_seq=-10000",
+                "tcp_ack=-66000",
             ],
         )
         self.assertEqual(
@@ -256,10 +257,58 @@ class FoolingTests(unittest.TestCase):
             ("dpi-desync-fooling", "badseq"),
             ("dpi-desync-badseq-increment", "-5"),
         )
-        self.assertEqual(TUNER.fooling_params(explicit), (["tcp_seq=-5"], []))
+        self.assertEqual(TUNER.fooling_params(explicit), (["tcp_seq=-5", "tcp_ack=-66000"], []))
         default = make_profile(("dpi-desync-fooling", "badseq"))
-        self.assertEqual(TUNER.fooling_params(default), (["tcp_seq=-10000"], []))
+        self.assertEqual(TUNER.fooling_params(default), (["tcp_seq=-10000", "tcp_ack=-66000"], []))
         self.assertEqual(TUNER.fooling_params(make_profile()), ([], []))
+        badack = make_profile(
+            ("dpi-desync-fooling", "badseq"),
+            ("dpi-desync-badack-increment", "-1"),
+        )
+        self.assertEqual(TUNER.fooling_params(badack), (["tcp_seq=-10000", "tcp_ack=-1"], []))
+        invalid = make_profile(
+            ("dpi-desync-fooling", "badseq"),
+            ("dpi-desync-badack-increment", "x"),
+        )
+        self.assertEqual(
+            TUNER.fooling_params(invalid),
+            (["tcp_seq=-10000", "tcp_ack=-66000"], ["invalid badack increment replaced with -66000"]),
+        )
+
+    def test_ts_is_a_timestamp_fooling_not_tcp_ts_up(self):
+        params, notes = TUNER.fooling_params(make_profile(("dpi-desync-fooling", "ts")))
+        self.assertEqual(params, ["tcp_ts=-600000"])
+        self.assertEqual(notes, [TUNER.TS_FOOLING_ONLY_NOTE])
+        params, notes = TUNER.fooling_params(make_profile(("dpi-desync-fooling", "ts,md5sig")))
+        self.assertEqual(params, ["tcp_ts=-600000", "tcp_md5"])
+        self.assertEqual(notes, [])
+
+    def test_fooling_is_applied_to_fakes_only(self):
+        profile = make_profile(
+            ("dpi-desync", "fake,multisplit"),
+            ("dpi-desync-fooling", "badseq"),
+        )
+        candidate = TUNER.translate_tls_profile(profile, "discord-tcp")
+        self.assertEqual(
+            candidate.args[-2:],
+            (
+                "--lua-desync=fake:blob=fake_default_tls:tcp_seq=-10000:tcp_ack=-66000",
+                "--lua-desync=multisplit:pos=midsld",
+            ),
+        )
+        split_only = make_profile(("dpi-desync", "multidisorder"), ("dpi-desync-fooling", "ts"))
+        candidate = TUNER.translate_tls_profile(split_only, "discord-tcp")
+        self.assertEqual(candidate.args[-1], "--lua-desync=multidisorder:pos=midsld")
+        self.assertEqual(candidate.notes, ("BAT fooling not applied: the profile sends no fakes",))
+
+    def test_tls_mod_is_not_added_to_hex_fakes(self):
+        profile = make_profile(
+            ("dpi-desync", "fake"),
+            ("dpi-desync-fake-tls", "0x00000000"),
+            ("dpi-desync-fake-tls-mod", "rnd,dupsid,sni=www.google.com"),
+        )
+        candidate = TUNER.translate_tls_profile(profile, "youtube")
+        self.assertEqual(candidate.args[-1], "--lua-desync=fake:blob=0x00000000")
 
     def test_lua_function_drops_empty_params(self):
         self.assertEqual(
@@ -329,7 +378,7 @@ class TlsTranslationTests(unittest.TestCase):
         candidate = TUNER.translate_tls_profile(profile, "youtube")
         self.assertEqual(
             candidate.args[-1],
-            "--lua-desync=hostfakesplit:host=www.google.com:tcp_ts_up",
+            "--lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000",
         )
         no_host = make_profile(
             ("dpi-desync", "hostfakesplit"),
@@ -450,19 +499,43 @@ class VoiceTranslationTests(unittest.TestCase):
         )
         self.assertEqual(candidate.notes, ())
 
-    def test_youtube_quic_for_source(self):
+    def test_youtube_quic_section_validation(self):
+        self.assertEqual(TUNER.youtube_quic_section(None), TUNER.NATIVE_QUIC)
+        self.assertEqual(TUNER.youtube_quic_section(()), TUNER.NATIVE_QUIC)
+        applied = (*TUNER.NATIVE_QUIC[:-1], "--lua-desync=fake:blob=youtube_quic:repeats=6")
+        self.assertEqual(TUNER.youtube_quic_section(applied), applied)
+        for broken in (
+            TUNER.NATIVE_QUIC[1:],  # no --filter-udp=443
+            (*TUNER.NATIVE_QUIC, "--new"),
+            (*TUNER.NATIVE_QUIC, "--ipset=/x"),
+            (*TUNER.NATIVE_QUIC[:-1], "--lua-desync=circular:fails=2"),
+            (*TUNER.NATIVE_QUIC[:-1], "--lua-desync=fake:blob=x;rm"),
+            TUNER.NATIVE_QUIC[:-1],  # no desync
+            ("--filter-udp=443,50000", *TUNER.NATIVE_QUIC[1:]),
+        ):
+            with self.subTest(broken=broken):
+                self.assertEqual(TUNER.youtube_quic_section(broken), TUNER.NATIVE_QUIC)
+
+    def test_applied_youtube_quic_is_read_from_custom_args(self):
+        custom = (
+            "--filter-tcp=443 --filter-l7=tls --hostlist=/opt/etc/nfqws2/lists/youtube.list "
+            "--lua-desync=fake:blob=tls_clienthello --new "
+            "--filter-udp=443 --filter-l7=quic --hostlist=/opt/etc/nfqws2/lists/youtube.list "
+            "--payload=quic_initial --lua-desync=fake:blob=youtube_quic:repeats=4 --new "
+            "--filter-tcp=443 --hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list"
+        )
         self.assertEqual(
-            TUNER.youtube_quic_for_source([]), ("--new", *TUNER.NATIVE_QUIC)
+            TUNER.applied_youtube_quic(custom),
+            (
+                "--filter-udp=443",
+                "--filter-l7=quic",
+                "--hostlist=/opt/etc/nfqws2/lists/youtube.list",
+                "--payload=quic_initial",
+                "--lua-desync=fake:blob=youtube_quic:repeats=4",
+            ),
         )
-        quic = make_profile(
-            ("filter-udp", "443"),
-            ("dpi-desync-fake-quic", "%BIN%q.bin"),
-            ("dpi-desync-repeats", "abc"),
-        )
-        self.assertEqual(
-            TUNER.youtube_quic_for_source([make_profile(("filter-tcp", "80")), quic])[-1],
-            "--lua-desync=fake:blob=youtube_quic:repeats=6",
-        )
+        self.assertIsNone(TUNER.applied_youtube_quic(""))
+        self.assertIsNone(TUNER.applied_youtube_quic("--filter-tcp=443 --hostlist=/opt/etc/nfqws2/lists/youtube.list"))
 
 
 class CandidateHelperTests(unittest.TestCase):
@@ -638,7 +711,8 @@ class ArgsEditingTests(unittest.TestCase):
         self.assertIsNone(
             TUNER.mutate_tls_recipe(self.ARGS, out_range="-d10", repeats="6")
         )
-        self.assertIsNone(TUNER.mutate_tls_recipe(self.ARGS, quic_repeats="11"))
+        with self.assertRaises(TypeError):
+            TUNER.mutate_tls_recipe(self.ARGS, quic_repeats="11")
         no_split = ("--filter-tcp=443", "--lua-desync=fake:blob=x")
         self.assertIsNone(TUNER.mutate_tls_recipe(no_split, seqovl="5", position="2"))
         changed = TUNER.mutate_tls_recipe(
@@ -648,7 +722,6 @@ class ArgsEditingTests(unittest.TestCase):
             tcp_seq="-10000",
             position="midsld",
             seqovl="5",
-            quic_repeats="3",
         )
         self.assertEqual(
             changed,
@@ -661,7 +734,7 @@ class ArgsEditingTests(unittest.TestCase):
                 "--new",
                 "--filter-udp=443",
                 "--out-range=-d10",
-                "--lua-desync=fake:blob=q:repeats=3",
+                "--lua-desync=fake:blob=q:repeats=11",
             ),
         )
 
@@ -848,6 +921,46 @@ class ProbeEventTests(unittest.TestCase):
         self.assertEqual(len(report["probes"]), 1)
         self.assertEqual(report["suite_results"], [output[2]])
         self.assertEqual(report["voice_observations"], [output[3]])
+        self.assertIsNone(report["raw_baseline"])
+        self.assertIsNone(report["network_discriminates"])
+        self.assertIsNone(report["quic_gate"])
+
+    def test_quic_is_verified_only_for_the_found_candidate_with_the_gate_on(self):
+        output = [
+            "EVENT|SUITE_RESULT|0|raw|1|fail|0|4",
+            "EVENT|RAW_BASELINE|fail|0|4",
+            "EVENT|QUIC|raw|www.youtube.com|1.2.3.4|no-reply|-",
+            "EVENT|QUIC_GATE|on|active-reply",
+            "EVENT|QUIC|candidate-1|www.youtube.com|1.2.3.4|no-reply|-",
+            "EVENT|QUIC_RESULT|1|fail|0|1",
+            "EVENT|QUIC|candidate-2|www.youtube.com|1.2.3.4|ok|20",
+            "EVENT|QUIC_RESULT|2|pass|1|1",
+            "EVENT|PROBE_VOLUME|2|candidate|1|web|200|0|0.02|ok|https://www.youtube.com/",
+        ]
+        report = TUNER.verification_report("youtube", output, 2)
+        self.assertTrue(report["quic_verified"])
+        self.assertFalse(TUNER.verification_report("youtube", output, 1)["quic_verified"])
+        self.assertFalse(TUNER.verification_report("youtube", output)["quic_verified"])
+        self.assertEqual((report["quic_gate"], report["quic_gate_reason"]), ("on", "active-reply"))
+        self.assertEqual(report["raw_baseline"], "fail")
+        self.assertIs(report["network_discriminates"], True)
+        self.assertEqual(
+            report["quic_probes"][-1],
+            {"label": "candidate-2", "host": "www.youtube.com", "ip": "1.2.3.4", "status": "ok", "ms": 20},
+        )
+        self.assertEqual(report["volume_checks"], [output[-1]])
+        gate_off = [line.replace("QUIC_GATE|on|active-reply", "QUIC_GATE|off|no-reply") for line in output]
+        self.assertFalse(TUNER.verification_report("youtube", gate_off, 2)["quic_verified"])
+        raw_pass = TUNER.verification_report("youtube", ["EVENT|RAW_BASELINE|pass|4|4"])
+        self.assertIs(raw_pass["network_discriminates"], False)
+
+    def test_parse_quic_event(self):
+        self.assertEqual(
+            TUNER.parse_quic_event("EVENT|QUIC|raw|h|-|dns-error|-"),
+            {"label": "raw", "host": "h", "ip": "-", "status": "dns-error", "ms": None},
+        )
+        for line in ("EVENT|QUIC|raw|h|ip|ok", "EVENT|QUIC_GATE|on|x|y|z|w", "x"):
+            self.assertIsNone(TUNER.parse_quic_event(line))
 
 
 class RecommendationTests(unittest.TestCase):
@@ -1238,6 +1351,71 @@ class MixedCandidateTests(unittest.TestCase):
                     self.assertIn("--filter-udp=443", quic)
 
 
+class UntestableChangeTests(unittest.TestCase):
+    """B3/B9: candidates never change what the router checks cannot see."""
+
+    APPLIED_QUIC = (
+        "--filter-udp=443",
+        "--filter-l7=quic",
+        "--hostlist=/opt/etc/nfqws2/lists/youtube.list",
+        "--payload=quic_initial",
+        "--lua-desync=fake:blob=youtube_quic:repeats=4",
+    )
+
+    def sources(self):
+        return MixedCandidateTests.sources(self)
+
+    def test_every_youtube_candidate_keeps_the_configured_quic_section(self):
+        for quic, expected in ((None, TUNER.NATIVE_QUIC), (self.APPLIED_QUIC, self.APPLIED_QUIC)):
+            for level in ("off", "safe", "extended"):
+                for builtin in (True, False):
+                    candidates = TUNER.build_candidates(
+                        "youtube", self.sources(), level, include_builtin=builtin, youtube_quic=quic
+                    )
+                    self.assertTrue(candidates)
+                    for candidate in candidates:
+                        with self.subTest(quic=bool(quic), level=level, family=candidate.family):
+                            self.assertEqual(candidate.args.count("--new"), 1)
+                            after = candidate.args[candidate.args.index("--new") + 1:]
+                            self.assertEqual(after, expected)
+
+    def test_no_two_youtube_candidates_differ_only_in_quic(self):
+        candidates = TUNER.build_candidates("youtube", self.sources(), "extended")
+        tcp_sections = [c.args[: c.args.index("--new")] for c in candidates]
+        self.assertEqual(len(tcp_sections), len(set(tcp_sections)))
+
+    def test_invalid_applied_quic_falls_back_to_native(self):
+        broken = (*self.APPLIED_QUIC[:-1], "--lua-desync=circular:fails=2")
+        candidate = TUNER.build_candidates("youtube", [SOURCE], "off", youtube_quic=broken)[0]
+        self.assertEqual(candidate.args[candidate.args.index("--new") + 1:], TUNER.NATIVE_QUIC)
+
+    def test_wide_range_voice_candidates_filter_to_65535_before_the_id(self):
+        narrow = TUNER.build_candidates("discord-voice", [SOURCE], "safe")
+        wide = TUNER.build_candidates("discord-voice", [SOURCE], "safe", voice_range="wide")
+        self.assertEqual(len(narrow), len(wide))
+        for candidate in wide:
+            with self.subTest(family=candidate.family):
+                udp = [t for t in candidate.args if t.startswith("--filter-udp=")]
+                self.assertEqual(len(udp), 1)
+                self.assertIn("50000-65535", udp[0])
+                self.assertNotIn("50100", udp[0])
+                serialized = "\n".join((candidate.service, candidate.source_name, candidate.family, *candidate.args))
+                self.assertEqual(candidate.candidate_id, hashlib.sha256(serialized.encode()).hexdigest()[:12])
+        self.assertEqual(wide[0].args[0], "--filter-udp=443,3478-3481,5349,19294-19344,50000-65535")
+        self.assertFalse({c.candidate_id for c in narrow} & {c.candidate_id for c in wide})
+        bat_only = TUNER.build_candidates("discord-voice", [SOURCE], "off", include_builtin=False, voice_range="wide")
+        self.assertEqual(bat_only[0].args[0], "--filter-udp=19294-19344,50000-65535")
+        self.assertTrue(bat_only[0].pinned)
+        with self.assertRaises(ValueError):
+            TUNER.build_candidates("discord-voice", [SOURCE], "off", voice_range="huge")
+
+    def test_widen_voice_ports(self):
+        self.assertEqual(TUNER.widen_voice_ports("443,50000-50100"), "443,50000-65535")
+        self.assertEqual(TUNER.widen_voice_ports("19294-19344,50050-50100"), "19294-19344,50050-65535")
+        self.assertEqual(TUNER.widen_voice_ports("19294-50100"), "19294-50100")
+        self.assertEqual(TUNER.widen_voice_ports("50000-60000"), "50000-60000")
+
+
 class SourceSelectionTests(unittest.TestCase):
     def test_select_source_is_case_insensitive(self):
         other = TUNER.SourceFile("general (ALT3).bat", SAMPLE, "def456", "u")
@@ -1418,6 +1596,34 @@ class RunRemoteTests(unittest.TestCase):
         )
         self.assertIsNone(found)
         self.assertEqual(process.stdin.write.call_args_list[1].args[0], "no\n")
+
+    def test_runner_status_messages(self):
+        self.args.udp_range = "narrow"
+        (_found, _output), _process, _popen, stdout = self.run_remote([
+            "EVENT|FATAL|project-busy\n",
+            "EVENT|RAW_BASELINE|ip-block|0|3\n",
+            "EVENT|UDP_RANGE|wide\n",
+        ])
+        self.assertIn("Роутер занят", stdout)
+        self.assertIn("блокировка по IP", stdout)
+        self.assertIn("--udp-range wide", stdout)
+        self.args.udp_range = "wide"
+        (_found, _output), _process, _popen, stdout = self.run_remote(["EVENT|UDP_RANGE|wide\n"])
+        self.assertNotIn("--udp-range", stdout)
+
+    def test_ctrl_c_message_does_not_promise_an_exit_trap(self):
+        def interrupted():
+            yield "EVENT|SESSION|youtube|runtime-only\n"
+            raise KeyboardInterrupt
+
+        process = FakeProcess([], 0)
+        process.stdout = interrupted()
+        with mock.patch.object(TUNER.subprocess, "Popen", return_value=process), \
+                contextlib.redirect_stdout(io.StringIO()) as stdout, \
+                self.assertRaises(KeyboardInterrupt):
+            TUNER.run_remote(self.args, "echo runner", self.candidates)
+        self.assertIn("runner на роутере восстановит nfqws2", stdout.getvalue())
+        self.assertNotIn("trap", stdout.getvalue())
 
     def test_errors(self):
         with self.assertRaisesRegex(RuntimeError, "exited with code 5"):

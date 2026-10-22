@@ -3,8 +3,10 @@
 
 The job never edits persistent network configuration and never invokes XKeen.
 It renders the same temporary nfqws2 runner used by the Windows tuner. The
-runner's EXIT trap restores the original nfqws2 service on success, failure,
-cancel, or panel disconnect.
+runner's EXIT/signal/SIGPIPE traps restore the original nfqws2 service on
+success, failure, cancel, or panel disconnect. When the runner has to be
+killed (SIGKILL), the job kills its candidate nfqws2 and restores the service
+itself from the runner's runtime.state.
 """
 
 from __future__ import annotations
@@ -16,10 +18,12 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 
 
@@ -37,6 +41,16 @@ NFQWS_CONF_LOGICAL = "/opt/etc/nfqws2/nfqws2.conf"
 # Discord voice server seen during the last user-confirmed Voice session.
 VOICE_ENDPOINT_LOGICAL = "/opt/etc/xkeen-web/discord-voice-endpoint.json"
 RUNNER_TEMPLATE = WINDOWS_DIR / "router-candidate-runner.sh"
+NFQWS_INIT_LOGICAL = "/opt/etc/init.d/S51nfqws2"
+NFQWS_PIDFILE_LOGICAL = "/opt/var/run/nfqws2.pid"
+# The runner keeps its temporary files (and runtime.state) here.
+RUNNER_TMP_LOGICAL = "/opt/tmp/zapret-tuner.{pid}"
+# Seconds the runner gets after SIGTERM before it is killed. Its traps run
+# only after the current command (a curl of up to --http-timeout seconds).
+try:
+    RUNNER_STOP_TIMEOUT = min(120, max(2, int(os.environ.get("KD_TUNER_RUNNER_STOP_TIMEOUT", "40"))))
+except ValueError:
+    RUNNER_STOP_TIMEOUT = 40
 
 
 class JobCancelled(Exception):
@@ -168,12 +182,50 @@ def parse_active_routes(text: str) -> dict[str, str] | None:
     return None
 
 
-def recorded_route(service: str) -> str:
+def read_nfqws_conf() -> str:
     config = root_path(NFQWS_CONF_LOGICAL)
     try:
-        text = config.read_text(encoding="utf-8", errors="replace")
+        return config.read_text(encoding="utf-8", errors="replace")
     except OSError as error:
         raise RuntimeError(f"cannot read current nfqws2 config: {config}") from error
+
+
+def recorded_udp_settings(text: str) -> tuple[str, str]:
+    """(strategy, range) from "# Discord UDP: strategy=X, range=Y." of nfqws2.conf.
+
+    Configs written before that line existed are inferred like the engine
+    does: wide when UDP_PORTS reaches 65535, flowseal otherwise.
+    """
+    match = re.search(
+        r"^# Discord UDP: strategy=(flowseal|legacy), range=(narrow|wide)\.$",
+        text,
+        re.MULTILINE,
+    )
+    if match:
+        return match.group(1), match.group(2)
+    wide = re.search(r"^UDP_PORTS=.*50000[:-]65535", text, re.MULTILINE)
+    return "flowseal", "wide" if wide else "narrow"
+
+
+def applied_custom_args() -> str:
+    """NFQWS_ARGS_CUSTOM as the package init sees it (the conf is sourced)."""
+    config = root_path(NFQWS_CONF_LOGICAL)
+    try:
+        completed = subprocess.run(
+            ["sh", "-c", '. "$1" >/dev/null 2>&1; printf "%s" "${NFQWS_ARGS_CUSTOM-}"', "sh", str(config)],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return completed.stdout if completed.returncode == 0 else ""
+
+
+def recorded_route(service: str) -> str:
+    text = read_nfqws_conf()
     routes = parse_active_routes(text)
     if routes is None:
         raise RuntimeError("current managed service routes cannot be determined")
@@ -280,7 +332,7 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("source-dir is allowed only in an isolated test root")
 
 
-def voice_endpoint_valid(ip: Any, port: Any) -> bool:
+def voice_endpoint_valid(ip: Any, port: Any, voice_range: str = "narrow") -> bool:
     """A public IPv4 voice server on a port every Voice candidate processes."""
     if not isinstance(ip, str) or isinstance(port, bool) or not isinstance(port, int):
         return False
@@ -288,13 +340,14 @@ def voice_endpoint_valid(ip: Any, port: Any) -> bool:
         address = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    # Candidates filter 19294-19344 and 50000-50100; a server on another
-    # port would never be affected by any candidate.
-    in_range = 19294 <= port <= 19344 or 50000 <= port <= 50100
+    # Candidates filter 19294-19344 and 50000-50100 (50000-65535 in the
+    # wide range); a server on another port would never be affected.
+    high = 65535 if voice_range == "wide" else 50100
+    in_range = 19294 <= port <= 19344 or 50000 <= port <= high
     return address.version == 4 and address.is_global and in_range
 
 
-def load_voice_endpoint() -> dict[str, Any] | None:
+def load_voice_endpoint(voice_range: str = "narrow") -> dict[str, Any] | None:
     path = root_path(VOICE_ENDPOINT_LOGICAL)
     try:
         if path.is_symlink() or path.stat().st_size > 4096:
@@ -302,7 +355,7 @@ def load_voice_endpoint() -> dict[str, Any] | None:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(data, dict) or not voice_endpoint_valid(data.get("ip"), data.get("port")):
+    if not isinstance(data, dict) or not voice_endpoint_valid(data.get("ip"), data.get("port"), voice_range):
         return None
     return data
 
@@ -345,12 +398,22 @@ def available_log_line(available: int, maximum: int, mix_level: str) -> str:
     return line
 
 
+def is_builtin_profile(candidate: tuner.Candidate) -> bool:
+    """The project's own profile, with the router's QUIC section or Voice range."""
+    if candidate.service == "youtube" and "--new" in candidate.args:
+        quic = candidate.args[candidate.args.index("--new") + 1:]
+        known = tuner.known_candidate(candidate.service, [], quic)
+    else:
+        known = tuner.known_candidate(candidate.service, [])
+    return candidate.args in {known.args, tuner.voice_candidate_in_range(known, "wide").args}
+
+
 def candidate_log_line(number: int, candidates: list[tuner.Candidate]) -> str | None:
     """A readable line naming the BAT file(s) of candidate ``number``."""
     if not 1 <= number <= len(candidates):
         return None
     candidate = candidates[number - 1]
-    if candidate.args == tuner.known_candidate(candidate.service, []).args:
+    if is_builtin_profile(candidate):
         # The project's own profile; source_name only names its BAT origin.
         return (
             f"Кандидат {number} из {len(candidates)}: встроенный профиль проекта "
@@ -395,8 +458,35 @@ def make_report(
             "rank": found.rank,
         } if found else None,
         "remote_output": output[-500:],
-        "verification": tuner.verification_report(args.service, output),
+        "verification": tuner.verification_report(args.service, output, found_number(candidates, found)),
     }
+
+
+def found_number(candidates: list[tuner.Candidate], found: tuner.Candidate | None) -> int | None:
+    for number, candidate in enumerate(candidates, 1):
+        if candidate is found:
+            return number
+    return None
+
+
+RAW_BASELINE_LOG = {
+    "pass": (
+        "Без обхода (nfqws2 остановлен) проверки проходят: провайдер не блокирует "
+        "этот сервис с роутера, найденный профиль ничего не доказывает."
+    ),
+    "fail": "Без обхода проверки не проходят: блокировка подтверждена, подбор имеет смысл.",
+    "ip-block": (
+        "Без обхода ни один адрес не принимает TCP-соединение: блокировка по IP. "
+        "Стратегии nfqws2 её не обходят — нужен другой маршрут (VLESS). Подбор остановлен."
+    ),
+    "dns-error": "Без обхода имена не резолвятся (DNS роутера): подбор остановлен.",
+}
+QUIC_GATE_LOG = {
+    ("on", "raw-reply"): "QUIC (UDP 443) отвечает и без обхода: каждый кандидат должен его сохранить.",
+    ("on", "active-reply"): "QUIC отвечает только с текущим профилем: каждый кандидат должен его сохранить.",
+    ("off", "no-reply"): "QUIC с роутера не отвечает ни с профилем, ни без него: QUIC не проверяется.",
+    ("off", "probe-unavailable"): "quic_probe.py недоступен: QUIC не проверяется.",
+}
 
 
 def parse_event(
@@ -428,7 +518,36 @@ def parse_event(
     elif event == "SUITE_RESULT" and len(parts) >= 8:
         result = {"candidate": int(parts[2]), "phase": parts[3], "round": int(parts[4]),
                   "verdict": parts[5], "successes": int(parts[6]), "total": int(parts[7])}
-        writer.write(**({"baseline_result": result} if parts[3] == "baseline" else {"last_suite_result": result}))
+        key = {"baseline": "baseline_result", "raw": "raw_baseline_result"}.get(parts[3], "last_suite_result")
+        writer.write(**{key: result})
+    elif event == "RAW_BASELINE" and len(parts) >= 3:
+        writer.write(raw_baseline=parts[2], network_discriminates={"pass": False, "fail": True}.get(parts[2]))
+        if parts[2] in RAW_BASELINE_LOG:
+            writer.log(RAW_BASELINE_LOG[parts[2]])
+    elif event == "QUIC" and len(parts) >= 7:
+        quic = {"label": parts[2], "host": parts[3], "ip": parts[4], "status": parts[5],
+                "ms": int(parts[6]) if parts[6].isdigit() else None}
+        writer.write(last_quic_probe=quic)
+    elif event == "QUIC_GATE" and len(parts) >= 4:
+        writer.write(quic_gate={"state": parts[2], "reason": parts[3]})
+        if (parts[2], parts[3]) in QUIC_GATE_LOG:
+            writer.log(QUIC_GATE_LOG[(parts[2], parts[3])])
+    elif event == "QUIC_RESULT" and len(parts) >= 6:
+        writer.write(last_quic_result={"candidate": int(parts[2]), "result": parts[3],
+                                       "ok": int(parts[4]), "total": int(parts[5])})
+        if parts[3] == "fail":
+            writer.log(f"Кандидат {parts[2]}: QUIC перестал отвечать — кандидат отклонён.")
+    elif event == "FIREWALL_REASSERT" and len(parts) >= 4 and parts[3] == "restored":
+        writer.write(firewall_reasserted=int(writer.payload.get("firewall_reasserted") or 0) + 1)
+        writer.log(f"Перед кандидатом {parts[2]} правила NFQUEUE пропали (Keenetic перестроил iptables): восстановлены.")
+    elif event == "FIREWALL_LOST" and len(parts) >= 3:
+        writer.log(f"Кандидат {parts[2]}: во время проверки пропали правила NFQUEUE — результат не засчитан.")
+    elif event == "UDP_RANGE" and len(parts) >= 3:
+        writer.write(udp_range_runner=parts[2])
+    elif event == "VOICE_BLOB" and len(parts) >= 4:
+        writer.log("В NFQWS_BASE_ARGS нет blob discord_udp (--udp-strategy legacy): кандидаты получают его временно.")
+    elif event == "FATAL":
+        writer.write(runner_fatal="|".join(parts[2:])[:500])
     elif event == "VOICE_OBSERVATION" and len(parts) >= 5:
         writer.write(voice_observation={"outgoing_packets": int(parts[2]), "incoming_packets": int(parts[3]), "wan_match": parts[4] == "1"})
     elif event == "PROBE" and len(parts) >= 5:
@@ -484,7 +603,7 @@ def parse_event(
         )
     elif event == "VOICE_ENDPOINT" and len(parts) >= 6:
         ip, port = parts[2], int(parts[3])
-        if voice_endpoint_valid(ip, port):
+        if voice_endpoint_valid(ip, port, writer.payload.get("udp_range", "narrow")):
             writer.write(
                 voice_endpoint_observed={
                     "ip": ip,
@@ -536,6 +655,82 @@ def ignore_cancel_signals() -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
+def read_runtime_state(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        if path.is_symlink() or path.stat().st_size > 4096:
+            return values
+        text = path.read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return values
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key.strip()] = value.strip()
+    return values
+
+
+def nfqws_process(pid: int) -> bool:
+    """True for a live process whose command line names nfqws2."""
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return False
+    return b"nfqws2" in cmdline
+
+
+def recover_runner_runtime(writer: StateWriter, runner_pid: int) -> None:
+    """Undo what a dead runner left: its candidate nfqws2 and a stopped service.
+
+    The runner restores nfqws2 from its traps. A SIGKILLed (or OOM-killed)
+    runner cannot: its candidate keeps queue 300 and the official service
+    stays stopped. runtime.state names the candidate and the service state.
+    """
+    runtime_dir = root_path(RUNNER_TMP_LOGICAL.format(pid=runner_pid))
+    state = read_runtime_state(runtime_dir / "runtime.state")
+    if not state or state.get("runner_pid") != str(runner_pid):
+        return
+    candidate = state.get("candidate_pid", "")
+    if candidate.isdigit() and int(candidate) > 1 and nfqws_process(int(candidate)):
+        try:
+            os.kill(int(candidate), signal.SIGTERM)
+            for _ in range(20):
+                if not process_alive(int(candidate)) or not nfqws_process(int(candidate)):
+                    break
+                time.sleep(0.25)
+            else:
+                os.kill(int(candidate), signal.SIGKILL)
+        except OSError:
+            pass
+        writer.log(f"Убит оставшийся кандидат nfqws2 (PID {candidate}).")
+        writer.write(orphan_candidate_killed=int(candidate))
+    if state.get("prepared") == "1":
+        init = root_path(NFQWS_INIT_LOGICAL)
+        restored = "stopped"
+        try:
+            subprocess.run([str(init), "firewall_stop"], stdin=subprocess.DEVNULL,
+                           capture_output=True, check=False, timeout=60)
+            root_path(NFQWS_PIDFILE_LOGICAL).unlink(missing_ok=True)
+            if state.get("was_running") == "1":
+                subprocess.run([str(init), "start"], stdin=subprocess.DEVNULL,
+                               capture_output=True, check=False, timeout=60)
+                restored = "running"
+                for _ in range(15):
+                    if root_path(NFQWS_PIDFILE_LOGICAL).exists():
+                        break
+                    time.sleep(1)
+                else:
+                    restored = ""
+        except (OSError, subprocess.SubprocessError):
+            restored = ""
+        if restored:
+            writer.write(nfqws_restored=restored, restored_by="job")
+            writer.log("nfqws2 восстановлен заданием после принудительной остановки проверки.")
+        else:
+            writer.write(restore_error="job-could-not-restart-nfqws2")
+    shutil.rmtree(runtime_dir, ignore_errors=True)
+
+
 def stop_and_drain_runner(
     writer: StateWriter,
     process: subprocess.Popen[str],
@@ -543,15 +738,19 @@ def stop_and_drain_runner(
 ) -> None:
     if process.poll() is None:
         process.terminate()
+    killed = False
     try:
-        remaining, _ = process.communicate(timeout=40)
+        remaining, _ = process.communicate(timeout=RUNNER_STOP_TIMEOUT)
     except subprocess.TimeoutExpired:
         writer.log("ERROR|runner-did-not-exit-after-SIGTERM")
         process.kill()
+        killed = True
         remaining, _ = process.communicate(timeout=10)
     for line in remaining.splitlines():
         writer.log(line)
         parse_event(writer, line, candidates)
+    if killed:
+        recover_runner_runtime(writer, process.pid)
 
 
 def main() -> int:
@@ -597,6 +796,22 @@ def main() -> int:
             )
         lock = acquire_project_lock()
         writer.write(xkeen_pids_before=xkeen_before, route=route)
+        udp_strategy, udp_range = recorded_udp_settings(read_nfqws_conf())
+        youtube_quic: tuple[str, ...] | None = None
+        if args.service == "discord-voice":
+            writer.write(udp_strategy=udp_strategy, udp_range=udp_range)
+            if udp_range == "wide":
+                writer.log("Диапазон голоса wide: кандидаты Voice фильтруют 50000-65535.")
+        elif args.service == "youtube":
+            applied = tuner.applied_youtube_quic(applied_custom_args())
+            youtube_quic = tuner.youtube_quic_section(applied)
+            origin = "applied" if applied and youtube_quic == applied else "native"
+            writer.write(youtube_quic={"origin": origin, "args": list(youtube_quic)})
+            if applied and origin == "native":
+                writer.log(
+                    "Применённый QUIC-профиль YouTube не проходит проверку импорта: "
+                    "кандидаты используют встроенный QUIC-профиль проекта."
+                )
 
         if args.source_dir:
             sources, commit = tuner.load_local_sources(args.source_dir)
@@ -620,6 +835,8 @@ def main() -> int:
             sources,
             args.mix_level,
             include_builtin=not args.source_file,
+            youtube_quic=youtube_quic,
+            voice_range=udp_range,
         )
         candidates = tuner.select_candidates(available, args.max_candidates, args.search_seed)
         writer.log(available_log_line(len(available), args.max_candidates, args.mix_level))
@@ -636,7 +853,7 @@ def main() -> int:
         template = RUNNER_TEMPLATE.read_text(encoding="utf-8")
         voice_target = ""
         if args.voice_auto:
-            endpoint = load_voice_endpoint()
+            endpoint = load_voice_endpoint(udp_range)
             if endpoint is None:
                 raise RuntimeError(
                     "no learned Discord voice server: run a manual Voice check and answer Yes first"
@@ -661,6 +878,8 @@ def main() -> int:
 
         environment = os.environ.copy()
         environment["TUNER_VERDICT_FILE"] = str(verdict_path)
+        # The job holds the project lock; the runner checks this PID owns it.
+        environment["KD_TUNER_LOCK_HELD"] = str(os.getpid())
         writer.write(status="running", started_utc=utc_now())
         runner_process = subprocess.Popen(
             ["/bin/sh", str(runner_path)],
@@ -686,8 +905,14 @@ def main() -> int:
             if event_found is not None:
                 found = event_found
         return_code = runner_process.wait(timeout=40)
+        # A runner killed from outside (OOM) leaves its candidate running.
+        recover_runner_runtime(writer, runner_process.pid)
         if return_code != 0:
-            raise RuntimeError(f"temporary nfqws2 runner exited with code {return_code}")
+            fatal = writer.payload.get("runner_fatal")
+            raise RuntimeError(
+                f"temporary nfqws2 runner exited with code {return_code}"
+                + (f" (FATAL: {fatal})" if fatal else "")
+            )
         if writer.payload.get("restore_error"):
             raise RuntimeError("nfqws2 restoration failed: " + str(writer.payload["restore_error"]))
 

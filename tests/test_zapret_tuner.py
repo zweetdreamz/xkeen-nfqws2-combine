@@ -53,7 +53,12 @@ class TunerTests(unittest.TestCase):
         joined = " ".join(candidate.args)
         self.assertIn("--lua-desync=fake:blob=tls_clienthello", joined)
         self.assertIn("--lua-desync=multisplit:pos=1:seqovl=681", joined)
-        self.assertIn("tcp_ts_up", joined)
+        # Flowseal "ts" lowers the timestamp of the fakes only.
+        fake = next(token for token in candidate.args if token.startswith("--lua-desync=fake:"))
+        self.assertTrue(fake.endswith(":tcp_ts=-600000"), fake)
+        self.assertNotIn("tcp_ts_up", joined)
+        self.assertNotIn("tcp_ts", next(t for t in candidate.args if "multisplit" in t))
+        self.assertIn(TUNER.TS_FOOLING_ONLY_NOTE, candidate.notes)
         TUNER.validate_args(candidate.args)
 
     def test_tls_mod_keeps_allowlisted_sni(self):
@@ -130,9 +135,8 @@ class TunerTests(unittest.TestCase):
         self.assertTrue(
             any("seqovl=5" in candidate.command_line() for candidate in sweeps)
         )
-        self.assertTrue(
-            any("youtube_quic:repeats=6" in candidate.command_line() for candidate in sweeps)
-        )
+        # QUIC changes are not generated: the checks cannot see them (B3).
+        self.assertFalse(any("QUIC" in candidate.family for candidate in sweeps))
         self.assertLessEqual(len(sweeps), 8)
 
     def test_extended_sweep_is_curated_not_full_cartesian(self):
