@@ -55,6 +55,7 @@ for optional in \
   tools/router/xkeen_control_script.sh \
   tools/router/README.md \
   tools/router/zapret_autotune_job.py \
+  tools/router/quic_probe.py \
   tools/router/xkeen_diagnostics.py \
   tools/router/browser-diagnostics.js \
   tools/router/install-diagnostics-update.sh \
@@ -68,6 +69,7 @@ for optional in \
   tests/test_zapret_tuner.py \
   tests/test_panel_import.py \
   tests/test_router_autotune.py \
+  tests/test_quic_probe.py \
   tests/test_router_diagnostics.py \
   tests/test-browser-diagnostics.cjs \
   tests/test-routing-modes.sh \

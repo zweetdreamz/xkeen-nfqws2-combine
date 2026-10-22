@@ -39,10 +39,12 @@ files="$files
 tests/test-browser-diagnostics.cjs"
 files="$files
 tools/router/zapret_autotune_job.py
+tools/router/quic_probe.py
 tools/windows/zapret_tuner.py
 tools/windows/router-candidate-runner.sh
 scripts/diagnose-discord-voice.sh
 tests/test_router_autotune.py
+tests/test_quic_probe.py
 tests/test_zapret_tuner.py
 tests/test-router-autotune.sh"
 
