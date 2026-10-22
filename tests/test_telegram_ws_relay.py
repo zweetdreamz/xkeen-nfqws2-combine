@@ -818,6 +818,7 @@ class ProcessTests(unittest.TestCase):
                             raise
                         time.sleep(0.1)
                 with client:
+                    self.assertEqual(pidfile.read_text(encoding="ascii"), f"{process.pid}\n")
                     client.sendall(b"partial header")  # Telegram keeps its connections open
                     time.sleep(0.3)
                     process.send_signal(signal.SIGTERM)
@@ -827,6 +828,29 @@ class ProcessTests(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                     process.wait()
+
+    def test_no_pidfile_when_the_port_is_taken(self):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory, socket.socket() as taken:
+            taken.bind(("127.0.0.1", 0))
+            taken.listen()
+            port = taken.getsockname()[1]
+            pidfile = Path(directory) / "relay.pid"
+            command = [sys.executable, str(ROOT / "tools" / "router" / "telegram_ws_relay.py"),
+                       "--listen", f"127.0.0.1:{port}", "--pidfile", str(pidfile),
+                       "--log", str(Path(directory) / "relay.log")]
+            process = subprocess.Popen(command, stderr=subprocess.DEVNULL)
+            seen = False
+            while process.poll() is None:
+                seen = seen or pidfile.exists()
+                time.sleep(0.001)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertFalse(seen or pidfile.exists())
+            # The pidfile of a relay that does run is left alone.
+            pidfile.write_text("4242\n", encoding="ascii")
+            self.assertNotEqual(subprocess.run(command, stderr=subprocess.DEVNULL, timeout=30).returncode, 0)
+            self.assertEqual(pidfile.read_text(encoding="ascii"), "4242\n")
 
 
 class HelperTests(unittest.TestCase):

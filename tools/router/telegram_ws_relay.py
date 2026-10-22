@@ -1023,8 +1023,15 @@ def parse_listen(value: str) -> tuple[str, int]:
 
 
 async def serve(listen: tuple[str, int], relay: Relay, ready: asyncio.Event | None = None,
-                refresh: bool = False) -> None:
-    server = await asyncio.start_server(relay.handle, *listen)
+                refresh: bool = False, pidfile: Path | None = None) -> None:
+    try:
+        server = await asyncio.start_server(relay.handle, *listen)
+    except OSError as error:
+        log(f"cannot listen on {listen[0]}:{listen[1]}: {describe(error)}")
+        raise
+    # Only now: the init script takes the pidfile for a running relay.
+    if pidfile is not None:
+        pidfile.write_text(f"{os.getpid()}\n", encoding="ascii")
     log(f"listening on {listen[0]}:{listen[1]}; Cloudflare "
         + (f"on ({len(relay.cf_domains)} domains)" if relay.cf_enabled and relay.cf_domains else "off"))
     if ready is not None:
@@ -1077,14 +1084,14 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(self_test(relay))
     global LOG_PATH
     LOG_PATH = args.log
-    if args.pidfile:
-        args.pidfile.write_text(f"{os.getpid()}\n", encoding="ascii")
     try:
-        asyncio.run(serve(args.listen, relay, refresh=not args.no_cf and not own_domains))
+        asyncio.run(serve(args.listen, relay, refresh=not args.no_cf and not own_domains, pidfile=args.pidfile))
     finally:
+        # Only our own: a relay that failed to start leaves another's alone.
         if args.pidfile:
             with contextlib.suppress(OSError):
-                args.pidfile.unlink()
+                if args.pidfile.read_text(encoding="ascii").strip() == str(os.getpid()):
+                    args.pidfile.unlink()
     return 0
 
 
