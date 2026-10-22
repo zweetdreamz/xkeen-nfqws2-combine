@@ -342,10 +342,10 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         relay.note_rtt("slow.example.org", 0.01)  # tried first
         original = relay.upgrade
 
-        async def upgrade(address, host, cloudflare=False, rotate=0):
+        async def upgrade(address, host, cloudflare=False, rotate=0, **kwargs):
             if host.endswith("slow.example.org"):
                 await asyncio.sleep(30)  # hangs like a throttled domain
-            return await original(address, host, cloudflare, rotate)
+            return await original(address, host, cloudflare, rotate, **kwargs)
 
         relay.upgrade = upgrade
         started = time.monotonic()
@@ -656,6 +656,136 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ConnectionError, "no IPv4 address"):
                 await relay.open_cloudflare(2)
         self.assertTrue(relay.blocked(("cf", "gone.example.org")))
+
+    async def test_refills_against_dead_edges_leave_slots_for_clients(self):
+        # Every TCP connect hangs, as when the provider drops SYNs.
+        relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1",
+                            cf_domains=[f"d{n}.example.org" for n in range(6)],
+                            cf_ips=[f"127.0.0.{n}" for n in range(2, 10)], connect_timeout=10)
+        self.addCleanup(relay.close)
+        started = []
+
+        async def black_hole(address, port, *args):
+            started.append(time.monotonic())
+            await asyncio.sleep(30)
+
+        relay.open_tcp = black_hole
+        relay.schedule_refill(("cf", 4))
+        await asyncio.sleep(2.5)
+        background = len(started)
+        self.assertLessEqual(background, RELAY.REFILL_LIMIT)
+        asked = time.monotonic()
+        client = asyncio.ensure_future(relay.take(("cf", 2)))
+        self.addCleanup(client.cancel)
+        await self.wait_for(lambda: len(started) > background, timeout=RELAY.IP_STAGGER + 0.2)
+        self.assertLess(started[background] - asked, 0.2)
+
+    async def test_refill_skips_cloudflare_when_every_address_failed_recently(self):
+        relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1",
+                            cf_domains=["cf.example.test"], pool_size=1)
+        relay.ip_failed("127.0.0.1")
+        calls = []
+        original = relay.open_tcp
+
+        async def recorded(address, port, *args):
+            calls.append(address)
+            return await original(address, port, *args)
+
+        relay.open_tcp = recorded
+        await relay.refill(("cf", 2))
+        self.assertEqual(calls, [])
+        # A client still tries the last resort.
+        with self.assertRaises(ConnectionError):
+            await relay.open_cloudflare(2)
+        self.assertEqual(calls, ["127.0.0.1"])
+
+    async def test_blocked_direct_websocket_is_not_refilled(self):
+        fake = FakeWebSocketServer(reply=b"ok")
+        server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
+                            address_override="127.0.0.1", pool_size=1, cf_domains=["cf.example.test"])
+        self.addCleanup(relay.close)
+        relay.ws_state[2] = "ok"
+        _, writer, _, _ = await relay.take(("ws", 2, False))
+        writer.close()
+        await self.wait_for(lambda: len(relay.pool.get(("ws", 2, False), ())) == 1)
+        server.close()  # the route is blocked from now on
+        relay.ws_failed(2)
+        for entry in relay.pool[("ws", 2, False)]:
+            entry[1].close()
+        routes = []
+        original = relay.connect_route
+
+        async def recorded(key, *args, **kwargs):
+            routes.append(key)
+            return await original(key, *args, **kwargs)
+
+        relay.connect_route = recorded
+        probed = []
+        relay.schedule_probe = probed.append
+        with mock.patch.object(RELAY, "POOL_TICK", 0.05):
+            maintainer = asyncio.ensure_future(relay.maintain())
+            await asyncio.sleep(0.5)
+            maintainer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await maintainer
+        self.assertNotIn(("ws", 2, False), routes)
+        self.assertNotIn(("ws", 2, False), relay.pool_used)
+        self.assertFalse(relay.pool.get(("ws", 2, False)))
+        self.assertIn(2, probed)  # the DC was in use: it is still re-probed
+
+    async def test_pooled_websocket_closed_by_the_server_is_not_handed_out(self):
+        async def closing(reader, writer):
+            request = b""
+            while not request.endswith(b"\r\n\r\n"):
+                chunk = await reader.read(1)
+                if not chunk:
+                    return
+                request += chunk
+            key = next(line.split(b":", 1)[1].strip() for line in request.split(b"\r\n")
+                       if line.lower().startswith(b"sec-websocket-key"))
+            accept = base64.b64encode(hashlib.sha1(key + RELAY.WS_GUID).digest())
+            writer.write(b"HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n")
+            writer.write(bytes([0x88, 2]) + b"\x03\xe8")  # close frame, then FIN
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(closing, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
+                            address_override="127.0.0.1", pool_size=1, cf_domains=["cf.example.test"])
+        self.addCleanup(relay.close)
+        _, writer, _, pooled = await relay.take(("cf", 3))
+        writer.close()
+        self.assertFalse(pooled)
+        await self.wait_for(lambda: len(relay.pool.get(("cf", 3), ())) == 1)
+        await asyncio.sleep(0.2)
+        _, writer, _, pooled = await relay.take(("cf", 3))
+        writer.close()
+        self.assertFalse(pooled)
+
+    async def test_blackholed_cloudflare_edges_fall_back_to_direct_in_bounded_time(self):
+        dc_port = await self.start_data_center()
+        relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1",
+                            fallback_port=dc_port, connect_timeout=0.3, pool_size=0,
+                            cf_domains=["a.example.org", "b.example.org", "c.example.org"],
+                            cf_ips=["127.0.0.2", "127.0.0.3"])
+        original = relay.open_tcp
+
+        async def black_hole(address, port, *args):
+            if port == relay.ws_port:
+                await asyncio.sleep(30)
+            return await original(address, port, *args)
+
+        relay.open_tcp = black_hole
+        port = await self.start_relay(relay)
+        started = time.monotonic()
+        self.assertEqual(await self.mtproto_exchange(port, 1, timeout=10), b"direct-answer")
+        self.assertLess(time.monotonic() - started, RELAY.CF_STAGGER * 2 + RELAY.IP_STAGGER * 2 + 1)
+        self.assertEqual(relay.stats["direct"], 1)
+        self.assertTrue(all(relay.blocked(("ip", ip)) for ip in ("127.0.0.1", "127.0.0.2", "127.0.0.3")))
+        self.assertFalse(any(relay.blocked(("cf", domain)) for domain in relay.cf_domains))
 
     @staticmethod
     async def close_server(server):

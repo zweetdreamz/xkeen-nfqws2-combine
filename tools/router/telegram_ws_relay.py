@@ -99,8 +99,9 @@ IP_BACKOFF = 1800.0
 # Cloudflare edge may itself be unable to reach Telegram.
 IP_RETRY = 60.0
 # New TCP connections at once; more only provoke that throttling. Pool
-# refills open at most REFILL_LIMIT WebSockets at a time so that clients'
-# connections do not queue behind them.
+# refills open at most REFILL_LIMIT WebSockets at a time, and background work
+# (refills, probes) holds at most REFILL_LIMIT of the CONNECT_LIMIT connect
+# slots, so that clients' connections do not queue behind them.
 CONNECT_LIMIT = 8
 REFILL_LIMIT = 2
 # WebSocket sessions shorter than this are logged as drops.
@@ -358,6 +359,7 @@ class Relay:
         self.failed_until: dict[tuple, float] = {}
         self.connect_slots = asyncio.Semaphore(CONNECT_LIMIT)
         self.refill_slots = asyncio.Semaphore(REFILL_LIMIT)
+        self.background_slots = asyncio.Semaphore(REFILL_LIMIT)
         self.ip_failures: dict[str, int] = {}
         # Direct WebSocket per DC: "ok" or "blocked"; unknown until probed.
         self.ws_state: dict[int, str] = {}
@@ -455,7 +457,7 @@ class Relay:
 
     async def probe(self, dc: int) -> None:
         try:
-            _, writer, _ = await self.open_websocket(dc, False)
+            _, writer, _ = await self.open_websocket(dc, False, background=True)
         except ConnectionError as error:
             self.ws_failed(dc)
             log(f"DC{dc}: direct WebSocket unavailable ({error}); next check in "
@@ -468,15 +470,19 @@ class Relay:
 
     # -- pool of ready WebSockets ------------------------------------------
 
-    async def connect_route(self, key: tuple):
+    async def connect_route(self, key: tuple, background: bool = False):
         if key[0] == "cf":
-            return await self.open_cloudflare(key[1])
-        return await self.open_websocket(key[1], key[2])
+            return await self.open_cloudflare(key[1], background)
+        return await self.open_websocket(key[1], key[2], background)
 
     @staticmethod
     def fresh(entry) -> bool:
+        """Young, open and idle. A pooled WebSocket carries no data yet, so
+        anything received (a close frame, EOF; at worst a ping) means the
+        server is done with it."""
         reader, writer, _, created = entry
         return (time.monotonic() - created < POOL_MAX_AGE and not writer.is_closing()
+                and not getattr(reader, "_buffer", None) and not getattr(reader, "_eof", False)
                 and not reader.at_eof() and reader.exception() is None)
 
     async def take(self, key: tuple):
@@ -506,7 +512,7 @@ class Relay:
 
         async def one():
             async with self.refill_slots:
-                return await self.connect_route(key)
+                return await self.connect_route(key, background=True)
 
         results = await asyncio.gather(*(one() for _ in range(missing)), return_exceptions=True)
         for result in results:
@@ -518,9 +524,12 @@ class Relay:
         while True:
             await asyncio.sleep(POOL_TICK)
             now = time.monotonic()
+            in_use = {key[1] for key, used in self.pool_used.items() if now - used < POOL_KEEP}
             for key, used in list(self.pool_used.items()):
                 bucket = self.pool.get(key, deque())
-                keep = now - used < POOL_KEEP
+                # A direct WebSocket found blocked is not kept warm; the
+                # probe below finds out when it works again.
+                keep = now - used < POOL_KEEP and (key[0] != "ws" or self.ws_state.get(key[1]) == "ok")
                 for entry in list(bucket):
                     if not keep or not self.fresh(entry):
                         bucket.remove(entry)
@@ -530,9 +539,7 @@ class Relay:
                 else:
                     del self.pool_used[key]
             for dc in WS_FIXED_ADDRESS:
-                if self.ws_state.get(dc) == "blocked" and any(
-                    key[1] == dc for key in self.pool_used
-                ):
+                if self.ws_state.get(dc) == "blocked" and dc in in_use:
                     self.schedule_probe(dc)
 
     def close(self) -> None:
@@ -544,6 +551,17 @@ class Relay:
         self.pool.clear()
 
     # -- outgoing sockets --------------------------------------------------
+
+    @contextlib.asynccontextmanager
+    async def connect_slot(self, background: bool):
+        """One of the CONNECT_LIMIT slots; background work takes at most
+        REFILL_LIMIT of them, so a client always finds the rest."""
+        if background:
+            async with self.background_slots, self.connect_slots:
+                yield
+        else:
+            async with self.connect_slots:
+                yield
 
     def new_socket(self, family: int) -> socket.socket:
         """A non-blocking TCP socket carrying the mark, if one is set."""
@@ -584,7 +602,8 @@ class Relay:
 
     # -- WebSocket ---------------------------------------------------------
 
-    async def upgrade(self, address: str, host: str, cloudflare: bool = False, rotate: int = 0):
+    async def upgrade(self, address: str, host: str, cloudflare: bool = False, rotate: int = 0,
+                      background: bool = False):
         """DNS (IPv4), TCP, TLS (SNI = host), then the WebSocket upgrade to /apiws.
 
         The steps are timed separately so an error says where it stalled. For
@@ -611,12 +630,15 @@ class Relay:
         candidates = self.ip_candidates(resolved, cloudflare, rotate)
         if not candidates:
             raise ConnectionError(dns_error)
+        if background and cloudflare and all(self.blocked(("ip", ip)) for ip in candidates):
+            # Only a client tries addresses that all failed just now.
+            raise ConnectionError(f"{host}: every address failed recently")
         legacy_tls = self.use_tls and not hasattr(asyncio.StreamWriter, "start_tls")
 
         def tcp_attempt(ip):
             async def attempt():
                 try:
-                    async with self.connect_slots:
+                    async with self.connect_slot(background):
                         started = time.monotonic()
                         if legacy_tls:  # Python < 3.11: TCP and TLS in one step.
                             connection = self.open_tcp(ip, self.ws_port, self.ssl_context, host)
@@ -689,19 +711,19 @@ class Relay:
         writer.close()
         raise rejected(f"{host} via {ip}: {status.strip().decode('latin-1') or 'no answer'}")
 
-    async def open_websocket(self, dc: int, media: bool):
+    async def open_websocket(self, dc: int, media: bool, background: bool = False):
         """kws{N}.web.telegram.org on the fixed address (DC2/DC4)."""
         address = self.address_override or WS_FIXED_ADDRESS[dc]
         last = "no host"
         for host in ws_hosts(dc, media):
             try:
-                reader, writer = await self.upgrade(address, host)
+                reader, writer = await self.upgrade(address, host, background=background)
                 return reader, writer, host
             except ConnectionError as error:
                 last = str(error)
         raise ConnectionError(last)
 
-    async def open_cloudflare(self, dc: int):
+    async def open_cloudflare(self, dc: int, background: bool = False):
         """kws{N}.<domain> through Cloudflare, which connects to the data center.
 
         Domains are tried staggered: the next starts CF_STAGGER seconds after
@@ -717,7 +739,7 @@ class Relay:
                 started = time.monotonic()
                 try:
                     reader, writer = await self.upgrade(self.address_override or host, host,
-                                                        cloudflare=True, rotate=index)
+                                                        cloudflare=True, rotate=index, background=background)
                 except DomainError:
                     self.mark_failed(("cf", domain))
                     raise
