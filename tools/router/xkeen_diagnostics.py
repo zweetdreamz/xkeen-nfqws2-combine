@@ -578,6 +578,9 @@ CONFIG_CHECK_LABELS = {
     "listless-profile": "nfqws2: профили без hostlist",
     "empty-hostlist": "nfqws2: пустые hostlist",
     "legacy-blob": "nfqws2: fake без blob",
+    "compose": "nfqws2: сборка профилей",
+    "voice-range": "nfqws2: диапазон Discord Voice",
+    "read": "nfqws2: чтение конфига",
 }
 CHECK_LINE = re.compile(r"^CHECK\|(ok|warn|error)\|([A-Za-z0-9_.-]+)\|(.*)$", re.MULTILINE)
 

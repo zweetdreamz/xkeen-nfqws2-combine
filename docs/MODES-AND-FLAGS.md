@@ -23,7 +23,7 @@ policy marks или hardware offload.
 | XKeen/core | XKeen 2.0, Xray 26.10.17, Hybrid |
 | WAN | `eth3` |
 | nfqws2 | пакет 1.2.4, NFQUEUE 300 (20.10.2026 обновлён до 1.3.1) |
-| Скрипт на роутере и в рабочей папке | 3.1.1 |
+| Скрипт на роутере и в рабочей папке | 3.2.0 |
 | Активный режим | Discord TCP/Voice и YouTube `zapret`, Telegram `ws` |
 | Discord UDP | `flowseal`, узкий диапазон |
 | IPv6 nfqws2 | `off`: usable IPv6 WAN route отсутствует |
@@ -133,13 +133,20 @@ Wrapper сначала читает `--status` и сохраняет режим�
 равно общему значению или `mixed`, если маршруты TCP и Voice различаются.
 `udp_strategy=flowseal|legacy` и `udp_range=narrow|wide` показывают
 записанные настройки Discord UDP (`unknown`, если `nfqws2.conf` нет).
+`discord_voice_profile=builtin|imported:<id>` и `discord_voice_udp=` показывают
+профиль Voice и его UDP-фильтр, `proxy_outbound=` — записанный тег прокси.
 
 Применённые маршруты записываются в `nfqws2.conf`:
 
 ```text
 # Active routes: DiscordTCP=X, DiscordVoice=Y, YouTube=Z, Telegram=T.
 # Discord UDP: strategy=flowseal|legacy, range=narrow|wide.
+# Discord Voice profile: imported <id>, udp=<filter>.   только при импорте Voice
+# Proxy outbound: TAG.
 ```
+
+Записанный тег прокси используется, пока он есть в Xray. Порядок выбора:
+`--proxy-outbound`, записанный тег, затем поиск по правилам Xray.
 
 Прежняя строка `Discord=X, YouTube=Y.` по-прежнему читается: X относится к
 обоим маршрутам Discord. Поэтому после обновления скриптов повторный apply не
@@ -155,12 +162,14 @@ Wrapper сначала читает `--status` и сохраняет режим�
 | `--print-plan` | Печатает план | Нет |
 | `--preflight` | Проверяет core, WAN, зависимости и конфликты | Нет |
 | `--status` | Показывает проект и runtime | Нет |
+| `--check-config` | Проверяет `nfqws2.conf` как целое (см. ниже) | Нет |
+| `--print-nfqws-profiles` | Печатает профили так, как их соберёт init пакета | Нет |
 | `--show-snapshots` | Показывает baseline, XKeen baseline (если есть) и latest | Нет |
 | `--snapshot-baseline --yes-router` | Создаёт первый baseline | Только snapshot |
 | `--apply --yes-router` | Транзакционно применяет | Да |
 | `--apply-import-profile FILE --yes-router` | Устанавливает профиль тюнера | Только nfqws2 |
 | `--clear-imported-profile SERVICE --yes-router` | Возвращает встроенный профиль | Только nfqws2 |
-| `--rollback-import --yes-router` | Откатывает последнюю операцию профиля | Только nfqws2 |
+| `--rollback-import --yes-router` | Откатывает последнюю операцию профиля, если маршруты с тех пор не менялись | Только nfqws2 |
 | `--rollback-snapshot PATH --yes-router` | Возвращает выбранный проверенный snapshot | Да |
 | `--rollback-latest --yes-router` | Возвращает pre-apply | Да |
 | `--rollback --yes-router` | Возвращает XKeen baseline (если есть), затем baseline | Да |
@@ -182,6 +191,22 @@ baseline в `/opt/etc/keenetic-discord-nfqws2/baseline-xkeen.ptr` и печат�
 `XKeen baseline recorded`. `--rollback` тогда создаёт один rescue snapshot,
 восстанавливает XKeen baseline, затем nfqws2-baseline. С
 `--standalone-zapret` такой откат отклоняется.
+
+На установке без XKeen обёртки `set-service-route.sh` и `set-zapret-mode.sh`
+сами добавляют `--standalone-zapret` и не переводят роутер в режим с XKeen:
+маршруты `vless` и Telegram там отклоняются. Перейти на XKeen можно только
+явно, флагом `--integrated`. Standalone apply сохраняет записанный маршрут
+Telegram.
+
+Снимки чистятся после успешного apply. Остаются baseline, XKeen baseline,
+latest, всё, на что ссылается история панели, и последние `KD_SNAPSHOT_KEEP`
+(20) снимков; для импортов — последние `KD_IMPORT_SNAPSHOT_KEEP` (10).
+`opkg update` ограничен `KD_OPKG_UPDATE_TIMEOUT` (180 с) и продолжает работу,
+если упал не больше чем один источник пакетов.
+
+`--rollback-import` работает только для последней операции профиля: после
+полного apply или любого восстановления указатель на снимок импорта
+удаляется, а если маршруты с тех пор изменились, откат отклоняется.
 
 Восстановление пакетов: если отслеживаемый пакет после snapshot обновлён
 через `opkg upgrade`, откат печатает `WARNING ... opkg cannot downgrade it` и
@@ -267,7 +292,37 @@ Blob `config/blobs/ACTIVE_DISCORD_UDP.bin` закреплён SHA-256:
 
 - TCP/HTTP/TLS — адаптивная `circular`-стратегия;
 - QUIC — `quic_initial`, `repeats=11`;
-- IPSet выключен, режим hostlist — `MODE_LIST`.
+- IPSet выключен, режим hostlist — `MODE_LIST`; `NFQWS_EXTRA_ARGS` всегда
+  равен `$MODE_LIST`, в том числе при импортированном профиле Discord TCP.
+
+Пустой hostlist в nfqws2 значит «без фильтра»: профиль ловит весь трафик.
+Поэтому при Discord TCP ≠ zapret в `user.list` пишется только
+`kdn-disabled.invalid`, а `NFQWS_ARGS_QUIC=""`. При импортированном профиле
+Discord TCP в `TCP_PORTS` остаются 443 и порты собственных профилей
+пользователя.
+
+### Проверка конфига
+
+`--check-config` собирает профили тем же `_startup_args`, что и init пакета
+(при его отсутствии — встроенной копией 1.3.1/1.3.2), и печатает строки
+`CHECK|ok|warn|error|<имя>|<подробности>`. Код выхода: 0 — нет ошибок,
+1 — есть ошибки, 2 — конфиг не читается или не собирается.
+
+| Имя | Что проверяет |
+|---|---|
+| `compose` | число профилей, `TCP_PORTS`, `UDP_PORTS` |
+| `port-coverage` | каждый порт фильтров профилей стоит в очереди NFQUEUE |
+| `unhandled-ports` | в очереди нет портов, которые не обрабатывает ни один профиль |
+| `listless-profile` | профиль без hostlist (разрешён только Voice) |
+| `empty-hostlist` | hostlist профиля не пуст |
+| `legacy-blob` | у `fake` есть `blob=` |
+| `voice-range` | фильтр импортированного Voice совпадает с записанным диапазоном |
+
+Собственные профили пользователя в `NFQWS_ARGS_CUSTOM` дают `warn`, а не
+`error`. Apply и импорт запускают те же проверки и `nfqws2 --dry-run` до
+перезапуска nfqws2; при ошибке изменение откатывается. После перезапуска
+движок требует новый PID с ожидаемой командной строкой, оба перехода
+`POSTROUTING`/`PREROUTING` и порты NFQUEUE, равные `TCP_PORTS`/`UDP_PORTS`.
 
 ### YouTube TCP/TLS
 

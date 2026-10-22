@@ -9,7 +9,7 @@ set -eu
 # It never points at the host root and is rejected unless KD_ALLOW_TEST_ROOT=1.
 
 PROJECT="keenetic-discord-nfqws2"
-SCRIPT_VERSION="3.1.1"
+SCRIPT_VERSION="3.2.0"
 TEST_ROOT="${KD_TEST_ROOT:-}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
