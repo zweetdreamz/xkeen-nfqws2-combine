@@ -23,6 +23,8 @@ Use set-service-route.sh to route Discord TCP and Discord Voice separately.
 Additional apply options are passed to apply-discord-nfqws2.sh. The current
 Discord UDP settings (--wide-udp, --udp-strategy) are kept unless overridden.
 Every switch creates latest-preapply and uses automatic rollback on failure.
+A standalone deployment (no XKeen) stays standalone and accepts only "both";
+pass --integrated to switch it to XKeen.
 EOF
 }
 
@@ -73,6 +75,38 @@ esac
 case "$current_udp_strategy" in
   flowseal|legacy) set -- --udp-strategy "$current_udp_strategy" "$@" ;;
 esac
+
+# A standalone deployment stays standalone (A5): only the preset without
+# VLESS fits it, and "--core X" is dropped (the engine refuses it there).
+# --integrated switches the deployment to XKeen explicitly.
+current_deployment="$(printf '%s\n' "$status_output" | awk -F= '$1 == "deployment_mode" { print $2; exit }')"
+deployment_choice=""
+for arg in "$@"; do
+  case "$arg" in
+    --integrated|--standalone-zapret|--without-xkeen|--no-xkeen) deployment_choice=explicit ;;
+  esac
+done
+if [ -z "$deployment_choice" ] && [ "$current_deployment" = "standalone-zapret" ]; then
+  if [ "$discord_route" = vless ] || [ "$youtube_route" = vless ]; then
+    echo "ERROR: this router uses the standalone Zapret deployment without XKeen; preset $preset needs XKeen (VLESS)." >&2
+    echo "       Pass --integrated to switch the deployment to XKeen." >&2
+    exit 2
+  fi
+  next_args=""
+  skip_next=0
+  for arg in "$@"; do
+    if [ "$skip_next" -eq 1 ]; then
+      skip_next=0
+      continue
+    fi
+    case "$arg" in
+      --core) skip_next=1; continue ;;
+      --core=*) continue ;;
+    esac
+    next_args="$next_args $(printf '%s' "$arg" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/")"
+  done
+  eval "set -- --standalone-zapret $next_args"
+fi
 
 exec sh "$ENGINE" \
   --apply \

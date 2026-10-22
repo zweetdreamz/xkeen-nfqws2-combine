@@ -54,10 +54,17 @@ NFQWS_DISCORD_UDP_BLOB="$(root_path /opt/etc/nfqws2/blobs/discord_udp.bin)"
 NFQWS_YOUTUBE_TLS_BLOB="$(root_path /opt/etc/nfqws2/blobs/tls_clienthello.bin)"
 NFQWS_YOUTUBE_QUIC_BLOB="$(root_path /opt/etc/nfqws2/blobs/quic_initial.bin)"
 NFQWS_PIDFILE="$(root_path /opt/var/run/nfqws2.pid)"
+NFQWS_BIN="$(root_path /opt/usr/bin/nfqws2)"
+# The only entry of user.list while Discord TCP is not on zapret: nfqws2
+# treats an empty hostlist as "no host filter", which would turn the package
+# TCP profile that reads user.list into a profile for every host.
+NFQWS_DISABLED_HOST="kdn-disabled.invalid"
 IMPORTED_PROFILE_DIR="$(root_path /opt/etc/nfqws2/imported-profiles)"
 PROFILE_VERSION_ROOT="$(root_path /opt/etc/nfqws2/profile-versions)"
 IMPORT_SNAPSHOT_ROOT="$STATE_ROOT/nfqws-import-snapshots"
 LATEST_IMPORT_POINTER="$STATE_ROOT/latest-nfqws-import.ptr"
+# Route history of the web panel; its entries name the snapshots it offers.
+PANEL_HISTORY_DIR="$(root_path /opt/etc/xkeen-web/history)"
 XKEEN_DIR="$(root_path /opt/etc/xkeen)"
 XKEEN_PORT_PROXYING="$XKEEN_DIR/port_proxying.lst"
 XKEEN_PORT_EXCLUDE="$XKEEN_DIR/port_exclude.lst"
@@ -91,6 +98,9 @@ UDP_PORTS_WIDE="443,3478:3481,5349,19294:19344,50000:65535"
 UDP_FILTER_WIDE="443,3478-3481,5349,19294-19344,50000-65535"
 VOICE_HIGH="50100"
 XKEEN_REQUIRED_PORTS="80,443,2053,2083,2087,2096,8443,3478:3481,5349,19294:19344,50000:50100"
+# UDP ports of the Telegram call reflectors (the ports the stock nfqws2 UDP
+# profile filters for MTProto), proxied by XKeen only for Telegram=vless.
+TELEGRAM_CALL_PORTS="590:600,1400"
 UNBOUND_POLICY_NAME="__keenetic_discord_nfqws2_unbound__"
 
 MODE="help"
@@ -117,6 +127,11 @@ DISCORD_VOICE_ROUTE_EXPLICIT=0
 YOUTUBE_ROUTE_EXPLICIT=0
 PROXY_OUTBOUND_REQUESTED=""
 PROXY_OUTBOUND_EFFECTIVE=""
+# 1: imported Voice profiles must fit the configured UDP range (VOICE_HIGH).
+VOICE_RANGE_CHECK=1
+# Telegram route written to "# Active routes:" when it differs from the route
+# this run manages (a recorded vless route kept by a standalone apply).
+TELEGRAM_HEADER_ROUTE=""
 LOCK_HELD=0
 TRANSACTION_ACTIVE=0
 NFQWS_TRANSACTION_ACTIVE=0
@@ -126,6 +141,8 @@ IMPORT_PROFILE_REQUESTED=""
 CLEAR_IMPORTED_PROFILE=""
 ROLLBACK_SNAPSHOT_REQUESTED=""
 PREAPPLY_SNAPSHOT=""
+PREVIOUS_LATEST_SNAPSHOT=""
+LATEST_POINTER_REPLACED=0
 CREATED_SNAPSHOT=""
 DETECTED_CORE=""
 WORK_TMP_DIR="$(root_path /opt/tmp/${PROJECT}.$$)"
@@ -136,6 +153,8 @@ Usage:
   sh apply-discord-nfqws2.sh --print-plan [routing options]
   sh apply-discord-nfqws2.sh --preflight [--core auto|xray|mihomo]
   sh apply-discord-nfqws2.sh --status
+  sh apply-discord-nfqws2.sh --check-config
+  sh apply-discord-nfqws2.sh --print-nfqws-profiles
   sh apply-discord-nfqws2.sh --show-snapshots
   sh apply-discord-nfqws2.sh --snapshot-baseline --yes-router
   sh apply-discord-nfqws2.sh --apply --yes-router [routing options]
@@ -155,6 +174,10 @@ Short form for apply (kept for compatibility):
 --rollback-snapshot restores one verified snapshot below the managed snapshot
                     directory and first creates a rescue snapshot.
 An apply failure automatically restores its pre-apply snapshot.
+--check-config checks the current nfqws2.conf without changing anything and
+               prints CHECK|<ok|warn|error>|<name>|<detail> lines (exit 0: no
+               errors, 1: errors, 2: the config cannot be read).
+--print-nfqws-profiles prints the composed nfqws2 profiles, one per line.
 
 UDP strategies:
   flowseal  ACTIVE_DISCORD_UDP.bin fake for Discord Voice/STUN (default)
@@ -454,6 +477,8 @@ while [ "$#" -gt 0 ]; do
     --print-plan) MODE="print-plan" ;;
     --preflight) MODE="preflight" ;;
     --status) MODE="status" ;;
+    --check-config) MODE="check-config" ;;
+    --print-nfqws-profiles) MODE="print-nfqws-profiles" ;;
     --show-snapshots|--show-rollback) MODE="show-snapshots" ;;
     --snapshot-baseline) MODE="snapshot-baseline" ;;
     --apply) MODE="apply" ;;
@@ -496,6 +521,8 @@ while [ "$#" -gt 0 ]; do
     --standalone-zapret|--without-xkeen|--no-xkeen)
       STANDALONE_ZAPRET=1
       ;;
+    # The default; the wrappers pass it to leave a standalone deployment.
+    --integrated) STANDALONE_ZAPRET=0 ;;
     --udp-strategy)
       shift
       [ "$#" -gt 0 ] || {
@@ -622,10 +649,17 @@ case "$TELEGRAM_ROUTE_MODE" in
 esac
 
 if [ "$STANDALONE_ZAPRET" -eq 1 ]; then
-  # Without XKeen there is no VPN; a recorded (not requested) Telegram VPN
-  # route becomes unmanaged instead of blocking the standalone apply.
+  # A standalone apply does not touch XKeen, so a recorded (not requested)
+  # Telegram vless/ws route and its Xray rules and relay stay as they are,
+  # and the route stays recorded: recording "unmanaged" made the next
+  # integrated apply delete them (E5). ws keeps its nfqws2 TLS profile (the
+  # relay's own TLS needs it); vless has no nfqws2 profile.
   case "$TELEGRAM_ROUTE_MODE:$TELEGRAM_ROUTE_EXPLICIT" in
-    vless:0|ws:0) TELEGRAM_ROUTE_MODE="unmanaged" ;;
+    vless:0)
+      TELEGRAM_HEADER_ROUTE="vless"
+      TELEGRAM_ROUTE_MODE="unmanaged"
+      ;;
+    ws:0) ;;
     ws:1)
       echo "ERROR: Telegram WS needs XKeen/Xray and cannot be used with --standalone-zapret." >&2
       exit 2
@@ -1093,8 +1127,17 @@ validate_imported_profile() {
         echo "ERROR: Discord Voice profile must contain one UDP filter." >&2
         return 1
       }
-      voice_ports_allowed "$profile_voice_filters" "$VOICE_HIGH" || {
+      # The range limit applies only while the profile is used (A10); an
+      # unused profile is still checked against the widest range.
+      if [ "$VOICE_RANGE_CHECK" -eq 1 ]; then
+        profile_voice_limit="$VOICE_HIGH"
+      else
+        profile_voice_limit=65535
+      fi
+      voice_ports_allowed "$profile_voice_filters" "$profile_voice_limit" || {
         echo "ERROR: Discord Voice UDP ports exceed the currently configured safe ranges." >&2
+        echo "       Imported Discord Voice profile $(jq -r '.candidate_id' "$profile_file") uses UDP $profile_voice_filters; the configured range ends at $VOICE_HIGH." >&2
+        echo "       Apply with --wide-udp, or remove the profile: --clear-imported-profile discord-voice." >&2
         return 1
       }
       ;;
@@ -1275,19 +1318,52 @@ process_running() {
   return 1
 }
 
-nfqws_running() {
+# True when PID $1 is the nfqws2 service daemon: alive, an nfqws2 command
+# line, and not a test instance (another queue, --dry-run, --intercept=0) such
+# as the autotune candidates. A recycled PID of a stale pidfile fails here.
+nfqws_pid_is_service() {
+  service_pid="$1"
+  case "$service_pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$service_pid" 2>/dev/null || return 1
+  [ -d "/proc/$service_pid" ] || return 0
+  service_cmdline="$(tr '\0' ' ' < "/proc/$service_pid/cmdline" 2>/dev/null || true)"
+  case "$service_cmdline" in
+    *nfqws2*) ;;
+    *) return 1 ;;
+  esac
+  case " $service_cmdline " in
+    *" --dry-run "*|*" --intercept=0 "*) return 1 ;;
+  esac
+  service_qnum="$(printf '%s\n' "$service_cmdline" | tr ' ' '\n' | sed -n 's/^--qnum=//p' | sed -n '1p')"
+  service_expected_qnum="$(nfqws_value NFQUEUE_NUM 2>/dev/null || true)"
+  [ -z "$service_qnum" ] || [ "$service_qnum" = "${service_expected_qnum:-300}" ]
+}
+
+# Prints the PID of the running nfqws2 service.
+nfqws_service_pid() {
   if [ -f "$NFQWS_PIDFILE" ]; then
     nfqws_pid="$(sed -n '1p' "$NFQWS_PIDFILE")"
-    case "$nfqws_pid" in
-      ''|*[!0-9]*) ;;
-      *) kill -0 "$nfqws_pid" 2>/dev/null && return 0 ;;
-    esac
+    if nfqws_pid_is_service "$nfqws_pid"; then
+      printf '%s\n' "$nfqws_pid"
+      return 0
+    fi
   fi
   # A fixture root must never inherit the host/router nfqws2 PID through
   # pidof/pgrep. Fixture services are represented only by their redirected
   # pidfile above.
   [ -z "$TEST_ROOT" ] || return 1
-  process_running nfqws2
+  have pidof || return 1
+  for nfqws_pid in $(pidof nfqws2 2>/dev/null); do
+    if nfqws_pid_is_service "$nfqws_pid"; then
+      printf '%s\n' "$nfqws_pid"
+      return 0
+    fi
+  done
+  return 1
+}
+
+nfqws_running() {
+  nfqws_service_pid >/dev/null
 }
 
 init_value() {
@@ -1621,7 +1697,7 @@ preflight() {
         if [ ! -d "$XRAY_CONFIG_DIR" ]; then
           echo "ERROR: Xray config directory not found: $XRAY_CONFIG_DIR" >&2
           preflight_errors=$((preflight_errors + 1))
-        elif { any_route_is direct || any_route_is zapret; } &&
+        elif { any_route_is direct || any_route_is zapret || any_route_is ws; } &&
              ! resolve_xray_direct_mark; then
           preflight_errors=$((preflight_errors + 1))
         elif { [ "$DISCORD_TCP_ROUTE_MODE" = "vless" ] ||
@@ -1636,6 +1712,12 @@ preflight() {
         elif ! xkeen -xtest >/dev/null 2>&1; then
           echo "ERROR: current Xray configuration fails 'xkeen -xtest'." >&2
           preflight_errors=$((preflight_errors + 1))
+        fi
+        # No route needs the proxy outbound now: still look for it, so that
+        # the header records it for a later vless route.
+        if [ "$preflight_errors" -eq 0 ] && [ -z "$PROXY_OUTBOUND_EFFECTIVE" ] &&
+           ! resolve_xray_proxy_outbound >/dev/null 2>&1; then
+          PROXY_OUTBOUND_EFFECTIVE=""
         fi
         ;;
       mihomo)
@@ -2019,6 +2101,11 @@ restore_packages() {
       echo "Reinstalling baseline package: $restore_pkg"
       opkg install "$restore_pkg" >/dev/null 2>&1 || restore_package_errors=1
       current_version="$(package_version "$restore_pkg" || true)"
+      # The package postinst starts nfqws2 with the package default config;
+      # restore_services starts it again with the restored one (C6).
+      if [ "$restore_pkg" = nfqws2-keenetic ]; then
+        [ ! -x "$NFQWS_INIT" ] || run_nfqws_init stop >/dev/null 2>&1 || true
+      fi
     fi
     # opkg cannot install an older version from the feed, so an upgrade made
     # after the snapshot is reported but is not a restore failure: failing
@@ -2035,6 +2122,7 @@ restore_packages() {
 
 # Writes the Entware init script of the Telegram WS relay.
 write_telegram_ws_init() {
+  ws_init_mark="$(telegram_ws_mark)"
   ws_init_tmp="$(make_tmp)"
   cat > "$ws_init_tmp" <<EOF
 #!/bin/sh
@@ -2048,38 +2136,92 @@ LISTEN="127.0.0.1:$TELEGRAM_WS_PORT"
 CF_DOMAINS="$TELEGRAM_WS_DOMAINS"
 CF_IPS="$TELEGRAM_WS_CF_IPS"
 
+PORT="$TELEGRAM_WS_PORT"
+# Firewall mark of the relay's outgoing sockets (the Xray direct mark), so
+# that XKeen does not send them back to Xray; empty: no mark.
+MARK="$ws_init_mark"
+
+# True when PID \$1 is this relay. The pidfile lives on persistent storage and
+# survives a power loss, so its PID may belong to another process by now:
+# that process must never be reported as the relay or be killed (E2/C5).
+is_relay() {
+  case "\$1" in ''|*[!0-9]*) return 1 ;; esac
+  tr '\\0' ' ' < "/proc/\$1/cmdline" 2>/dev/null | grep -Fq -- "\$RELAY --listen \$LISTEN"
+}
+
+# Every running relay of this service, with or without a pidfile.
+relay_pids() {
+  for cmdline in \$(grep -Fl -- "\$RELAY" /proc/[0-9]*/cmdline 2>/dev/null); do
+    pid="\${cmdline#/proc/}"
+    pid="\${pid%/cmdline}"
+    is_relay "\$pid" && echo "\$pid"
+  done
+}
+
+# The relay of the pidfile; a stale pidfile is removed.
 running() {
-  [ -f "\$PIDFILE" ] && kill -0 "\$(cat "\$PIDFILE" 2>/dev/null)" 2>/dev/null
+  [ -f "\$PIDFILE" ] || return 1
+  is_relay "\$(sed -n '1p' "\$PIDFILE" 2>/dev/null)" && return 0
+  rm -f "\$PIDFILE"
+  return 1
+}
+
+# Something accepts connections on the relay port (/proc/net/tcp, LISTEN).
+listening() {
+  port_hex="\$(printf '%04X' "\$PORT")"
+  if [ -r /proc/net/tcp ]; then
+    awk -v port=":\$port_hex" '\$4 == "0A" && substr(\$2, length(\$2) - 4) == port { found = 1 } END { exit !found }' /proc/net/tcp
+  else
+    netstat -ltn 2>/dev/null | grep -q "[:.]\$PORT "
+  fi
 }
 
 start() {
-  running && return 0
+  if running; then
+    listening && return 0
+    stop
+  fi
+  # A relay without a pidfile (crash, older init script) would hold the port.
+  [ -z "\$(relay_pids)" ] || stop
   mkdir -p "\$(dirname "\$PIDFILE")" "\$(dirname "\$LOG")"
   echo "Starting Telegram WS relay on \$LISTEN..."
+  # shellcheck disable=SC2086 # MARK adds two words or none
   "\$PYTHON" "\$RELAY" --listen "\$LISTEN" --pidfile "\$PIDFILE" --log "\$LOG" \\
-    --cf-domains-file "\$CF_DOMAINS" --cf-ips-file "\$CF_IPS" </dev/null >/dev/null 2>&1 &
+    --cf-domains-file "\$CF_DOMAINS" --cf-ips-file "\$CF_IPS" \${MARK:+--mark "\$MARK"} </dev/null >/dev/null 2>&1 &
   waited=0
   while [ "\$waited" -lt 10 ]; do
-    running && { echo "Telegram WS relay started."; return 0; }
     sleep 1
     waited=\$((waited + 1))
+    # The relay writes its pidfile before it binds: require the port, and
+    # that the process is still alive a second later (E10).
+    if running && listening; then
+      sleep 1
+      if running && listening; then
+        echo "Telegram WS relay started."
+        return 0
+      fi
+    fi
   done
-  echo "Telegram WS relay did not start; see \$LOG" >&2
+  echo "Telegram WS relay did not start or does not listen on \$LISTEN; see \$LOG" >&2
   return 1
 }
 
 stop() {
-  if running; then
-    pid="\$(cat "\$PIDFILE")"
+  pids="\$(relay_pids)"
+  if [ -n "\$pids" ]; then
     echo "Stopping Telegram WS relay..."
-    kill "\$pid" 2>/dev/null
-    # Wait for the process itself: it removes the pidfile before it exits.
+    for pid in \$pids; do kill "\$pid" 2>/dev/null || true; done
     waited=0
-    while kill -0 "\$pid" 2>/dev/null && [ "\$waited" -lt 5 ]; do
+    while [ "\$waited" -lt 5 ]; do
+      alive=""
+      for pid in \$pids; do is_relay "\$pid" && alive="\$alive \$pid"; done
+      [ -n "\$alive" ] || break
       sleep 1
       waited=\$((waited + 1))
     done
-    kill -9 "\$pid" 2>/dev/null || true
+    for pid in \$pids; do
+      if is_relay "\$pid"; then kill -9 "\$pid" 2>/dev/null || true; fi
+    done
   fi
   rm -f "\$PIDFILE"
 }
@@ -2088,11 +2230,28 @@ case "\$1" in
   start) start ;;
   stop) stop ;;
   restart) stop; start ;;
-  status) if running; then echo running; else echo stopped; exit 1; fi ;;
+  status)
+    if running && listening; then echo running; else echo stopped; exit 1; fi
+    ;;
   *) echo "Usage: \$0 start|stop|restart|status" >&2; exit 2 ;;
 esac
 EOF
   atomic_replace_file "$TELEGRAM_WS_INIT" "$ws_init_tmp" 755
+}
+
+# The mark the relay gives its outgoing sockets: the Xray direct mark when one
+# is in use (E1). Passed only to a relay that supports --mark.
+telegram_ws_mark() {
+  if [ -z "$DIRECT_MARK_EFFECTIVE" ] && [ "$STANDALONE_ZAPRET" -eq 0 ] &&
+     [ -d "$XRAY_CONFIG_DIR" ] && have jq; then
+    resolve_xray_direct_mark >/dev/null 2>&1 || DIRECT_MARK_EFFECTIVE=""
+  fi
+  [ -n "$DIRECT_MARK_EFFECTIVE" ] || return 0
+  if grep -Fq -- '"--mark"' "$TELEGRAM_WS_RELAY" 2>/dev/null; then
+    printf '%s\n' "$DIRECT_MARK_EFFECTIVE"
+  else
+    echo "WARNING: this Telegram WS relay has no --mark option; its sockets stay unmarked (mark $DIRECT_MARK_EFFECTIVE)." >&2
+  fi
 }
 
 # Brings the relay service in line with Telegram route $1: running for ws,
@@ -2273,6 +2432,9 @@ restore_services() {
 
   if [ "$baseline_nfqws_running" = "1" ]; then
     if [ -x "$NFQWS_INIT" ]; then
+      # The init refuses to start a running service, and a reinstalled
+      # package may already run its default config (C6).
+      run_nfqws_init stop >/dev/null 2>&1 || true
       run_nfqws_init start >/dev/null 2>&1 || return 1
     else
       echo "ERROR: cannot restore running nfqws2 service; init script is absent." >&2
@@ -2343,6 +2505,14 @@ read_import_pointer() {
   printf '%s\n' "$import_pointer_value"
 }
 
+# The header lines of the managed block that describe state outside nfqws2
+# (deployment, routes, Discord UDP settings, proxy outbound), joined by " | ".
+nfqws_route_header() {
+  [ -f "$1" ] || return 0
+  grep -E '^# (Deployment mode|Active routes|Discord UDP|Proxy outbound): ' "$1" 2>/dev/null |
+    awk '{ printf "%s%s", (NR > 1 ? " | " : ""), $0 } END { print "" }'
+}
+
 create_nfqws_import_snapshot() {
   import_purpose="$1"
   umask 077
@@ -2364,7 +2534,14 @@ create_nfqws_import_snapshot() {
   fi
   if path_exists "$(dirname "$NFQWS_CONF")"; then
     import_nfqws_present=1
-    cp -a "$(dirname "$NFQWS_CONF")" "$import_dir/nfqws2"
+    # Only the data a profile operation changes; the restore never brings
+    # back package files such as lua/ (B10).
+    mkdir "$import_dir/nfqws2"
+    for import_item in $NFQWS_DATA_ITEMS; do
+      if path_exists "$(dirname "$NFQWS_CONF")/$import_item"; then
+        cp -a "$(dirname "$NFQWS_CONF")/$import_item" "$import_dir/nfqws2/$import_item"
+      fi
+    done
   else
     import_nfqws_present=0
   fi
@@ -2374,6 +2551,9 @@ create_nfqws_import_snapshot() {
     printf 'SCRIPT_VERSION\t%s\n' "$SCRIPT_VERSION"
     printf 'NFQWS_PRESENT\t%s\n' "$import_nfqws_present"
     printf 'NFQWS_RUNNING\t%s\n' "$import_nfqws_running"
+    # The state of the other components that this nfqws2 data belongs to:
+    # --rollback-import refuses to restore it under different routes (C2).
+    printf 'ROUTES_HEADER\t%s\n' "$(nfqws_route_header "$NFQWS_CONF")"
   } > "$import_dir/STATE.tsv"
   if [ "$import_nfqws_present" -eq 1 ]; then
     (
@@ -2500,6 +2680,15 @@ on_exit() {
     if [ "$auto_restore_code" -ne 0 ]; then
       echo "CRITICAL: automatic rollback was only partial." >&2
       echo "Manual recovery snapshot: $PREAPPLY_SNAPSHOT" >&2
+    elif [ "$LATEST_POINTER_REPLACED" -eq 1 ]; then
+      # The failed apply changed nothing in the end: --rollback-latest must
+      # still undo the last successful change (C4).
+      if [ -n "$PREVIOUS_LATEST_SNAPSHOT" ] &&
+         safe_snapshot_path "$PREVIOUS_LATEST_SNAPSHOT"; then
+        atomic_pointer "$LATEST_POINTER" "$PREVIOUS_LATEST_SNAPSHOT"
+      elif [ -z "$PREVIOUS_LATEST_SNAPSHOT" ]; then
+        rm -f "$LATEST_POINTER"
+      fi
     fi
   fi
 
@@ -2572,6 +2761,17 @@ recorded_deployment_mode() {
       ;;
     *) return 1 ;;
   esac
+}
+
+# The Xray proxy outbound recorded by the last apply ("# Proxy outbound:").
+recorded_proxy_outbound() {
+  [ -f "$NFQWS_CONF" ] || return 1
+  recorded_proxy="$(
+    sed -n 's/^# Proxy outbound: \([A-Za-z0-9_.:-]*\)\.$/\1/p' "$NFQWS_CONF" |
+      sed -n '1p'
+  )"
+  [ -n "$recorded_proxy" ] || return 1
+  printf '%s\n' "$recorded_proxy"
 }
 
 load_current_nfqws_context() {
@@ -2753,6 +2953,17 @@ status_report() {
     recorded_udp_settings
     echo "udp_strategy=${RECORDED_UDP_STRATEGY:-unknown}"
     echo "udp_range=$RECORDED_UDP_RANGE"
+    # An imported Voice profile decides the Voice ports, whatever the range
+    # is (A7/B9): discord_voice_profile=imported:<id>, its UDP filter in
+    # discord_voice_udp.
+    status_voice="$(sed -n 's/^# Discord Voice profile: imported \([0-9a-f]*\), udp=\([0-9,-]*\)\.$/\1 \2/p' "$NFQWS_CONF" | sed -n '1p')"
+    if [ -n "$status_voice" ]; then
+      echo "discord_voice_profile=imported:${status_voice%% *}"
+      echo "discord_voice_udp=${status_voice#* }"
+    else
+      echo "discord_voice_profile=builtin"
+    fi
+    echo "proxy_outbound=$(recorded_proxy_outbound 2>/dev/null || true)"
   else
     echo "udp_strategy=unknown"
     echo "udp_range=unknown"
@@ -2903,6 +3114,9 @@ atomic_replace_file() {
   atomic_stage="$(mktemp "$atomic_dir/.kdtxn-$$-XXXXXX")"
   cp "$atomic_source" "$atomic_stage"
   chmod "$atomic_mode" "$atomic_stage"
+  # The data must be on disk before the rename, or a power loss can leave an
+  # empty file under the final name. "sync FILE" needs a newer busybox.
+  sync "$atomic_stage" 2>/dev/null || sync 2>/dev/null || true
   mv "$atomic_stage" "$atomic_target"
 }
 
@@ -2981,12 +3195,39 @@ discover_xray_proxy_outbound() {
     printf '%s\n' "$discovered_candidates" |
       awk 'NF { count++ } END { print count + 0 }'
   )"
-  [ "$discovered_count" -eq 1 ] || return 1
-  printf '%s\n' "$discovered_candidates" | awk 'NF { print; exit }'
+  if [ "$discovered_count" -eq 1 ]; then
+    printf '%s\n' "$discovered_candidates" | awk 'NF { print; exit }'
+    return 0
+  fi
+  # Several proxy outbounds: the one that all of the user's proxy rules use.
+  discovered_rule_tags="$(
+    strict_json_stream "$discovery_routing" |
+      jq -r '.routing.rules[]? | .outboundTag // empty' 2>/dev/null | sort -u
+  )"
+  discovered_used="$(
+    printf '%s\n' "$discovered_rule_tags" |
+      awk -v proxies="$discovered_candidates" '
+        BEGIN { n = split(proxies, list, "\n"); for (i = 1; i <= n; i++) if (list[i] != "") proxy[list[i]] = 1 }
+        ($0 in proxy) { print }
+      '
+  )"
+  [ "$(printf '%s\n' "$discovered_used" | awk 'NF { count++ } END { print count + 0 }')" -eq 1 ] ||
+    return 1
+  printf '%s\n' "$discovered_used" | awk 'NF { print; exit }'
 }
 
+# Order: --proxy-outbound, the tag recorded by the last apply (when Xray
+# still has it), then discovery from the user's rules and outbounds. The
+# YouTube rules that discovery starts from disappear once YouTube leaves
+# vless, so the recorded tag keeps later applies working (C3).
 resolve_xray_proxy_outbound() {
   PROXY_OUTBOUND_EFFECTIVE="$PROXY_OUTBOUND_REQUESTED"
+  if [ -z "$PROXY_OUTBOUND_EFFECTIVE" ]; then
+    resolved_recorded="$(recorded_proxy_outbound 2>/dev/null || true)"
+    if [ -n "$resolved_recorded" ] && xray_outbound_tag_exists "$resolved_recorded"; then
+      PROXY_OUTBOUND_EFFECTIVE="$resolved_recorded"
+    fi
+  fi
   if [ -z "$PROXY_OUTBOUND_EFFECTIVE" ]; then
     PROXY_OUTBOUND_EFFECTIVE="$(discover_xray_proxy_outbound 2>/dev/null || true)"
   fi
@@ -3085,10 +3326,15 @@ patch_xray_inbounds() {
               "destOverride": (((.sniffing.destOverride // []) + ["http", "tls"]) | unique)
             })
           elif .tag == "tproxy" then
-            .sniffing = ((.sniffing // {}) + {
+            # In XKeen TProxy mode TCP arrives here too: the domain rules of
+            # Discord/YouTube/Telegram then need the TLS/HTTP sniffing (E14).
+            ((.settings.network // "") | (if type == "array" then join(",") else tostring end)
+              | split(",") | any(.[]; . == "tcp")) as $carries_tcp
+            | .sniffing = ((.sniffing // {}) + {
               "enabled": true,
               "routeOnly": true,
-              "destOverride": (((.sniffing.destOverride // []) + ["quic"]) | unique)
+              "destOverride": (((.sniffing.destOverride // []) + ["quic"]
+                + (if $carries_tcp then ["http", "tls"] else [] end)) | unique)
             })
           else .
           end
@@ -3155,6 +3401,15 @@ EOF
   atomic_replace_file "$direct_outbound_file" "$direct_outbound_tmp" 600
 }
 
+# JSON array of the Xray blackhole outbound tags.
+xray_blackhole_tags_json() {
+  for blackhole_file in "$XRAY_CONFIG_DIR"/*.json; do
+    [ -f "$blackhole_file" ] || continue
+    strict_json_stream "$blackhole_file" 2>/dev/null |
+      jq -r '.outbounds[]? | select(.protocol == "blackhole") | .tag // empty' 2>/dev/null || true
+  done | jq -Rsc 'split("\n") | map(select(length > 0)) | unique'
+}
+
 patch_xray() {
   routing_file="$(find_xray_routing_file)" || {
     echo "ERROR: Xray routing object was not found in $XRAY_CONFIG_DIR." >&2
@@ -3174,18 +3429,32 @@ patch_xray() {
     --arg youtube_mode "$YOUTUBE_ROUTE_MODE" \
     --arg telegram_mode "$TELEGRAM_ROUTE_MODE" \
     --arg proxy_outbound "$PROXY_OUTBOUND_EFFECTIVE" \
-    --arg voice_ports "3478-3481,5349,19294-19344,50000-$VOICE_HIGH" '
+    --arg voice_ports "3478-3481,5349,19294-19344,50000-$VOICE_HIGH" \
+    --argjson block_tags "$(xray_blackhole_tags_json)" '
+    # Attribute subsets such as ext:geosite_v2fly.dat:youtube@ads are the
+    # selection of the user (often an ad-block rule): never absorbed (A9).
+    def is_attribute_selector:
+      type == "string" and contains("@");
     def is_discord_selector:
       type == "string" and (ascii_downcase | contains("discord"));
     def is_discord_ext_selector:
-      is_discord_selector and startswith("ext:");
+      is_discord_selector and startswith("ext:") and (is_attribute_selector | not);
     def is_zkeenip_discord_selector:
       is_discord_ext_selector
       and (ascii_downcase | contains("zkeenip.dat:discord"));
     def is_youtube_ext_selector:
       type == "string"
       and startswith("ext:")
-      and (ascii_downcase | contains("youtube"));
+      and (ascii_downcase | contains("youtube"))
+      and (is_attribute_selector | not);
+    # A blocking rule for such a subset must stay in front of the managed
+    # rules, or the managed direct rule would match those domains first.
+    def front_block_rule:
+      (.outboundTag // "") as $tag
+      | any($block_tags[]; . == $tag)
+      and any((.domain // [])[];
+          type == "string" and startswith("ext:") and is_attribute_selector
+          and (ascii_downcase | (contains("youtube") or contains("discord"))));
     def only_discord_ext($values):
       ($values | type) == "array"
       and ($values | length) > 0
@@ -3260,7 +3529,9 @@ patch_xray() {
         | select(
             ($had_ip | not) or has("ip")
           )
-      )) as $remaining_rules
+      )) as $cleaned_rules
+    | ($cleaned_rules | map(select(front_block_rule))) as $front_rules
+    | ($cleaned_rules | map(select(front_block_rule | not))) as $remaining_rules
     | ([
         {
           "type": "field",
@@ -3325,7 +3596,8 @@ patch_xray() {
            ]
        end) as $telegram_rules
     | .routing.rules = (
-        $discord_rules
+        $front_rules
+        + $discord_rules
         + [
           {
             "type": "field",
@@ -3459,7 +3731,7 @@ patch_xkeen_ports_if_restricted() {
 
   port_tmp="$(make_tmp)"
   sed '/^# BEGIN keenetic-discord-nfqws2$/,/^# END keenetic-discord-nfqws2$/d' \
-    "$XKEEN_PORT_PROXYING" > "$port_tmp"
+    "$XKEEN_PORT_PROXYING" | strip_trailing_blank_lines > "$port_tmp"
   cat >> "$port_tmp" <<EOF
 
 # BEGIN keenetic-discord-nfqws2
@@ -3478,6 +3750,20 @@ EOF
   if [ "$TELEGRAM_ROUTE_MODE" != "unmanaged" ]; then
     echo "5222" >> "$port_tmp"
   fi
+  # Telegram calls (UDP reflectors) reach Xray only through these ports; in
+  # the other Telegram modes UDP goes direct anyway (E9). Ports the user
+  # excludes are skipped with a warning instead of failing the apply.
+  if [ "$TELEGRAM_ROUTE_MODE" = vless ]; then
+    telegram_excluded="$(active_ports "$XKEEN_PORT_EXCLUDE")"
+    for telegram_call_port in $(printf '%s\n' "$TELEGRAM_CALL_PORTS" | tr ',' ' '); do
+      if [ -n "$telegram_excluded" ] &&
+         ports_overlap "$telegram_excluded" "$telegram_call_port"; then
+        echo "WARNING: port_exclude.lst excludes Telegram call port $telegram_call_port; calls on it bypass the VPN." >&2
+        continue
+      fi
+      echo "$telegram_call_port" >> "$port_tmp"
+    done
+  fi
   echo "# END keenetic-discord-nfqws2" >> "$port_tmp"
   replace_preserving_mode "$XKEEN_PORT_PROXYING" "$port_tmp"
 }
@@ -3486,12 +3772,54 @@ package_present() {
   [ -n "$(package_version "$1" || true)" ]
 }
 
+# "opkg update" with a time limit (KD_OPKG_UPDATE_TIMEOUT, 180 s). A dead or
+# hanging feed must not stop the apply while other lists are present: the
+# following "opkg install" is the real check and fails loudly if a package
+# cannot be found.
+opkg_update_tolerant() {
+  update_limit="${KD_OPKG_UPDATE_TIMEOUT:-180}"
+  case "$update_limit" in ''|*[!0-9]*) update_limit=180 ;; esac
+  update_log="$(make_tmp)"
+  opkg update > "$update_log" 2>&1 &
+  update_pid=$!
+  update_waited=0
+  update_timed_out=0
+  while kill -0 "$update_pid" 2>/dev/null; do
+    if [ "$update_waited" -ge "$update_limit" ]; then
+      kill "$update_pid" 2>/dev/null || true
+      update_timed_out=1
+      break
+    fi
+    sleep 1
+    update_waited=$((update_waited + 1))
+  done
+  update_status=0
+  wait "$update_pid" 2>/dev/null || update_status=$?
+  cat "$update_log"
+  if [ "$update_timed_out" -eq 0 ] && [ "$update_status" -eq 0 ]; then
+    return 0
+  fi
+  update_failed_feeds="$(grep -c 'Failed to download' "$update_log" 2>/dev/null || true)"
+  update_lists_dir="$(root_path /opt/var/opkg-lists)"
+  if [ "${update_failed_feeds:-0}" -le 1 ] &&
+     [ -n "$(ls -A "$update_lists_dir" 2>/dev/null)" ]; then
+    if [ "$update_timed_out" -eq 1 ]; then
+      echo "WARNING: opkg update did not finish in ${update_limit}s; continuing with the package lists already present." >&2
+    else
+      echo "WARNING: opkg update failed for one feed; continuing with the other package lists." >&2
+    fi
+    return 0
+  fi
+  echo "ERROR: opkg update failed." >&2
+  return 1
+}
+
 install_missing_packages() {
   echo "Checking Entware packages..."
   if ! package_present ca-certificates ||
      ! package_present wget-ssl ||
      { [ "$STANDALONE_ZAPRET" -eq 1 ] && ! package_present jq; }; then
-    opkg update
+    opkg_update_tolerant
   fi
   package_present ca-certificates || opkg install ca-certificates
   package_present wget-ssl || opkg install wget-ssl
@@ -3508,13 +3836,442 @@ install_missing_packages() {
   atomic_replace_file "$OPKG_FEED" "$feed_tmp" 600
 
   if ! package_present nfqws2-keenetic; then
-    opkg update
+    opkg_update_tolerant
     opkg install nfqws2-keenetic
     # The package post-install script starts its broad default profile.
     # Keep that transient window as short as possible until our narrowed
     # transactional configuration is ready.
     [ ! -x "$NFQWS_INIT" ] || run_nfqws_init stop >/dev/null 2>&1 || true
   fi
+}
+
+# ---------------------------------------------------------------------------
+# nfqws2 profile composition and invariant checks (--check-config).
+# ---------------------------------------------------------------------------
+
+# The _startup_args of nfqws2-keenetic 1.3.1/1.3.2 (MIT License, Copyright (c)
+# 2026 nfqws), used only when the installed init script has none.
+builtin_startup_args() {
+  cat <<'EOF'
+_startup_args() {
+  local fastpath_workaround=
+  case "$NFQWS_BASE_ARGS" in
+    *--fastpath-workaround=*) ;;
+    *) fastpath_workaround="--fastpath-workaround=auto" ;;
+  esac
+
+  local args="--user=$USER --qnum=$NFQUEUE_NUM $fastpath_workaround $NFQWS_BASE_ARGS"
+
+  local iface_count=$(echo $ISP_INTERFACE | wc -w)
+  if [ "$iface_count" -gt "1" ]; then
+    args="$args --bind-fix4"
+    if [ -n "$IPV6_ENABLED" ] && [ "$IPV6_ENABLED" -ne "0" ]; then
+      args="$args --bind-fix6"
+    fi
+  fi
+
+  if [ "$LOG_LEVEL" -eq "1" ]; then
+    if [ -n "$LOG_DEBUG_PATH" ]; then
+      args="--debug=$LOG_DEBUG_PATH $args"
+    else
+      args="--debug=syslog $args"
+    fi
+  fi
+
+  if [ -n "$NFQWS_ARGS_CUSTOM" ]; then
+    args="$args $NFQWS_ARGS_CUSTOM --new"
+  fi
+
+  if [ -n "$NFQWS_ARGS_UDP" ]; then
+    args="$args $NFQWS_ARGS_UDP --new"
+  fi
+
+  if [ -n "$NFQWS_ARGS_QUIC" ]; then
+    if [ -n "$NFQWS_ARGS_IPSET" ]; then
+      args="$args $NFQWS_ARGS_QUIC $NFQWS_ARGS_IPSET --ipset-ip=0.0.0.0 --new"
+    fi
+    args="$args $NFQWS_ARGS_QUIC $NFQWS_EXTRA_ARGS --new"
+  fi
+
+  if [ -n "$NFQWS_ARGS_IPSET" ]; then
+    args="$args $NFQWS_ARGS $NFQWS_ARGS_IPSET --ipset-ip=0.0.0.0 --new"
+  fi
+  args="$args $NFQWS_ARGS $NFQWS_EXTRA_ARGS"
+
+  echo "$args"
+}
+EOF
+}
+
+# compose_nfqws_profiles CONF TOKENS META
+# Builds the nfqws2 arguments of CONF the way the package init does (with the
+# init's own _startup_args when it has one) and writes the options one per
+# line to TOKENS; nfqws2 ignores the words of the comments that the stock
+# variables contain. META receives "TCP_PORTS ...", "UDP_PORTS ...",
+# "NFQUEUE_NUM ..." and "USER_PROFILES N", the number of leading profiles that
+# come from the user's own NFQWS_ARGS_CUSTOM (the managed block appends after
+# them). The config is shell code that the init sources as root on every
+# start; it is sourced here only in a subshell with an empty environment.
+compose_nfqws_profiles() {
+  compose_conf="$1"
+  compose_tokens="$2"
+  compose_meta="$3"
+  compose_function="$(make_tmp)"
+  COMPOSE_SOURCE="built-in"
+  if [ -f "$NFQWS_INIT" ] &&
+     sed -n '/^_startup_args() {$/,/^}$/p' "$NFQWS_INIT" > "$compose_function" 2>/dev/null &&
+     grep -q 'NFQWS_ARGS_QUIC' "$compose_function" &&
+     grep -qx '}' "$compose_function"; then
+    COMPOSE_SOURCE="package init"
+  else
+    builtin_startup_args > "$compose_function"
+  fi
+  compose_user_conf="$(make_tmp)"
+  sed '/^# BEGIN keenetic-discord-nfqws2$/,/^# END keenetic-discord-nfqws2$/d' \
+    "$compose_conf" > "$compose_user_conf"
+  compose_raw="$(make_tmp)"
+  # shellcheck disable=SC2016 # expanded by the inner shell
+  env -i PATH="$PATH" sh -c '
+    set -f
+    LOG_LEVEL=0
+    NFQUEUE_NUM=300
+    USER=nobody
+    user_custom="$(
+      NFQWS_ARGS_CUSTOM=""
+      . "$3" >/dev/null 2>&1
+      printf "%s" "$NFQWS_ARGS_CUSTOM"
+    )"
+    . "$1" >/dev/null 2>&1
+    . "$2"
+    user_profiles=0
+    for user_token in $user_custom; do
+      case "$user_token" in
+        --new) user_profiles=$((user_profiles + 1)) ;;
+        -*) [ "$user_profiles" -gt 0 ] || user_profiles=1 ;;
+      esac
+    done
+    printf "META TCP_PORTS %s\n" "$TCP_PORTS"
+    printf "META UDP_PORTS %s\n" "$UDP_PORTS"
+    printf "META NFQUEUE_NUM %s\n" "$NFQUEUE_NUM"
+    printf "META USER_PROFILES %s\n" "$user_profiles"
+    _startup_args
+  ' compose "$compose_conf" "$compose_function" "$compose_user_conf" \
+    > "$compose_raw" 2>/dev/null || return 1
+  awk -v meta="$compose_meta" '
+    $1 == "META" { print $2, $3 > meta; next }
+    { for (i = 1; i <= NF; i++) if (substr($i, 1, 1) == "-") print $i }
+  ' "$compose_raw" > "$compose_tokens"
+  [ -s "$compose_tokens" ]
+}
+
+# Port-list helpers shared by the checks: "a,b-c,d:e" lists, compared as
+# sets of port ranges.
+NFQWS_PORT_AWK='
+function port_ranges(spec, lo, hi,    count, items, n, i, item, bounds, m) {
+  count = 0
+  PORT_WILDCARD = 0
+  n = split(spec, items, ",")
+  for (i = 1; i <= n; i++) {
+    item = items[i]
+    if (item == "") continue
+    gsub(/:/, "-", item)
+    m = split(item, bounds, "-")
+    if (m == 1) bounds[2] = bounds[1]
+    if (m > 2 || bounds[1] !~ /^[0-9]+$/ || bounds[2] !~ /^[0-9]+$/) {
+      PORT_WILDCARD = 1
+      continue
+    }
+    count++
+    lo[count] = bounds[1] + 0
+    hi[count] = bounds[2] + 0
+  }
+  return count
+}
+# Prints the parts of [a, b] that the ranges lo/hi (n of them) do not cover.
+function port_gaps(a, b, lo, hi, n,    cur, best, next_lo, j, out, stop) {
+  cur = a
+  out = ""
+  while (cur <= b) {
+    best = -1
+    for (j = 1; j <= n; j++) if (lo[j] <= cur && hi[j] >= cur && hi[j] > best) best = hi[j]
+    if (best >= 0) { cur = best + 1; continue }
+    next_lo = b + 1
+    for (j = 1; j <= n; j++) if (lo[j] > cur && lo[j] < next_lo) next_lo = lo[j]
+    stop = next_lo - 1
+    out = out (out == "" ? "" : ",") (cur == stop ? cur : cur "-" stop)
+    cur = next_lo
+  }
+  return out
+}
+'
+
+# nfqws_config_check CONF [quiet]: prints CHECK|<ok|warn|error>|<name>|<detail>
+# lines for the composed profiles of CONF. Returns 0 without errors, 1 with
+# errors and 2 when the config cannot be read or composed. "quiet" prints only
+# warnings and errors.
+nfqws_config_check() {
+  check_conf="$1"
+  check_quiet="${2:-}"
+  [ -f "$check_conf" ] && [ -r "$check_conf" ] || {
+    echo "CHECK|error|read|cannot read $check_conf"
+    return 2
+  }
+  check_tokens="$(make_tmp)"
+  check_meta="$(make_tmp)"
+  compose_nfqws_profiles "$check_conf" "$check_tokens" "$check_meta" || {
+    echo "CHECK|error|compose|cannot compose the nfqws2 arguments of $check_conf"
+    return 2
+  }
+  check_lines="$(make_tmp)"
+  check_status=0
+  awk -v meta="$check_meta" -v root="$TEST_ROOT" -v source="$COMPOSE_SOURCE" \
+    "$NFQWS_PORT_AWK"'
+    function finding(level, name, detail) {
+      print "CHECK|" level "|" name "|" detail
+      found[name] = 1
+      if (level == "error") errors++
+    }
+    function label(p,    text, files, n) {
+      text = "#" p
+      if (tcp[p] != "") text = text " tcp=" substr(tcp[p], 2)
+      if (udp[p] != "") text = text " udp=" substr(udp[p], 2)
+      if (l7[p] != "") text = text " l7=" l7[p]
+      if (lists[p] != "") {
+        n = split(substr(lists[p], 2), files, "\n")
+        sub(/^.*\//, "", files[1])
+        text = text " list=" files[1]
+      }
+      if (p <= user_profiles) text = text " (user profile)"
+      return text
+    }
+    function level_for(p) { return p <= user_profiles ? "warn" : "error" }
+    function list_entries(path,    real, line, count, status) {
+      real = path
+      if (root != "" && substr(real, 1, 5) == "/opt/") real = root real
+      if (real ~ /\.gz$/) {
+        status = (getline line < real)
+        close(real)
+        return status < 0 ? -1 : 1
+      }
+      count = 0
+      while ((status = (getline line < real)) > 0) {
+        sub(/\r$/, "", line)
+        sub(/^[ \t]+/, "", line)
+        if (line != "" && line !~ /^[#;\/]/) count++
+      }
+      close(real)
+      if (status < 0 && count == 0) return -1
+      return count
+    }
+    BEGIN {
+      while ((getline line < meta) > 0) {
+        split(line, kv, " ")
+        value = substr(line, length(kv[1]) + 2)
+        if (kv[1] == "TCP_PORTS") queue_tcp = value
+        else if (kv[1] == "UDP_PORTS") queue_udp = value
+        else if (kv[1] == "USER_PROFILES") user_profiles = value + 0
+      }
+      close(meta)
+      p = 1
+    }
+    $0 == "--new" { p++; next }
+    {
+      used[p] = 1
+      eq = index($0, "=")
+      option = eq ? substr($0, 1, eq - 1) : $0
+      value = eq ? substr($0, eq + 1) : ""
+      if (option == "--filter-tcp") tcp[p] = tcp[p] "," value
+      else if (option == "--filter-udp") udp[p] = udp[p] "," value
+      else if (option == "--filter-l7") l7[p] = value
+      else if (option == "--hostlist" || option == "--ipset") {
+        host[p] = 1
+        lists[p] = lists[p] "\n" value
+        if (p > user_profiles) managed_list[value] = 1
+        all_lists[value] = 1
+      }
+      else if (option == "--hostlist-domains" || option == "--hostlist-auto" || option == "--ipset-ip") host[p] = 1
+      else if (option == "--lua-desync") {
+        desync[p]++
+        if ((value == "fake" || substr(value, 1, 5) == "fake:") && value !~ /(^|:)blob=/)
+          legacy[p] = legacy[p] " " value
+      }
+    }
+    END {
+      profiles = p
+      qt = port_ranges(queue_tcp, qtlo, qthi)
+      qu = port_ranges(queue_udp, qulo, quhi)
+      print "CHECK|ok|compose|" profiles " profiles (" source " _startup_args); TCP_PORTS=" queue_tcp ", UDP_PORTS=" queue_udp
+      at = 0; au = 0; any_tcp = 0; any_udp = 0
+      for (p = 1; p <= profiles; p++) {
+        if (!used[p]) continue
+        if (tcp[p] == "" && udp[p] == "") {
+          if (desync[p] > 0) {
+            finding("warn", "port-coverage", label(p) " has no --filter-tcp/--filter-udp: it sees every queued port")
+            any_tcp = 1; any_udp = 1
+          }
+          continue
+        }
+        if (tcp[p] != "") {
+          delete lo; delete hi
+          n = port_ranges(substr(tcp[p], 2), lo, hi)
+          if (PORT_WILDCARD) { finding("warn", "port-coverage", label(p) " uses a wildcard or negated TCP filter; not checked"); any_tcp = 1 }
+          for (i = 1; i <= n; i++) {
+            at++; atlo[at] = lo[i]; athi[at] = hi[i]
+            gaps = port_gaps(lo[i], hi[i], qtlo, qthi, qt)
+            if (gaps != "") finding(level_for(p), "port-coverage", label(p) " filters TCP " gaps " outside TCP_PORTS=" queue_tcp)
+          }
+        }
+        if (udp[p] != "") {
+          delete lo; delete hi
+          n = port_ranges(substr(udp[p], 2), lo, hi)
+          if (PORT_WILDCARD) { finding("warn", "port-coverage", label(p) " uses a wildcard or negated UDP filter; not checked"); any_udp = 1 }
+          for (i = 1; i <= n; i++) {
+            au++; aulo[au] = lo[i]; auhi[au] = hi[i]
+            gaps = port_gaps(lo[i], hi[i], qulo, quhi, qu)
+            if (gaps != "") finding(level_for(p), "port-coverage", label(p) " filters UDP " gaps " outside UDP_PORTS=" queue_udp)
+          }
+        }
+      }
+      if (!found["port-coverage"]) print "CHECK|ok|port-coverage|every profile port is queued"
+
+      if (!any_tcp) for (i = 1; i <= qt; i++) {
+        gaps = port_gaps(qtlo[i], qthi[i], atlo, athi, at)
+        if (gaps != "") finding("warn", "unhandled-ports", "TCP " gaps " is queued but no profile filters it")
+      }
+      if (!any_udp) for (i = 1; i <= qu; i++) {
+        gaps = port_gaps(qulo[i], quhi[i], aulo, auhi, au)
+        if (gaps != "") finding("warn", "unhandled-ports", "UDP " gaps " is queued but no profile filters it")
+      }
+      if (!found["unhandled-ports"]) print "CHECK|ok|unhandled-ports|every queued port has a profile"
+
+      for (p = 1; p <= profiles; p++) {
+        if (!used[p] || desync[p] == 0 || host[p]) continue
+        if (l7[p] == "stun,discord") continue
+        finding(level_for(p), "listless-profile", label(p) " has --lua-desync but no --hostlist/--ipset: it desyncs every host")
+      }
+      if (!found["listless-profile"]) print "CHECK|ok|listless-profile|every desync profile has a host filter"
+
+      for (file in all_lists) {
+        entries = list_entries(file)
+        level = (file in managed_list) ? "error" : "warn"
+        if (entries < 0) finding(level, "empty-hostlist", file " is missing or unreadable")
+        else if (entries == 0) finding(level, "empty-hostlist", file " has no entries: nfqws2 then treats the profile as having no host filter")
+      }
+      if (!found["empty-hostlist"]) print "CHECK|ok|empty-hostlist|every referenced list has entries"
+
+      for (p = 1; p <= profiles; p++)
+        if (legacy[p] != "")
+          finding(level_for(p), "legacy-blob", label(p) " has --lua-desync=fake without blob=:" legacy[p])
+      if (!found["legacy-blob"]) print "CHECK|ok|legacy-blob|every fake names its blob"
+      exit (errors > 0 ? 1 : 0)
+    }
+  ' "$check_tokens" > "$check_lines" || check_status=$?
+  check_header_lines "$check_conf" >> "$check_lines"
+  if grep -q '^CHECK|error|' "$check_lines"; then
+    check_status=1
+  fi
+  if [ "$check_quiet" = quiet ]; then
+    grep -v '^CHECK|ok|' "$check_lines" || true
+  else
+    cat "$check_lines"
+  fi
+  return "$check_status"
+}
+
+# --print-nfqws-profiles: PROFILE|<n>|<user|managed>|<options> per composed
+# profile (the global options stay in profile 1).
+print_nfqws_profiles() {
+  [ -f "$NFQWS_CONF" ] || {
+    echo "ERROR: nfqws2 config not found: $NFQWS_CONF" >&2
+    return 2
+  }
+  print_tokens="$(make_tmp)"
+  print_meta="$(make_tmp)"
+  compose_nfqws_profiles "$NFQWS_CONF" "$print_tokens" "$print_meta" || {
+    echo "ERROR: cannot compose the nfqws2 arguments of $NFQWS_CONF" >&2
+    return 2
+  }
+  awk -v meta="$print_meta" '
+    function flush() {
+      print "PROFILE|" p "|" (p <= user ? "user" : "managed") "|" text
+      text = ""
+    }
+    BEGIN {
+      while ((getline line < meta) > 0) if (line ~ /^USER_PROFILES /) user = substr(line, 15) + 0
+      p = 1
+    }
+    $0 == "--new" { flush(); p++; next }
+    { text = text (text == "" ? "" : " ") $0 }
+    END { flush() }
+  ' "$print_tokens"
+}
+
+# Checks of the managed header that need no composition: the recorded Discord
+# UDP range against an imported Voice profile (A7/B9).
+check_header_lines() {
+  header_conf="$1"
+  header_range="$(sed -n 's/^# Discord UDP: strategy=[a-z]*, range=\([a-z]*\)\.$/\1/p' "$header_conf" | sed -n '1p')"
+  header_voice="$(sed -n 's/^# Discord Voice profile: imported \([0-9a-f]*\), udp=\([0-9,-]*\)\.$/\1 \2/p' "$header_conf" | sed -n '1p')"
+  if [ -n "$header_voice" ]; then
+    header_voice_id="${header_voice%% *}"
+    header_voice_ports="${header_voice#* }"
+    if [ "$header_range" = wide ] &&
+       ! awk -v ports="$header_voice_ports" "$NFQWS_PORT_AWK"'
+         BEGIN { n = port_ranges(ports, lo, hi); for (i = 1; i <= n; i++) if (hi[i] >= 65535) exit 0; exit 1 }'; then
+      echo "CHECK|warn|voice-range|range=wide is recorded, but the imported Discord Voice profile $header_voice_id filters only UDP $header_voice_ports; Xray sends 50000-65535 direct"
+    else
+      echo "CHECK|ok|voice-range|imported Discord Voice profile $header_voice_id filters UDP $header_voice_ports"
+    fi
+  fi
+}
+
+# nfqws_dry_run TOKENS: runs "nfqws2 --dry-run" on the composed arguments
+# when the binary is installed (KD_TEST_NFQWS2_BIN in the tests).
+nfqws_dry_run() {
+  dry_tokens="$1"
+  dry_bin="$NFQWS_BIN"
+  if [ -n "$TEST_ROOT" ] && [ -n "${KD_TEST_NFQWS2_BIN:-}" ]; then
+    dry_bin="$KD_TEST_NFQWS2_BIN"
+  fi
+  [ -x "$dry_bin" ] || {
+    echo "nfqws2 binary not found; dry-run skipped."
+    return 0
+  }
+  dry_args="$(make_tmp)"
+  if [ -n "$TEST_ROOT" ]; then
+    # Fixture paths: the composed arguments name the router's /opt paths.
+    sed "s#=/opt/#=$TEST_ROOT/opt/#g; s#@/opt/#@$TEST_ROOT/opt/#g" "$dry_tokens" > "$dry_args"
+  else
+    cp "$dry_tokens" "$dry_args"
+  fi
+  dry_log="$(make_tmp)"
+  set -f
+  # shellcheck disable=SC2046 # one option per line, no spaces inside
+  if "$dry_bin" --dry-run $(cat "$dry_args") > "$dry_log" 2>&1; then
+    set +f
+    echo "nfqws2 --dry-run: arguments verified."
+    return 0
+  fi
+  set +f
+  echo "ERROR: nfqws2 --dry-run rejects the generated arguments:" >&2
+  tail -n 15 "$dry_log" >&2
+  return 1
+}
+
+# Runs the invariant checks and the dry-run on the generated config before
+# nfqws2 is restarted. Any error fails the transaction (automatic rollback).
+validate_generated_nfqws_config() {
+  echo "Checking the generated nfqws2 profiles..."
+  if nfqws_config_check "$NFQWS_CONF" quiet; then
+    echo "nfqws2 profile checks passed."
+  else
+    echo "ERROR: the generated nfqws2 config fails the checks above; not restarting nfqws2." >&2
+    return 1
+  fi
+  validated_tokens="$(make_tmp)"
+  validated_meta="$(make_tmp)"
+  compose_nfqws_profiles "$NFQWS_CONF" "$validated_tokens" "$validated_meta"
+  nfqws_dry_run "$validated_tokens"
 }
 
 # NFQWS_BASE_ARGS line that registers the Discord Voice fake blob.
@@ -3542,7 +4299,8 @@ patch_nfqws() {
   if [ "$DISCORD_TCP_ROUTE_MODE" = "zapret" ]; then
     discord_domains > "$list_tmp"
   else
-    : > "$list_tmp"
+    # Never empty: nfqws2 reads an empty hostlist as "no host filter".
+    printf '%s\n' "$NFQWS_DISABLED_HOST" > "$list_tmp"
   fi
   if [ -e "$NFQWS_LIST" ]; then
     list_mode="$(file_mode "$NFQWS_LIST" 2>/dev/null || echo 0644)"
@@ -3581,27 +4339,41 @@ patch_nfqws() {
   if [ "$YOUTUBE_ROUTE_MODE" = "zapret" ]; then
     youtube_import="$(active_imported_profile youtube 2>/dev/null || true)"
   fi
+  # Every stored profile must stay valid, even an unused one; only the Voice
+  # port range depends on the route: an unused Voice profile must not block
+  # an apply that narrows the range (A10).
   for expected_import in \
     "$IMPORTED_PROFILE_DIR/discord-tcp.json" \
     "$IMPORTED_PROFILE_DIR/discord-voice.json" \
     "$IMPORTED_PROFILE_DIR/youtube.json"
   do
     if [ -e "$expected_import" ]; then
+      case "$expected_import:$DISCORD_VOICE_ROUTE_MODE" in
+        */discord-voice.json:zapret) VOICE_RANGE_CHECK=1 ;;
+        */discord-voice.json:*) VOICE_RANGE_CHECK=0 ;;
+      esac
       validate_imported_profile "$expected_import"
+      VOICE_RANGE_CHECK=1
     fi
   done
 
+  recorded_proxy_header="$(recorded_proxy_outbound 2>/dev/null || true)"
   nfqws_tmp="$(make_tmp)"
   sed '/^# BEGIN keenetic-discord-nfqws2$/,/^# END keenetic-discord-nfqws2$/d' \
-    "$NFQWS_CONF" > "$nfqws_tmp"
+    "$NFQWS_CONF" | strip_trailing_blank_lines > "$nfqws_tmp"
 
-  if [ "$DISCORD_TCP_ROUTE_MODE" = "zapret" ]; then
+  if [ "$DISCORD_TCP_ROUTE_MODE" = "zapret" ] && [ -z "$discord_tcp_import" ]; then
     selected_tcp_ports="$TCP_PORTS_VALUE"
   else
+    # The imported Discord TCP profile and the disabled base profile filter
+    # TCP 443 only, like the YouTube and Telegram profiles.
     selected_tcp_ports="443"
   fi
 
   base_tcp_filter="$selected_tcp_ports"
+  if [ "$DISCORD_TCP_ROUTE_MODE" = "zapret" ]; then
+    base_tcp_filter="$TCP_PORTS_VALUE"
+  fi
 
   if grep -q '^NFQWS_ARGS="--filter-tcp=' "$nfqws_tmp"; then
     sed "s/^NFQWS_ARGS=\"--filter-tcp=[^ ]*/NFQWS_ARGS=\"--filter-tcp=$base_tcp_filter/" \
@@ -3634,6 +4406,18 @@ patch_nfqws() {
     selected_udp_filter="443"
   fi
 
+  # The user's own NFQWS_ARGS_CUSTOM profiles stay in front of the managed
+  # ones, so their ports must stay queued as well (A3). The value is read as
+  # text: the config is not sourced here.
+  user_custom_tcp="$(user_custom_filter_ports "$nfqws_tmp" --filter-tcp)"
+  user_custom_udp="$(user_custom_filter_ports "$nfqws_tmp" --filter-udp)"
+  if [ -n "$user_custom_tcp" ]; then
+    selected_tcp_ports="$(ports_union "$selected_tcp_ports" "$user_custom_tcp")"
+  fi
+  if [ -n "$user_custom_udp" ]; then
+    selected_udp_ports="$(ports_union "$selected_udp_ports" "$user_custom_udp")"
+  fi
+
   udp_base_append=""
   udp_desync=""
   case "$DISCORD_VOICE_ROUTE_MODE:${discord_voice_import:+imported}:$UDP_STRATEGY" in
@@ -3648,8 +4432,10 @@ patch_nfqws() {
       ;;
     zapret::legacy)
       rm -f "$NFQWS_DISCORD_UDP_BLOB"
+      # A fake without blob= fails in zapret-antidpi.lua on every packet;
+      # nfqws2-keenetic 1.3.2 uses the 4-byte zero blob for this strategy.
       udp_desync='                --lua-desync=circular:fails=2:time=300:retrans=3:nld=2
-                --lua-desync=fake:repeats=6:strategy=1'
+                --lua-desync=fake:blob=0x00000000:repeats=6:strategy=1'
       if grep -q -e '--blob=quic_initial:' "$nfqws_tmp"; then
         udp_desync="$udp_desync
                 --lua-desync=fake:blob=quic_initial:repeats=6:strategy=2"
@@ -3716,17 +4502,33 @@ NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM
 --lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=telegram_tls:tcp_ts_up"'
   fi
 
+  # The package init appends NFQWS_EXTRA_ARGS to both NFQWS_ARGS and
+  # NFQWS_ARGS_QUIC, so it stays $MODE_LIST even with an imported Discord TCP
+  # profile: an empty value took the hostlist from the QUIC profile and made
+  # it fake every QUIC flow (D2/A2/B4/E4). The imported profile already
+  # names user.list; nfqws2 loads the same list only once.
   discord_tcp_profile_assignment=""
+  # shellcheck disable=SC2016 # expanded by nfqws2.conf
   nfqws_extra_args='$MODE_LIST'
   if [ -n "$discord_tcp_import" ]; then
     discord_tcp_import_args="$(jq -r '.args[]' "$discord_tcp_import")"
     discord_tcp_profile_assignment="NFQWS_ARGS=\"$discord_tcp_import_args\""
-    nfqws_extra_args=""
+  fi
+  # The package QUIC profile reads user.list: it is Discord's QUIC profile.
+  # Without Discord TCP on zapret it is dropped (the init skips an empty
+  # NFQWS_ARGS_QUIC); NFQWS_ARGS cannot be dropped and keeps the inert
+  # user.list instead (A1/B2).
+  quic_profile_assignment=""
+  if [ "$DISCORD_TCP_ROUTE_MODE" != "zapret" ]; then
+    quic_profile_assignment='NFQWS_ARGS_QUIC=""'
   fi
 
+  voice_profile_header=""
   if [ -n "$discord_voice_import" ]; then
     discord_voice_import_args="$(jq -r '.args[]' "$discord_voice_import")"
     udp_profile_assignment="NFQWS_ARGS_UDP=\"$discord_voice_import_args\""
+    # The imported profile decides the Voice ports, whatever the range is.
+    voice_profile_header="# Discord Voice profile: imported $(jq -r '.candidate_id' "$discord_voice_import"), udp=$imported_voice_filter."
   elif [ "$DISCORD_VOICE_ROUTE_MODE" = "zapret" ]; then
     udp_profile_assignment="NFQWS_ARGS_UDP=\"--filter-udp=$selected_udp_filter
                 --filter-l7=stun,discord
@@ -3748,19 +4550,29 @@ $udp_desync\""
   else
     deployment_mode="xkeen-integrated"
   fi
+  # The Xray proxy outbound of the vless routes, kept for later applies that
+  # can no longer find it in the user's rules (C3).
+  proxy_header_value="${PROXY_OUTBOUND_EFFECTIVE:-$recorded_proxy_header}"
+  proxy_header=""
+  if [ -n "$proxy_header_value" ]; then
+    proxy_header="# Proxy outbound: $proxy_header_value."
+  fi
 
   cat >> "$nfqws_tmp" <<EOF
 
 # BEGIN keenetic-discord-nfqws2
 # Generated by apply-discord-nfqws2.sh $SCRIPT_VERSION.
 # Deployment mode: $deployment_mode.
-# Active routes: DiscordTCP=$DISCORD_TCP_ROUTE_MODE, DiscordVoice=$DISCORD_VOICE_ROUTE_MODE, YouTube=$YOUTUBE_ROUTE_MODE, Telegram=$TELEGRAM_ROUTE_MODE.
+# Active routes: DiscordTCP=$DISCORD_TCP_ROUTE_MODE, DiscordVoice=$DISCORD_VOICE_ROUTE_MODE, YouTube=$YOUTUBE_ROUTE_MODE, Telegram=${TELEGRAM_HEADER_ROUTE:-$TELEGRAM_ROUTE_MODE}.
 # Discord UDP: strategy=$UDP_STRATEGY, range=$udp_range_label.
+$voice_profile_header
+$proxy_header
 # Base TCP/QUIC use user.list; YouTube has isolated custom profiles.
 $udp_base_append
 $youtube_base_append
 $telegram_base_append
 $discord_tcp_profile_assignment
+$quic_profile_assignment
 $udp_profile_assignment
 NFQWS_EXTRA_ARGS="$nfqws_extra_args"
 NFQWS_ARGS_IPSET=""
@@ -3775,13 +4587,180 @@ ISP_INTERFACE="$WAN_INTERFACE_EFFECTIVE"
 # END keenetic-discord-nfqws2
 EOF
   replace_preserving_mode "$NFQWS_CONF" "$nfqws_tmp"
+  validate_generated_nfqws_config
 }
 
+# Drops the blank lines at the end of stdin: the managed block is appended
+# after one blank line, which must not pile up with every apply (A8/C1).
+strip_trailing_blank_lines() {
+  awk 'NF { for (; blank > 0; blank--) print ""; print; next } { blank++ }'
+}
+
+# user_custom_filter_ports FILE --filter-tcp|--filter-udp: the ports of the
+# last NFQWS_ARGS_CUSTOM="..." assignment of FILE, read as text, with ':'
+# ranges. Wildcards and negations are left to --check-config.
+user_custom_filter_ports() {
+  awk -v option="$2" '
+    function take(text,    quote) {
+      quote = index(text, "\"")
+      if (quote) {
+        value = value " " substr(text, 1, quote - 1)
+        inside = 0
+        last = value
+      } else {
+        value = value " " text
+      }
+    }
+    inside { take($0); next }
+    /^[ \t]*NFQWS_ARGS_CUSTOM="/ {
+      line = $0
+      sub(/^[ \t]*NFQWS_ARGS_CUSTOM="/, "", line)
+      value = ""
+      inside = 1
+      take(line)
+    }
+    END {
+      n = split(last, words, /[ \t]+/)
+      out = ""
+      for (i = 1; i <= n; i++) {
+        if (index(words[i], option "=") != 1) continue
+        ports = substr(words[i], length(option) + 2)
+        count = split(ports, items, ",")
+        for (j = 1; j <= count; j++) {
+          if (items[j] !~ /^[0-9]+([-:][0-9]+)?$/) continue
+          gsub(/-/, ":", items[j])
+          out = out (out == "" ? "" : ",") items[j]
+        }
+      }
+      print out
+    }
+  ' "$1"
+}
+
+# ports_union LIST EXTRA: LIST followed by the parts of EXTRA it lacks.
+ports_union() {
+  awk -v base="$1" -v extra="$2" "$NFQWS_PORT_AWK"'
+    BEGIN {
+      out = base
+      nb = port_ranges(out, blo, bhi)
+      ne = port_ranges(extra, elo, ehi)
+      for (i = 1; i <= ne; i++) {
+        gaps = port_gaps(elo[i], ehi[i], blo, bhi, nb)
+        if (gaps == "") continue
+        gsub(/-/, ":", gaps)
+        out = out "," gaps
+        nb = port_ranges(out, blo, bhi)
+      }
+      print out
+    }
+  '
+}
+
+# ports_same A B: the two port lists cover the same ports.
+ports_same() {
+  awk -v left="$1" -v right="$2" "$NFQWS_PORT_AWK"'
+    BEGIN {
+      nl = port_ranges(left, llo, lhi)
+      nr = port_ranges(right, rlo, rhi)
+      if (nl == 0 || nr == 0) exit 1
+      for (i = 1; i <= nl; i++) if (port_gaps(llo[i], lhi[i], rlo, rhi, nr) != "") exit 1
+      for (i = 1; i <= nr; i++) if (port_gaps(rlo[i], rhi[i], llo, lhi, nl) != "") exit 1
+    }
+  '
+}
+
+# verify_nfqueue_rules RULES IFACE FAMILY: the hooks exist, and the NFQUEUE
+# rules of IFACE queue exactly TCP_PORTS/UDP_PORTS of nfqws2.conf (A6). The
+# live rules show a stale firewall or an init that was not restarted.
+verify_nfqueue_rules() {
+  rules_text="$1"
+  rules_iface="$2"
+  rules_family="$3"
+  for rules_hook in 'POSTROUTING -j nfqws_post' 'PREROUTING -j nfqws_pre'; do
+    printf '%s\n' "$rules_text" | grep -q "^-A $rules_hook\$" || {
+      echo "ERROR: nfqws2 $rules_family hook is missing: -A $rules_hook" >&2
+      return 1
+    }
+  done
+  for rules_proto in tcp udp; do
+    if [ "$rules_proto" = tcp ]; then
+      rules_expected="$(nfqws_value TCP_PORTS)"
+    else
+      rules_expected="$(nfqws_value UDP_PORTS)"
+    fi
+    rules_live="$(
+      printf '%s\n' "$rules_text" | awk -v iface="$rules_iface" -v proto="$rules_proto" '
+        $1 == "-A" && $2 == "nfqws_post" && index($0, "-j NFQUEUE") {
+          out_iface = ""; rule_proto = ""; ports = ""
+          for (i = 3; i < NF; i++) {
+            if ($i == "-o") out_iface = $(i + 1)
+            else if ($i == "-p") rule_proto = $(i + 1)
+            else if ($i == "--dports") ports = $(i + 1)
+          }
+          if (out_iface == iface && rule_proto == proto && ports != "") list = list (list == "" ? "" : ",") ports
+        }
+        END { print list }
+      '
+    )"
+    [ -n "$rules_live" ] || {
+      echo "ERROR: no nfqws2 $rules_family $rules_proto NFQUEUE rule for $rules_iface." >&2
+      return 1
+    }
+    ports_same "$rules_live" "$rules_expected" || {
+      echo "ERROR: nfqws2 $rules_family $rules_proto NFQUEUE rule for $rules_iface queues $rules_live, nfqws2.conf has $rules_expected." >&2
+      return 1
+    }
+  done
+}
+
+# verify_nfqws_runtime [PID_BEFORE]: a new nfqws2 runs (not PID_BEFORE, the
+# daemon before the restart: the init can leave a stale daemon running),
+# started with the composed arguments of the current config, and the
+# firewall queues the configured ports.
 verify_nfqws_runtime() {
-  nfqws_running || {
-    echo "ERROR: nfqws2 is not running." >&2
+  verify_previous_pid="${1:-}"
+  verify_pid=""
+  verify_try=0
+  while [ "$verify_try" -lt 5 ]; do
+    verify_pid="$(nfqws_service_pid 2>/dev/null || true)"
+    if [ -n "$verify_pid" ] && [ "$verify_pid" != "$verify_previous_pid" ]; then
+      break
+    fi
+    verify_pid=""
+    sleep 1
+    verify_try=$((verify_try + 1))
+  done
+  [ -n "$verify_pid" ] || {
+    if [ -n "$verify_previous_pid" ] && nfqws_running; then
+      echo "ERROR: nfqws2 still runs as the old process $verify_previous_pid after the restart." >&2
+    else
+      echo "ERROR: nfqws2 is not running." >&2
+    fi
     return 1
   }
+  if [ -r "/proc/$verify_pid/cmdline" ]; then
+    verify_tokens="$(make_tmp)"
+    verify_meta="$(make_tmp)"
+    compose_nfqws_profiles "$NFQWS_CONF" "$verify_tokens" "$verify_meta" || {
+      echo "ERROR: cannot compose the nfqws2 arguments to verify the daemon." >&2
+      return 1
+    }
+    verify_actual="$(make_tmp)"
+    tr '\0' '\n' < "/proc/$verify_pid/cmdline" | awk 'substr($0, 1, 1) == "-"' > "$verify_actual"
+    # The profile options must appear in order; global options that an
+    # init may add differently are not compared.
+    awk '
+      NR == FNR {
+        if ($0 !~ /^--(user|qnum|fastpath-workaround|debug|bind-fix4|bind-fix6)(=|$)/) want[++n] = $0
+        next
+      }
+      i < n && $0 == want[i + 1] { i++ }
+      END { exit !(i == n) }
+    ' "$verify_tokens" "$verify_actual" || {
+      echo "ERROR: the running nfqws2 (PID $verify_pid) was not started with the arguments of the current nfqws2.conf." >&2
+      return 1
+    }
+  fi
 
   have iptables-save || {
     echo "ERROR: iptables-save is unavailable after nfqws2 installation." >&2
@@ -3791,18 +4770,8 @@ verify_nfqws_runtime() {
     echo "ERROR: cannot read IPv4 mangle rules." >&2
     return 1
   }
-  printf '%s\n' "$ipv4_rules" | grep -q '^-A POSTROUTING -j nfqws_post$' || {
-    echo "ERROR: nfqws2 POSTROUTING hook was not created." >&2
-    return 1
-  }
   for verified_iface in $WAN_INTERFACE_EFFECTIVE; do
-    printf '%s\n' "$ipv4_rules" |
-      grep '^-A nfqws_post ' |
-      grep -F -e "-o $verified_iface " |
-      grep -q 'NFQUEUE' || {
-        echo "ERROR: no nfqws2 IPv4 NFQUEUE rule for $verified_iface." >&2
-        return 1
-      }
+    verify_nfqueue_rules "$ipv4_rules" "$verified_iface" IPv4 || return 1
   done
 
   if [ "$NFQWS_IPV6_EFFECTIVE" -eq 1 ]; then
@@ -3814,18 +4783,8 @@ verify_nfqws_runtime() {
       echo "ERROR: cannot read IPv6 mangle rules." >&2
       return 1
     }
-    printf '%s\n' "$ipv6_rules" | grep -q '^-A POSTROUTING -j nfqws_post$' || {
-      echo "ERROR: nfqws2 IPv6 POSTROUTING hook was not created." >&2
-      return 1
-    }
     for verified_iface in $IPV6_WAN_INTERFACE; do
-      printf '%s\n' "$ipv6_rules" |
-        grep '^-A nfqws_post ' |
-        grep -F -e "-o $verified_iface " |
-        grep -q 'NFQUEUE' || {
-          echo "ERROR: no nfqws2 IPv6 NFQUEUE rule for $verified_iface." >&2
-          return 1
-        }
+      verify_nfqueue_rules "$ipv6_rules" "$verified_iface" IPv6 || return 1
     done
   fi
 }
@@ -3836,8 +4795,9 @@ restart_nfqws_only_and_verify() {
     echo "ERROR: nfqws2 init script is missing: $NFQWS_INIT" >&2
     return 1
   }
+  nfqws_pid_before="$(nfqws_service_pid 2>/dev/null || true)"
   run_nfqws_init restart
-  verify_nfqws_runtime
+  verify_nfqws_runtime "$nfqws_pid_before"
 }
 
 restart_and_verify() {
@@ -3882,7 +4842,12 @@ apply_transaction() {
     atomic_pointer "$BASELINE_POINTER" "$PREAPPLY_SNAPSHOT"
     echo "Immutable baseline recorded: $PREAPPLY_SNAPSHOT"
   fi
+  # Written before the work so that --rollback-latest also finds this
+  # snapshot after a power loss; on_exit puts the old value back when the
+  # automatic rollback of a failed apply succeeds (C4).
+  PREVIOUS_LATEST_SNAPSHOT="$(sed -n '1p' "$LATEST_POINTER" 2>/dev/null || true)"
   atomic_pointer "$LATEST_POINTER" "$PREAPPLY_SNAPSHOT"
+  LATEST_POINTER_REPLACED=1
   TRANSACTION_ACTIVE=1
 
   install_missing_packages
@@ -3903,6 +4868,8 @@ apply_transaction() {
   fi
 
   TRANSACTION_ACTIVE=0
+  invalidate_import_rollback
+  prune_snapshots
   echo "Apply complete."
   if [ "$STANDALONE_ZAPRET" -eq 1 ]; then
     echo "XKeen/Xray/Mihomo were outside this transaction and were not touched."
@@ -3989,6 +4956,7 @@ apply_import_profile_transaction() {
   restart_nfqws_only_and_verify
 
   NFQWS_TRANSACTION_ACTIVE=0
+  prune_import_snapshots
   echo "Imported $import_service profile: $(jq -r '.candidate_id' "$import_target")"
   echo "XKeen was not restarted or reconfigured."
 }
@@ -4017,6 +4985,7 @@ clear_import_profile_transaction() {
   patch_nfqws
   restart_nfqws_only_and_verify
   NFQWS_TRANSACTION_ACTIVE=0
+  prune_import_snapshots
   echo "Built-in $CLEAR_IMPORTED_PROFILE profile restored."
   echo "XKeen was not restarted or reconfigured."
 }
@@ -4030,14 +4999,97 @@ rollback_import_transaction() {
     return 1
   }
   verify_nfqws_import_snapshot "$target_import_snapshot"
+  # The snapshot holds nfqws2 data only. Restoring it under other routes would
+  # bring back the old routes in nfqws2 while Xray keeps the new ones (C2).
+  target_import_header="$(state_value "$target_import_snapshot/STATE.tsv" ROUTES_HEADER 2>/dev/null || true)"
+  if ! grep -q "^ROUTES_HEADER$(printf '\t')" "$target_import_snapshot/STATE.tsv"; then
+    target_import_header="$(nfqws_route_header "$target_import_snapshot/nfqws2/nfqws2.conf")"
+  fi
+  current_import_header="$(nfqws_route_header "$NFQWS_CONF")"
+  if [ "$target_import_header" != "$current_import_header" ]; then
+    echo "ERROR: the routes changed after the latest profile operation; its nfqws2 snapshot no longer matches Xray." >&2
+    echo "       Snapshot: $target_import_header" >&2
+    echo "       Current:  $current_import_header" >&2
+    echo "       Nothing was changed. Use --rollback-latest or a snapshot from the history instead." >&2
+    return 1
+  fi
 
   create_nfqws_import_snapshot pre-import-rollback-rescue
   rescue_import_snapshot="$NFQWS_IMPORT_BACKUP"
   NFQWS_TRANSACTION_ACTIVE=1
   restore_nfqws_import_snapshot "$target_import_snapshot"
+  # A snapshot written by an older release can hold a config that the
+  # checks now reject (an empty user.list); keep the current state then.
+  nfqws_config_check "$NFQWS_CONF" quiet || {
+    echo "ERROR: the restored nfqws2 config fails the checks above." >&2
+    return 1
+  }
   NFQWS_TRANSACTION_ACTIVE=0
   atomic_pointer "$LATEST_IMPORT_POINTER" "$rescue_import_snapshot"
+  prune_import_snapshots
   echo "Latest profile operation rolled back. XKeen was not touched."
+}
+
+# Snapshot pruning (B10/C7), only after a successful operation under the lock.
+# Kept: the baseline, XKeen baseline and latest-preapply targets, the
+# snapshots of this run, every snapshot the panel history refers to, and the
+# newest KD_SNAPSHOT_KEEP (20).
+prune_snapshots() {
+  [ -d "$SNAPSHOT_ROOT" ] || return 0
+  prune_keep="${KD_SNAPSHOT_KEEP:-20}"
+  case "$prune_keep" in ''|*[!0-9]*) prune_keep=20 ;; esac
+  prune_list="$(make_tmp)"
+  {
+    for prune_pointer in "$BASELINE_POINTER" "$XKEEN_BASELINE_POINTER" "$LATEST_POINTER"; do
+      sed -n '1p' "$prune_pointer" 2>/dev/null || true
+    done
+    printf '%s\n%s\n' "$CREATED_SNAPSHOT" "$PREAPPLY_SNAPSHOT"
+    if [ -d "$PANEL_HISTORY_DIR" ]; then
+      cat "$PANEL_HISTORY_DIR"/*.json 2>/dev/null |
+        grep -o 'keenetic-discord-nfqws2/snapshots/[0-9A-Za-z-]*' || true
+    fi
+  } | sed 's#.*/##' > "$prune_list"
+  ls -1 "$SNAPSHOT_ROOT" | sort | tail -n "$prune_keep" >> "$prune_list"
+  prune_count=0
+  for prune_dir in "$SNAPSHOT_ROOT"/*; do
+    prune_leaf="${prune_dir##*/}"
+    grep -Fqx "$prune_leaf" "$prune_list" && continue
+    safe_snapshot_path "$prune_dir" && [ -f "$prune_dir/MANIFEST" ] || continue
+    rm -rf "$prune_dir"
+    prune_count=$((prune_count + 1))
+  done
+  [ "$prune_count" -eq 0 ] || echo "Old snapshots removed: $prune_count"
+}
+
+# Keeps the --rollback-import target, this run's snapshot and the newest
+# KD_IMPORT_SNAPSHOT_KEEP (10) focused nfqws2 snapshots.
+prune_import_snapshots() {
+  [ -d "$IMPORT_SNAPSHOT_ROOT" ] || return 0
+  prune_keep="${KD_IMPORT_SNAPSHOT_KEEP:-10}"
+  case "$prune_keep" in ''|*[!0-9]*) prune_keep=10 ;; esac
+  prune_list="$(make_tmp)"
+  {
+    sed -n '1p' "$LATEST_IMPORT_POINTER" 2>/dev/null || true
+    printf '%s\n' "$NFQWS_IMPORT_BACKUP"
+  } | sed 's#.*/##' > "$prune_list"
+  ls -1 "$IMPORT_SNAPSHOT_ROOT" | sort | tail -n "$prune_keep" >> "$prune_list"
+  for prune_dir in "$IMPORT_SNAPSHOT_ROOT"/*; do
+    prune_leaf="${prune_dir##*/}"
+    grep -Fqx "$prune_leaf" "$prune_list" && continue
+    safe_import_snapshot_path "$prune_dir" && [ -f "$prune_dir/STATE.tsv" ] || continue
+    rm -rf "$prune_dir"
+  done
+}
+
+# A full apply or restore replaces the nfqws2 data the focused import
+# rollback would restore, so that rollback no longer applies (C2/A4/B5/D4).
+# Called only after the operation succeeded: an apply that fails and is
+# rolled back automatically returns to the state the pointer belongs to.
+invalidate_import_rollback() {
+  if [ -f "$LATEST_IMPORT_POINTER" ]; then
+    rm -f "$LATEST_IMPORT_POINTER"
+    echo "Focused profile rollback (--rollback-import) is no longer available after this change."
+  fi
 }
 
 manual_restore_target() {
@@ -4063,6 +5115,8 @@ manual_restore_target() {
   TRANSACTION_ACTIVE=1
   restore_snapshot_internal "$target_snapshot"
   TRANSACTION_ACTIVE=0
+  invalidate_import_rollback
+  prune_snapshots
   echo "$restore_label rollback complete."
 }
 
@@ -4110,6 +5164,8 @@ rollback_to_baseline() {
   restore_snapshot_internal "$xkeen_baseline"
   restore_snapshot_internal "$nfqws_baseline"
   TRANSACTION_ACTIVE=0
+  invalidate_import_rollback
+  prune_snapshots
   echo "Baseline rollback complete (XKeen baseline, then nfqws2 baseline)."
 }
 
@@ -4128,6 +5184,14 @@ case "$MODE" in
     ;;
   status)
     status_report
+    ;;
+  check-config)
+    check_config_status=0
+    nfqws_config_check "$NFQWS_CONF" || check_config_status=$?
+    exit "$check_config_status"
+    ;;
+  print-nfqws-profiles)
+    print_nfqws_profiles
     ;;
   show-snapshots)
     show_snapshots

@@ -34,57 +34,18 @@ mkdir -p \
   "$ROOT/opt/etc/ndm/schedule.d" \
   "$ROOT/opt/tmp" \
   "$ROOT/opt/var/run" \
+  "$ROOT/opt/var/opkg-lists" \
   "$PACKAGE_STATE" \
   "$MOCK_BIN"
 
 touch "$PACKAGE_STATE/ca-certificates" "$PACKAGE_STATE/wget-ssl"
+printf 'Package: jq\n' > "$ROOT/opt/var/opkg-lists/entware"
 
-cat > "$FIXTURE/S51nfqws2.template" <<'EOF'
-#!/bin/sh
-pidfile="$KD_TEST_ROOT/opt/var/run/nfqws2.pid"
-stop_fixture() {
-  if [ -f "$pidfile" ]; then
-    pid="$(sed -n '1p' "$pidfile")"
-    case "$pid" in
-      ''|*[!0-9]*) ;;
-      *) kill "$pid" 2>/dev/null || true ;;
-    esac
-    rm -f "$pidfile"
-  fi
-}
-case "${1:-}" in
-  stop) stop_fixture ;;
-  start)
-    sleep 300 &
-    printf '%s\n' "$!" > "$pidfile"
-    ;;
-  restart)
-    stop_fixture
-    sleep 300 &
-    printf '%s\n' "$!" > "$pidfile"
-    ;;
-esac
-EOF
-chmod +x "$FIXTURE/S51nfqws2.template"
-
-cat > "$FIXTURE/nfqws2.conf.template" <<'EOF'
-NFQWS_BASE_ARGS="--lua-init=@/opt/etc/nfqws2/lua/zapret-lib.lua"
-NFQWS_ARGS="--filter-tcp=80,443 --filter-l7=http,tls"
-NFQWS_ARGS_QUIC="--filter-udp=443 --filter-l7=quic"
-NFQWS_ARGS_UDP="--filter-udp=443"
-MODE_LIST="--hostlist=/opt/etc/nfqws2/lists/user.list"
-MODE_ALL="--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list"
-MODE_AUTO="$MODE_LIST $MODE_ALL"
-NFQWS_EXTRA_ARGS="$MODE_AUTO"
-NFQWS_ARGS_IPSET=""
-NFQWS_ARGS_CUSTOM=""
-TCP_PORTS=80,443
-UDP_PORTS=443
-POLICY_NAME=""
-POLICY_EXCLUDE=0
-IPV6_ENABLED=0
-ISP_INTERFACE=""
-EOF
+# shellcheck source=tests/engine-nfqws2-fixture.sh
+. "$SCRIPT_DIR/tests/engine-nfqws2-fixture.sh"
+engine_write_nfqws2_init "$FIXTURE/S51nfqws2.template"
+engine_write_stock_nfqws2_conf "$FIXTURE/nfqws2.conf.template" "" 0
+engine_write_fake_nfqws2 "$FIXTURE/nfqws2.template"
 
 cat > "$MOCK_BIN/opkg" <<'EOF'
 #!/bin/sh
@@ -104,7 +65,13 @@ case "${1:-}" in
   print-architecture)
     echo 'arch all 1'
     ;;
-  update) ;;
+  update)
+    # One dead feed: opkg reports it and exits 1; the other list is there.
+    echo "Downloading https://bin.entware.net/mipselsf-k3.4/Packages.gz"
+    echo "Updated list of available packages in /opt/var/opkg-lists/entware"
+    echo " * Failed to download the package list from https://dead.example.invalid/Packages.gz"
+    exit 1
+    ;;
   install)
     shift
     for package in "$@"; do
@@ -117,6 +84,8 @@ case "${1:-}" in
         cp "$KD_STANDALONE_FIXTURE/S51nfqws2.template" \
           "$KD_TEST_ROOT/opt/etc/init.d/S51nfqws2"
         chmod +x "$KD_TEST_ROOT/opt/etc/init.d/S51nfqws2"
+        mkdir -p "$KD_TEST_ROOT/opt/usr/bin"
+        cp "$KD_STANDALONE_FIXTURE/nfqws2.template" "$KD_TEST_ROOT/opt/usr/bin/nfqws2"
         cp "$KD_STANDALONE_FIXTURE/nfqws2.conf.template" \
           "$KD_TEST_ROOT/opt/etc/nfqws2/nfqws2.conf"
         # The package ships this blob (Telegram Zapret registers it).
@@ -149,15 +118,9 @@ esac
 exit 1
 EOF
 
-cat > "$MOCK_BIN/iptables-save" <<'EOF'
-#!/bin/sh
-cat <<'RULES'
--A POSTROUTING -j nfqws_post
--A nfqws_post -o fixture-wan -j NFQUEUE --queue-num 300
-RULES
-EOF
+engine_write_iptables_mocks "$MOCK_BIN"
 
-chmod +x "$MOCK_BIN/opkg" "$MOCK_BIN/ip" "$MOCK_BIN/iptables-save"
+chmod +x "$MOCK_BIN/opkg" "$MOCK_BIN/ip"
 
 run_tool() {
   PATH="$MOCK_BIN:$PATH" \

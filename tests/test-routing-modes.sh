@@ -12,6 +12,8 @@ BLOB_SOURCE="${NFQWS_TEST_BLOB_SOURCE:-/opt/etc/nfqws2/blobs}"
 FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/keenetic-routing-modes.XXXXXX")"
 ROOT="$FIXTURE/root"
 MOCK_BIN="$FIXTURE/bin"
+# shellcheck source=tests/engine-nfqws2-fixture.sh
+. "$SCRIPT_DIR/tests/engine-nfqws2-fixture.sh"
 
 safe_cleanup() {
   ws_pidfile="$ROOT/opt/var/run/kdn-telegram-ws.pid"
@@ -72,38 +74,10 @@ printf 'xkeen-init:%s\n' "$*" >> "$KD_TEST_ROOT/xkeen-init.log"
 exit 0
 EOF
 
-cat > "$ROOT/opt/etc/init.d/S51nfqws2" <<'EOF'
-#!/bin/sh
-pidfile="$KD_TEST_ROOT/opt/var/run/nfqws2.pid"
-stop_fixture() {
-  if [ -f "$pidfile" ]; then
-    pid="$(sed -n '1p' "$pidfile")"
-    case "$pid" in
-      ''|*[!0-9]*) ;;
-      *) kill "$pid" 2>/dev/null || true ;;
-    esac
-    rm -f "$pidfile"
-  fi
-}
-printf 'nfqws-init:%s\n' "$*" >> "$KD_TEST_ROOT/nfqws-init.log"
-case "${1:-}" in
-  stop) stop_fixture ;;
-  start)
-    sleep 300 &
-    printf '%s\n' "$!" > "$pidfile"
-    ;;
-  restart)
-    stop_fixture
-    sleep 300 &
-    printf '%s\n' "$!" > "$pidfile"
-    ;;
-esac
-exit 0
-EOF
+engine_write_nfqws2_init "$ROOT/opt/etc/init.d/S51nfqws2"
+engine_write_fake_nfqws2 "$ROOT/opt/usr/bin/nfqws2"
 
-chmod +x \
-  "$ROOT/opt/etc/init.d/S05xkeen" \
-  "$ROOT/opt/etc/init.d/S51nfqws2"
+chmod +x "$ROOT/opt/etc/init.d/S05xkeen"
 
 cat > "$ROOT/opt/etc/ndm/netfilter.d/proxy.sh" <<'EOF'
 mode_proxy='Hybrid'
@@ -204,24 +178,7 @@ cat > "$ROOT/opt/etc/xray/configs/05_routing.json" <<'EOF'
 }
 EOF
 
-cat > "$ROOT/opt/etc/nfqws2/nfqws2.conf" <<'EOF'
-NFQWS_BASE_ARGS="--lua-init=@/opt/etc/nfqws2/lua/zapret-lib.lua"
-NFQWS_ARGS="--filter-tcp=80,443 --filter-l7=http,tls"
-NFQWS_ARGS_QUIC="--filter-udp=443 --filter-l7=quic"
-NFQWS_ARGS_UDP="--filter-udp=443"
-MODE_LIST="--hostlist=/opt/etc/nfqws2/lists/user.list"
-MODE_ALL="--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list"
-MODE_AUTO="$MODE_LIST $MODE_ALL"
-NFQWS_EXTRA_ARGS="$MODE_AUTO"
-NFQWS_ARGS_IPSET=""
-NFQWS_ARGS_CUSTOM=""
-TCP_PORTS=80,443
-UDP_PORTS=443
-POLICY_NAME=""
-POLICY_EXCLUDE=0
-IPV6_ENABLED=0
-ISP_INTERFACE="fixture-wan"
-EOF
+engine_write_stock_nfqws2_conf "$ROOT/opt/etc/nfqws2/nfqws2.conf" fixture-wan 0
 
 cp "$BLOB_SOURCE/tls_clienthello.bin" \
   "$ROOT/opt/etc/nfqws2/blobs/tls_clienthello.bin"
@@ -281,20 +238,13 @@ esac
 exit 1
 EOF
 
-cat > "$MOCK_BIN/iptables-save" <<'EOF'
-#!/bin/sh
-cat <<'RULES'
--A POSTROUTING -j nfqws_post
--A nfqws_post -o fixture-wan -j NFQUEUE --queue-num 300
-RULES
-EOF
+engine_write_iptables_mocks "$MOCK_BIN"
 
 chmod +x \
   "$MOCK_BIN/xkeen" \
   "$MOCK_BIN/opkg" \
   "$MOCK_BIN/pidof" \
-  "$MOCK_BIN/ip" \
-  "$MOCK_BIN/iptables-save"
+  "$MOCK_BIN/ip"
 
 run_tool() {
   PATH="$MOCK_BIN:$PATH" \
@@ -310,8 +260,34 @@ run_service_tool() {
     sh "$SERVICE_TARGET" "$@"
 }
 
+# A killed process can stay a zombie in containers without a reaper.
+process_alive() {
+  kill -0 "$1" 2>/dev/null || return 1
+  ! grep -q '^State:[[:space:]]*Z' "/proc/$1/status" 2>/dev/null
+}
+
 routing_file="$ROOT/opt/etc/xray/configs/05_routing.json"
 nfqws_file="$ROOT/opt/etc/nfqws2/nfqws2.conf"
+
+# The generated config must pass both the engine's own --check-config and the
+# independent tests/engine-check-profiles.sh. Warnings are allowed only for
+# queued ports without a profile (UDP 443 when no QUIC profile is active).
+assert_config_checks() {
+  check_output="$(run_tool --check-config)" || {
+    printf '%s\n' "$check_output" >&2
+    echo "ERROR: --check-config failed" >&2
+    exit 1
+  }
+  if printf '%s\n' "$check_output" | grep -v '^CHECK|ok|' | grep -v '^CHECK|warn|unhandled-ports|' | grep -q .; then
+    printf '%s\n' "$check_output" >&2
+    echo "ERROR: unexpected --check-config findings" >&2
+    exit 1
+  fi
+  independent_check="$(sh "$SCRIPT_DIR/tests/engine-check-profiles.sh" "$ROOT")" || {
+    printf '%s\n' "$independent_check" >&2
+    exit 1
+  }
+}
 
 assert_mode() {
   expected_tcp="$1"
@@ -394,8 +370,16 @@ assert_mode() {
     [ -s "$ROOT/opt/etc/nfqws2/lists/user.list" ]
     [ "$(ls -l "$ROOT/opt/etc/nfqws2/lists/user.list" | awk '{print $1}')" = "-rw-r--r--" ]
     expected_tcp_ports="80,443,2053,2083,2087,2096,8443"
+    if grep -Fqx 'NFQWS_ARGS_QUIC=""' "$nfqws_file"; then
+      echo "ERROR: the Discord QUIC profile is disabled with Discord TCP=zapret" >&2
+      exit 1
+    fi
   else
-    [ ! -s "$ROOT/opt/etc/nfqws2/lists/user.list" ]
+    # nfqws2 reads an empty hostlist as "no host filter": the package TCP
+    # profile that reads user.list must get an inert entry, and the package
+    # QUIC profile is dropped (A1/B2).
+    [ "$(cat "$ROOT/opt/etc/nfqws2/lists/user.list")" = "kdn-disabled.invalid" ]
+    grep -Fqx 'NFQWS_ARGS_QUIC=""' "$nfqws_file"
     expected_tcp_ports="443"
   fi
   grep -Fq "NFQWS_ARGS=\"--filter-tcp=$expected_tcp_ports " "$nfqws_file"
@@ -471,6 +455,7 @@ assert_mode() {
   xray_config_test
 
   sh -n "$nfqws_file"
+  assert_config_checks
   grep -Fqx "# Active routes: DiscordTCP=$expected_tcp, DiscordVoice=$expected_voice, YouTube=$expected_youtube, Telegram=$expected_telegram." "$nfqws_file"
 
   if [ "$expected_tcp" = "$expected_voice" ]; then
@@ -816,7 +801,7 @@ relay_pid="$(cat "$ROOT/opt/var/run/kdn-telegram-ws.pid")"
 # Rollback: the relay is not in snapshots and follows the restored route.
 run_tool --rollback-latest --yes-router >/dev/null
 assert_mode vless zapret direct direct
-if kill -0 "$relay_pid" 2>/dev/null; then
+if process_alive "$relay_pid"; then
   echo "ERROR: the WS relay still runs after rolling back to Telegram=direct" >&2
   exit 1
 fi
@@ -980,7 +965,7 @@ jq '.service = "discord-voice" | .family = "fixture voice profile" | .candidate_
 run_tool --apply-import-profile "$voice_stage" --yes-router >/dev/null
 [ -f "$ROOT/opt/etc/nfqws2/imported-profiles/discord-voice.json" ]
 grep -Fqx 'UDP_PORTS=443,19294:19344,50000:50100' "$nfqws_file"
-grep -Fqx -- '--filter-udp=19294-19344,50000-50100' "$nfqws_file"
+grep -Fq 'NFQWS_ARGS_UDP="--filter-udp=19294-19344,50000-50100' "$nfqws_file"
 grep -Fq -- '--lua-desync=fake:blob=youtube_quic:repeats=7' "$nfqws_file"
 run_tool --clear-imported-profile discord-voice --yes-router >/dev/null
 [ ! -e "$ROOT/opt/etc/nfqws2/imported-profiles/discord-voice.json" ]

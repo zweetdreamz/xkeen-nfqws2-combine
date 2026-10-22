@@ -24,6 +24,10 @@ The routes of the other services and the Discord UDP settings (--wide-udp,
 --narrow-udp, --wide-udp or --udp-strategy to change them. "vpn" is a
 user-facing alias for the engine route "vless".
 
+A standalone deployment (installed with --standalone-zapret, no XKeen) stays
+standalone: vpn and Telegram routes are refused there and --core is ignored.
+Pass --integrated to switch the deployment to XKeen.
+
 Examples:
   sh set-service-route.sh discord-voice zapret --core auto --wan-interface eth3 --yes-router
   sh set-service-route.sh youtube direct --core auto --wan-interface eth3 --yes-router
@@ -128,7 +132,57 @@ case "$current_udp_strategy" in
   flowseal|legacy) set -- --udp-strategy "$current_udp_strategy" "$@" ;;
 esac
 
+# A standalone deployment stays standalone (A5): the switch adds
+# --standalone-zapret, drops "--core X" (the engine refuses it there; the
+# panel always passes --core auto) and leaves the recorded Telegram route to
+# the engine. --integrated switches the deployment to XKeen explicitly.
+deployment_mode="$(status_value deployment_mode)"
+deployment_choice=""
+for arg in "$@"; do
+  case "$arg" in
+    --integrated) deployment_choice=integrated ;;
+    --standalone-zapret|--without-xkeen|--no-xkeen) deployment_choice=standalone ;;
+  esac
+done
+if [ -z "$deployment_choice" ] && [ "$deployment_mode" = "standalone-zapret" ]; then
+  deployment_choice=standalone
+  for target_route in "$next_discord_tcp" "$next_discord_voice" "$next_youtube"; do
+    if [ "$target_route" = vless ]; then
+      echo "ERROR: this router uses the standalone Zapret deployment without XKeen; vpn routes need XKeen." >&2
+      echo "       Pass --integrated to switch the deployment to XKeen." >&2
+      exit 2
+    fi
+  done
+  if [ "$service" = telegram ]; then
+    echo "ERROR: Telegram routes need XKeen; this router uses the standalone Zapret deployment." >&2
+    echo "       Pass --integrated to switch the deployment to XKeen." >&2
+    exit 2
+  fi
+  next_args=""
+  skip_next=0
+  for arg in "$@"; do
+    if [ "$skip_next" -eq 1 ]; then
+      skip_next=0
+      continue
+    fi
+    case "$arg" in
+      --core) skip_next=1; continue ;;
+      --core=*) continue ;;
+    esac
+    next_args="$next_args $(printf '%s' "$arg" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/")"
+  done
+  eval "set -- --standalone-zapret $next_args"
+fi
+
 echo "Service routes: Discord TCP=$next_discord_tcp, Discord Voice=$next_discord_voice, YouTube=$next_youtube, Telegram=$next_telegram"
+if [ "$deployment_choice" = standalone ]; then
+  exec sh "$ENGINE" \
+    --apply \
+    --discord-tcp-route "$next_discord_tcp" \
+    --discord-voice-route "$next_discord_voice" \
+    --youtube-route "$next_youtube" \
+    "$@"
+fi
 exec sh "$ENGINE" \
   --apply \
   --discord-tcp-route "$next_discord_tcp" \
