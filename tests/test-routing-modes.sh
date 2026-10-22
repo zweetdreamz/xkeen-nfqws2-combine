@@ -74,6 +74,21 @@ printf 'xkeen-init:%s\n' "$*" >> "$KD_TEST_ROOT/xkeen-init.log"
 exit 0
 EOF
 
+# E13 (optional): KD_TEST_NFQWS2_BIN=<real nfqws2 build> and
+# KD_TEST_NFQWS2_LUA_SRC=<its lua directory> make every apply and import run
+# the real "nfqws2 --dry-run" on the composed arguments. The real binary
+# checks the lists as the unprivileged nfqws2 user, so the fixture becomes
+# world-readable.
+if [ -n "${KD_TEST_NFQWS2_BIN:-}" ]; then
+  [ -x "$KD_TEST_NFQWS2_BIN" ]
+  [ -f "${KD_TEST_NFQWS2_LUA_SRC:?KD_TEST_NFQWS2_LUA_SRC is required with KD_TEST_NFQWS2_BIN}/zapret-lib.lua" ]
+  cp -R "$KD_TEST_NFQWS2_LUA_SRC" "$FIXTURE/real-lua"
+  chmod 755 "$FIXTURE"
+  chmod -R a+rX "$FIXTURE"
+  KD_TEST_NFQWS2_LUA="$FIXTURE/real-lua"
+  export KD_TEST_NFQWS2_BIN KD_TEST_NFQWS2_LUA
+  echo "Real nfqws2 dry-run: $KD_TEST_NFQWS2_BIN"
+fi
 engine_write_nfqws2_init "$ROOT/opt/etc/init.d/S51nfqws2"
 engine_write_fake_nfqws2 "$ROOT/opt/usr/bin/nfqws2"
 
@@ -268,6 +283,70 @@ process_alive() {
 
 routing_file="$ROOT/opt/etc/xray/configs/05_routing.json"
 nfqws_file="$ROOT/opt/etc/nfqws2/nfqws2.conf"
+
+# Relays of this fixture (its port), zombies excluded.
+relay_count() {
+  relay_total=0
+  for relay_cmdline in $(grep -Fl -- "$SCRIPT_DIR/tools/router/telegram_ws_relay.py" /proc/[0-9]*/cmdline 2>/dev/null); do
+    relay_proc_pid="${relay_cmdline#/proc/}"
+    relay_proc_pid="${relay_proc_pid%/cmdline}"
+    process_alive "$relay_proc_pid" || continue
+    tr '\0' ' ' 2>/dev/null < "$relay_cmdline" |
+      grep -Fq -- "--listen 127.0.0.1:$KD_TEST_TELEGRAM_WS_PORT" &&
+      relay_total=$((relay_total + 1))
+  done
+  echo "$relay_total"
+}
+
+# make_stage SERVICE FILE ARG...: a tuner descriptor for --apply-import-profile.
+make_stage() {
+  stage_service="$1"
+  stage_file="$2"
+  shift 2
+  printf '%s\n' "$@" > "$FIXTURE/stage-args.txt"
+  stage_id="$(
+    { printf '%s\n' "$stage_service" 'fixture BAT.bat' 'fixture profile'; cat "$FIXTURE/stage-args.txt"; } |
+      awk 'NR == 1 { text=$0; next } { text=text "\n" $0 } END { printf "%s", text }' |
+      sha256sum | cut -c1-12
+  )"
+  jq -n --arg id "$stage_id" --arg service "$stage_service" --rawfile args "$FIXTURE/stage-args.txt" '{
+    format: 1, service: $service, candidate_id: $id,
+    source_name: "fixture BAT.bat", source_sha: "s", source_url: "https://example.invalid/f",
+    family: "fixture profile", args: ($args | split("\n") | map(select(length > 0))),
+    notes: [], rank: 1, report: {}
+  }' > "$stage_file"
+}
+
+# The composed profiles without the global options, one per line and keyed
+# by service: discord-tcp/discord-udp (user.list), youtube-*, telegram-tcp,
+# voice-udp (E12).
+profile_digest() {
+  run_tool --print-nfqws-profiles | awk -F'|' '{
+    n = split($4, words, " ")
+    text = ""
+    for (i = 1; i <= n; i++)
+      if (words[i] !~ /^--(user|qnum|fastpath-workaround|lua-init|blob|debug|bind-fix4|bind-fix6)(=|$)/)
+        text = text " " words[i]
+    if (text ~ /--filter-l7=stun,discord/) key = "voice"
+    else if (text ~ /kdn-telegram\.list/) key = "telegram"
+    else if (text ~ /youtube\.list/) key = "youtube"
+    else if (text ~ /user\.list/) key = "discord"
+    else key = "other"
+    print key (text ~ /--filter-udp=/ ? "-udp" : "-tcp") "|" text
+  }' | sort
+}
+
+# assert_profiles_same_except BEFORE AFTER PREFIX: only the profiles whose
+# key starts with PREFIX may differ.
+assert_profiles_same_except() {
+  printf '%s\n' "$1" | grep -v "^$3" > "$FIXTURE/digest-before" || true
+  printf '%s\n' "$2" | grep -v "^$3" > "$FIXTURE/digest-after" || true
+  cmp -s "$FIXTURE/digest-before" "$FIXTURE/digest-after" || {
+    echo "ERROR: an operation on $3 changed other services' nfqws2 profiles:" >&2
+    diff "$FIXTURE/digest-before" "$FIXTURE/digest-after" >&2 || true
+    exit 1
+  }
+}
 
 # The generated config must pass both the engine's own --check-config and the
 # independent tests/engine-check-profiles.sh. Warnings are allowed only for
@@ -594,6 +673,14 @@ assert_telegram() {
     else
       printf '%s\n' "$managed_ports" | grep -qx 5222
     fi
+    # Telegram call UDP ports reach Xray only for Telegram=vless (E9).
+    if [ "$1" = vless ]; then
+      printf '%s\n' "$managed_ports" | grep -qx '590:600'
+      printf '%s\n' "$managed_ports" | grep -qx 1400
+    elif printf '%s\n' "$managed_ports" | grep -Eqx '590:600|1400'; then
+      echo "ERROR: Telegram call ports proxied with Telegram=$1" >&2
+      exit 1
+    fi
   fi
 }
 
@@ -633,6 +720,30 @@ original_routing_hash="$(sha256sum "$routing_file" | awk '{print $1}')"
 original_nfqws_hash="$(sha256sum "$nfqws_file" | awk '{print $1}')"
 run_tool --apply --yes-router --standalone-zapret --youtube-route direct >/dev/null
 [ "$(sha256sum "$routing_file" | awk '{print $1}')" = "$original_routing_hash" ]
+assert_config_checks
+
+# A5: the wrappers (and so the panel, which passes --core auto) keep a
+# standalone deployment standalone although XKeen is installed.
+: > "$ROOT/xkeen-init.log"
+run_service_tool youtube zapret --yes-router --core auto >/dev/null
+[ "$(sha256sum "$routing_file" | awk '{print $1}')" = "$original_routing_hash" ]
+[ ! -s "$ROOT/xkeen-init.log" ]
+grep -Fqx '# Deployment mode: standalone-zapret.' "$nfqws_file"
+grep -Fqx '# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=zapret, Telegram=unmanaged.' "$nfqws_file"
+if run_service_tool youtube vpn --yes-router --core auto >/dev/null 2>&1; then
+  echo "ERROR: a standalone deployment accepted a vpn route" >&2
+  exit 1
+fi
+PATH="$MOCK_BIN:$PATH" KD_TEST_ROOT="$ROOT" KD_ALLOW_TEST_ROOT=1 \
+  sh "$SCRIPT_DIR/set-zapret-mode.sh" both --yes-router --core auto >/dev/null
+[ "$(sha256sum "$routing_file" | awk '{print $1}')" = "$original_routing_hash" ]
+[ ! -s "$ROOT/xkeen-init.log" ]
+if PATH="$MOCK_BIN:$PATH" KD_TEST_ROOT="$ROOT" KD_ALLOW_TEST_ROOT=1 \
+     sh "$SCRIPT_DIR/set-zapret-mode.sh" discord --yes-router >/dev/null 2>&1; then
+  echo "ERROR: a standalone deployment accepted a VLESS preset" >&2
+  exit 1
+fi
+run_tool --apply --yes-router --standalone-zapret --youtube-route direct >/dev/null
 
 apply_mode zapret vless
 discord_hash="$(sha256sum "$routing_file" | awk '{print $1}')"
@@ -811,6 +922,74 @@ assert_mode vless zapret direct ws
 printf 'tg.example.org\n' > "$ROOT/opt/etc/nfqws2/lists/kdn-telegram-cf.list"
 run_service_tool telegram ws --yes-router --core xray >/dev/null
 assert_mode vless zapret direct ws
+[ "$(relay_count)" = 1 ]
+
+# E2/C5: a stale relay pidfile (power loss: the PID now belongs to another
+# process) must neither block the start nor get that process killed.
+ws_init="$ROOT/opt/etc/init.d/S99kdn-telegram-ws"
+kill -9 "$(cat "$ROOT/opt/var/run/kdn-telegram-ws.pid")"
+sleep 300 &
+victim_pid=$!
+printf '%s\n' "$victim_pid" > "$ROOT/opt/var/run/kdn-telegram-ws.pid"
+if "$ws_init" status >/dev/null 2>&1; then
+  echo "ERROR: a stale relay pidfile is reported as running" >&2
+  exit 1
+fi
+"$ws_init" start >/dev/null
+process_alive "$victim_pid"
+python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 3).close()' \
+  "$KD_TEST_TELEGRAM_WS_PORT"
+[ "$(cat "$ROOT/opt/var/run/kdn-telegram-ws.pid")" != "$victim_pid" ]
+printf '%s\n' "$victim_pid" > "$ROOT/opt/var/run/kdn-telegram-ws.pid"
+"$ws_init" restart >/dev/null
+process_alive "$victim_pid"
+"$ws_init" status >/dev/null
+[ "$(relay_count)" = 1 ]
+# A relay without a pidfile is found by its command line and replaced.
+rm -f "$ROOT/opt/var/run/kdn-telegram-ws.pid"
+"$ws_init" start >/dev/null
+[ "$(relay_count)" = 1 ]
+run_service_tool telegram ws --yes-router --core xray >/dev/null
+process_alive "$victim_pid"
+kill "$victim_pid"
+assert_mode vless zapret direct ws
+[ "$(relay_count)" = 1 ]
+
+# E5: a standalone apply keeps the recorded Telegram route (and its Xray
+# rules and relay); the next integrated apply still has Telegram=ws.
+telegram_rules_before="$(jq -c '[.routing.rules[] | select((.ruleTag // "") | startswith("kdn-telegram"))]' "$routing_file")"
+run_tool --apply --yes-router --standalone-zapret >/dev/null
+grep -Fqx '# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=zapret, Telegram=ws.' "$nfqws_file"
+grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list' "$nfqws_file"
+[ "$(jq -c '[.routing.rules[] | select((.ruleTag // "") | startswith("kdn-telegram"))]' "$routing_file")" = "$telegram_rules_before" ]
+run_tool --status | grep -Fqx 'telegram_route=ws'
+[ "$(relay_count)" = 1 ]
+assert_config_checks
+run_service_tool youtube direct --yes-router --integrated --core xray >/dev/null
+assert_mode zapret zapret direct ws
+
+# E15/E12: profile operations with Telegram=ws keep the Telegram profile,
+# the relay and the other services' profiles as they are.
+run_service_tool youtube zapret --yes-router --core xray >/dev/null
+assert_mode zapret zapret zapret ws
+ws_digest_before="$(profile_digest)"
+make_stage youtube "$ROOT/opt/tmp/ws-youtube.json" \
+  --filter-tcp=443 --filter-l7=tls --hostlist=/opt/etc/nfqws2/lists/youtube.list \
+  --out-range=-d10 --payload=tls_client_hello --lua-desync=fake:blob=tls_clienthello:repeats=4 \
+  --new --filter-udp=443 --filter-l7=quic --hostlist=/opt/etc/nfqws2/lists/youtube.list \
+  --payload=quic_initial --lua-desync=fake:blob=youtube_quic:repeats=5
+run_tool --apply-import-profile "$ROOT/opt/tmp/ws-youtube.json" --yes-router >/dev/null
+assert_profiles_same_except "$ws_digest_before" "$(profile_digest)" youtube-
+assert_telegram ws
+assert_config_checks
+[ "$(relay_count)" = 1 ]
+run_tool --rollback-import --yes-router >/dev/null
+[ "$(profile_digest)" = "$ws_digest_before" ]
+assert_mode zapret zapret zapret ws
+[ "$(relay_count)" = 1 ]
+run_service_tool youtube direct --yes-router --core xray >/dev/null
+run_service_tool discord-tcp vpn --yes-router --core xray >/dev/null
+assert_mode vless zapret direct ws
 run_service_tool telegram direct --yes-router --core xray >/dev/null
 assert_mode vless zapret direct direct
 run_service_tool telegram vpn --yes-router --core xray >/dev/null
@@ -970,6 +1149,296 @@ grep -Fq -- '--lua-desync=fake:blob=youtube_quic:repeats=7' "$nfqws_file"
 run_tool --clear-imported-profile discord-voice --yes-router >/dev/null
 [ ! -e "$ROOT/opt/etc/nfqws2/imported-profiles/discord-voice.json" ]
 grep -Fqx 'UDP_PORTS=443,3478:3481,5349,19294:19344,50000:50100' "$nfqws_file"
+assert_config_checks
+# The blocks below start from the built-in profiles.
+run_tool --clear-imported-profile youtube --yes-router >/dev/null
+assert_mode zapret zapret zapret
+
+# --- D2/A2/B4/E4/E12: a Discord TCP import changes only the Discord TCP
+# profile; the package QUIC profile keeps its user.list hostlist.
+digest_before="$(profile_digest)"
+make_stage discord-tcp "$ROOT/opt/tmp/dtcp-profile.json" \
+  --filter-tcp=443 --filter-l7=tls --hostlist=/opt/etc/nfqws2/lists/user.list \
+  --payload=tls_client_hello --lua-desync=fake:blob=tls_clienthello:repeats=6 \
+  --lua-desync=multisplit:pos=1,midsld
+run_tool --apply-import-profile "$ROOT/opt/tmp/dtcp-profile.json" --yes-router >/dev/null
+assert_profiles_same_except "$digest_before" "$(profile_digest)" discord-tcp
+grep -Fqx 'NFQWS_EXTRA_ARGS="$MODE_LIST"' "$nfqws_file"
+# Only TCP 443 has a profile now (no queued port without a profile).
+grep -Fqx 'TCP_PORTS=443' "$nfqws_file"
+assert_config_checks
+run_tool --check-config | grep -Fqx 'CHECK|ok|unhandled-ports|every queued port has a profile'
+run_tool --clear-imported-profile discord-tcp --yes-router >/dev/null
+[ "$(profile_digest)" = "$digest_before" ]
+grep -Fqx 'TCP_PORTS=80,443,2053,2083,2087,2096,8443' "$nfqws_file"
+
+# --- --check-config finds the broken states it exists for. Each case edits
+# the live config and puts it back.
+cp "$nfqws_file" "$FIXTURE/conf.saved"
+cp "$ROOT/opt/etc/nfqws2/lists/user.list" "$FIXTURE/user.list.saved"
+expect_check() {
+  expect_rc="$1"
+  expect_line="$2"
+  check_rc=0
+  check_text="$(run_tool --check-config)" || check_rc=$?
+  [ "$check_rc" = "$expect_rc" ] || {
+    printf '%s\n' "$check_text" >&2
+    echo "ERROR: --check-config exit $check_rc, expected $expect_rc" >&2
+    exit 1
+  }
+  printf '%s\n' "$check_text" | grep -Eq "$expect_line" || {
+    printf '%s\n' "$check_text" >&2
+    echo "ERROR: --check-config lacks: $expect_line" >&2
+    exit 1
+  }
+  cp "$FIXTURE/conf.saved" "$nfqws_file"
+  cp "$FIXTURE/user.list.saved" "$ROOT/opt/etc/nfqws2/lists/user.list"
+}
+# The 3.1.0 incident: the YouTube QUIC profile on UDP 443, 443 not queued.
+sed -i 's/^UDP_PORTS=.*/UDP_PORTS=19294:19344,50000:50100/' "$nfqws_file"
+expect_check 1 '^CHECK\|error\|port-coverage\|.* UDP 443 outside UDP_PORTS'
+# A1: the empty user.list of the earlier releases.
+: > "$ROOT/opt/etc/nfqws2/lists/user.list"
+expect_check 1 '^CHECK\|error\|empty-hostlist\|/opt/etc/nfqws2/lists/user.list has no entries'
+# D2: NFQWS_EXTRA_ARGS="" leaves the package QUIC profile without a list.
+sed -i 's/^NFQWS_EXTRA_ARGS=.*/NFQWS_EXTRA_ARGS=""/' "$nfqws_file"
+expect_check 1 '^CHECK\|error\|listless-profile\|#[0-9]+ udp=443 l7=quic'
+# The legacy UDP fake of 3.1.x without blob=.
+sed -i 's/^NFQWS_EXTRA_ARGS=.*/&\nNFQWS_ARGS_UDP="--filter-udp=3478 --filter-l7=stun,discord --lua-desync=fake:repeats=6:strategy=1"/' "$nfqws_file"
+expect_check 1 '^CHECK\|error\|legacy-blob\|.*fake:repeats=6:strategy=1'
+# A user's own listless custom profile is reported, not refused; its ports
+# are taken into the queue by the next apply (A3).
+sed -i 's/^NFQWS_ARGS_CUSTOM=""$/NFQWS_ARGS_CUSTOM="--filter-udp=1400 --lua-desync=fake:blob=quic_initial"/' "$nfqws_file"
+expect_check 0 '^CHECK\|warn\|listless-profile\|#1 udp=1400 \(user profile\)'
+mv "$nfqws_file" "$FIXTURE/conf.moved"
+expect_check 2 '^CHECK\|error\|read\|'
+[ -f "$nfqws_file" ]
+
+# --- A3: the ports of the user's own custom profiles stay queued.
+sed -i 's/^NFQWS_ARGS_CUSTOM=""$/NFQWS_ARGS_CUSTOM="--filter-udp=1400 --filter-l7=mtproto --hostlist=\/opt\/etc\/nfqws2\/lists\/user.list --lua-desync=fake:blob=quic_initial --new --filter-tcp=1984 --hostlist=\/opt\/etc\/nfqws2\/lists\/user.list --lua-desync=multisplit"/' "$nfqws_file"
+run_tool --apply --yes-router --core xray --discord-route zapret --youtube-route zapret >/dev/null
+assert_config_checks
+grep -Fqx 'TCP_PORTS=80,443,2053,2083,2087,2096,8443,1984' "$nfqws_file"
+grep -Fqx 'UDP_PORTS=443,3478:3481,5349,19294:19344,50000:50100,1400' "$nfqws_file"
+run_tool --print-nfqws-profiles | grep -q '^PROFILE|2|user|--filter-tcp=1984'
+cp "$FIXTURE/conf.saved" "$nfqws_file"
+apply_mode zapret zapret
+
+# --- A8/C1: identical applies give identical files (restrictive port list).
+printf '%s\n' '# restricted fixture' 443 > "$ROOT/opt/etc/xkeen/port_proxying.lst"
+apply_mode zapret zapret
+cp "$nfqws_file" "$FIXTURE/idem.conf"
+cp "$ROOT/opt/etc/xkeen/port_proxying.lst" "$FIXTURE/idem.ports"
+cp "$routing_file" "$FIXTURE/idem.routing"
+apply_mode zapret zapret
+cmp "$nfqws_file" "$FIXTURE/idem.conf"
+cmp "$ROOT/opt/etc/xkeen/port_proxying.lst" "$FIXTURE/idem.ports"
+cmp "$routing_file" "$FIXTURE/idem.routing"
+run_tool --apply-import-profile "$voice_stage" --yes-router >/dev/null
+run_tool --clear-imported-profile discord-voice --yes-router >/dev/null
+cmp "$nfqws_file" "$FIXTURE/idem.conf"
+printf '%s\n' '# unrestricted fixture' > "$ROOT/opt/etc/xkeen/port_proxying.lst"
+
+# --- The apply fails and rolls back when the checks, the dry-run or the
+# restart verification fail; --rollback-latest still undoes the last
+# successful apply afterwards (C4).
+apply_mode zapret zapret
+latest_before="$(cat "$ROOT/opt/etc/keenetic-discord-nfqws2/latest-preapply.ptr")"
+conf_before="$(sha256sum "$nfqws_file" | awk '{print $1}')"
+expect_failed_apply() {
+  # Voice off changes UDP_PORTS, so stale firewall rules show.
+  if run_tool --apply --yes-router --core xray --discord-tcp-route zapret --discord-voice-route vless \
+       --youtube-route vless > "$FIXTURE/failed.log" 2>&1; then
+    echo "ERROR: apply passed although $1" >&2
+    exit 1
+  fi
+  grep -Fq "$2" "$FIXTURE/failed.log" || {
+    cat "$FIXTURE/failed.log" >&2
+    echo "ERROR: missing: $2" >&2
+    exit 1
+  }
+  grep -Fq 'Starting automatic rollback' "$FIXTURE/failed.log"
+  [ "$(sha256sum "$nfqws_file" | awk '{print $1}')" = "$conf_before" ]
+  [ "$(cat "$ROOT/opt/etc/keenetic-discord-nfqws2/latest-preapply.ptr")" = "$latest_before" ]
+  [ "${3:-}" = edited ] || assert_mode zapret zapret zapret
+}
+# A stock QUIC profile edited onto a port the engine does not queue.
+sed -i 's/^NFQWS_ARGS_QUIC="--filter-udp=443 /NFQWS_ARGS_QUIC="--filter-udp=443,4433 /' "$nfqws_file"
+conf_before="$(sha256sum "$nfqws_file" | awk '{print $1}')"
+expect_failed_apply "a profile port is not queued" 'filters UDP 4433 outside UDP_PORTS' edited
+cp "$FIXTURE/conf.saved" "$nfqws_file"
+conf_before="$(sha256sum "$nfqws_file" | awk '{print $1}')"
+# (The fixture binary's knob; a real KD_TEST_NFQWS2_BIN accepts the config.)
+if [ -z "${KD_TEST_NFQWS2_BIN:-}" ]; then
+  touch "$ROOT/nfqws2.fail-dry-run"
+  expect_failed_apply "nfqws2 --dry-run failed" 'nfqws2 --dry-run rejects the generated arguments'
+  rm -f "$ROOT/nfqws2.fail-dry-run"
+fi
+# nfqws2-ui "stale PID": the init leaves the old daemon running.
+touch "$ROOT/nfqws-init.keep-old"
+expect_failed_apply "the old nfqws2 still runs" 'still runs as the old process'
+rm -f "$ROOT/nfqws-init.keep-old"
+# The firewall still queues the ports of the previous config (A6).
+touch "$ROOT/nfqws-init.stale-rules"
+expect_failed_apply "the NFQUEUE rules are stale" 'udp NFQUEUE rule for fixture-wan queues'
+rm -f "$ROOT/nfqws-init.stale-rules"
+# A daemon that runs without the profiles of the config.
+touch "$ROOT/nfqws-init.wrong-args"
+expect_failed_apply "nfqws2 runs other arguments" 'was not started with the arguments of the current nfqws2.conf'
+rm -f "$ROOT/nfqws-init.wrong-args"
+# A process with a recycled PID or a test instance is not the service.
+apply_mode zapret zapret
+kill "$(cat "$ROOT/opt/var/run/nfqws2.pid")" 2>/dev/null || true
+python3 -c 'import time; time.sleep(600)' nfqws2 --qnum=301 </dev/null >/dev/null 2>&1 &
+test_instance=$!
+printf '%s\n' "$test_instance" > "$ROOT/opt/var/run/nfqws2.pid"
+run_tool --status | grep -Fqx 'nfqws_runtime=stopped'
+kill "$test_instance"
+rm -f "$ROOT/opt/var/run/nfqws2.pid"
+apply_mode zapret zapret
+run_tool --status | grep -Fqx 'nfqws_runtime=running'
+cmp -s "$nfqws_file" "$FIXTURE/conf.saved" || cp "$nfqws_file" "$FIXTURE/conf.saved"
+
+# --- An autotune runner that died left its candidate nfqws2 and state file:
+# the next operation under the project lock cleans up.
+sh -c 'exit 0' &
+dead_runner=$!
+wait "$dead_runner" || true
+python3 -c 'import time; time.sleep(600)' nfqws2 --qnum=301 </dev/null >/dev/null 2>&1 &
+orphan_candidate=$!
+mkdir -p "$ROOT/opt/tmp/zapret-tuner.$dead_runner"
+printf 'runner_pid=%s\ncandidate_pid=%s\nwas_running=1\nprepared=1\n' "$dead_runner" "$orphan_candidate" \
+  > "$ROOT/opt/tmp/zapret-tuner.$dead_runner/runtime.state"
+apply_mode zapret zapret
+[ ! -e "$ROOT/opt/tmp/zapret-tuner.$dead_runner" ]
+if process_alive "$orphan_candidate"; then
+  echo "ERROR: the orphaned autotune candidate still runs" >&2
+  exit 1
+fi
+run_tool --status | grep -Fqx 'nfqws_runtime=running'
+
+# --- C2/A4/B5/D4: a route switch after an import ends the import rollback.
+run_tool --apply-import-profile "$voice_stage" --yes-router >/dev/null
+import_pointer="$ROOT/opt/etc/keenetic-discord-nfqws2/latest-nfqws-import.ptr"
+saved_import_pointer="$(cat "$import_pointer")"
+run_service_tool youtube direct --yes-router --core xray >/dev/null
+[ ! -e "$import_pointer" ]
+switched_conf="$(sha256sum "$nfqws_file" | awk '{print $1}')"
+if run_tool --rollback-import --yes-router >/dev/null 2>&1; then
+  echo "ERROR: --rollback-import restored nfqws2 data from before a route switch" >&2
+  exit 1
+fi
+[ "$(sha256sum "$nfqws_file" | awk '{print $1}')" = "$switched_conf" ]
+# Even with the pointer back (an older release left it), the routes guard
+# refuses and changes nothing.
+printf '%s\n' "$saved_import_pointer" > "$import_pointer"
+if run_tool --rollback-import --yes-router > "$FIXTURE/guard.log" 2>&1; then
+  echo "ERROR: --rollback-import ignored the changed routes" >&2
+  exit 1
+fi
+grep -Fq 'the routes changed after the latest profile operation' "$FIXTURE/guard.log"
+[ "$(sha256sum "$nfqws_file" | awk '{print $1}')" = "$switched_conf" ]
+grep -Fqx '# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=direct, Telegram=unmanaged.' "$nfqws_file"
+assert_config_checks
+rm -f "$import_pointer"
+run_service_tool youtube zapret --yes-router --core xray >/dev/null
+run_tool --clear-imported-profile discord-voice --yes-router >/dev/null
+assert_mode zapret zapret zapret
+
+# --- A10/A7/B9: imported Voice profiles and the UDP range.
+make_stage discord-voice "$ROOT/opt/tmp/wide-voice.json" \
+  --filter-udp=19294-19344,50000-65535 --filter-l7=stun,discord --out-range='<n2' \
+  --payload=stun,discord_ip_discovery --lua-desync=fake:blob=discord_udp:repeats=6
+run_tool --apply --yes-router --core xray --discord-route zapret --youtube-route zapret --wide-udp >/dev/null
+run_tool --apply-import-profile "$ROOT/opt/tmp/wide-voice.json" --yes-router >/dev/null
+# Voice off: the unused wide profile does not block a narrow apply.
+run_tool --apply --yes-router --core xray --discord-tcp-route zapret --discord-voice-route vless \
+  --youtube-route zapret --narrow-udp >/dev/null
+[ -f "$ROOT/opt/etc/nfqws2/imported-profiles/discord-voice.json" ]
+grep -Fq 'DiscordVoice=vless' "$nfqws_file"
+# Voice on with the narrow range: refused, naming the profile and the remedy.
+if run_tool --apply --yes-router --core xray --discord-route zapret --youtube-route zapret \
+     --narrow-udp > "$FIXTURE/voice.log" 2>&1; then
+  echo "ERROR: a wide Voice profile was used with the narrow range" >&2
+  exit 1
+fi
+grep -Fq -- '--clear-imported-profile discord-voice' "$FIXTURE/voice.log"
+run_tool --apply --yes-router --core xray --discord-route zapret --youtube-route zapret --wide-udp >/dev/null
+run_tool --status | grep -Fqx "discord_voice_profile=imported:$(jq -r .candidate_id "$ROOT/opt/tmp/wide-voice.json")"
+run_tool --apply-import-profile "$voice_stage" --yes-router >/dev/null
+# A narrow profile in wide mode: reported in the header, status and checks.
+grep -Fqx "# Discord Voice profile: imported $voice_id, udp=19294-19344,50000-50100." "$nfqws_file"
+run_tool --status | grep -Fqx "discord_voice_profile=imported:$voice_id"
+run_tool --status | grep -Fqx 'discord_voice_udp=19294-19344,50000-50100'
+run_tool --check-config | grep -q '^CHECK|warn|voice-range|range=wide is recorded'
+run_tool --clear-imported-profile discord-voice --yes-router >/dev/null
+run_tool --status | grep -Fqx 'discord_voice_profile=builtin'
+apply_mode zapret zapret
+
+# --- C3: with two proxy outbounds the recorded tag keeps later applies working.
+jq '.outbounds += [{"tag":"vless-backup","protocol":"vless"}]' \
+  "$ROOT/opt/etc/xray/configs/04_outbounds.json" > "$FIXTURE/outbounds.json"
+cp "$FIXTURE/outbounds.json" "$ROOT/opt/etc/xray/configs/04_outbounds.json"
+jq '.routing.rules += [{"type":"field","inboundTag":["redirect","tproxy"],"outboundTag":"vless-backup","domain":["domain:example.net"]}]' \
+  "$routing_file" > "$FIXTURE/routing.json"
+cp "$FIXTURE/routing.json" "$routing_file"
+run_service_tool discord vpn --yes-router --core auto >/dev/null
+grep -Fqx '# Proxy outbound: vless-reality.' "$nfqws_file"
+run_tool --status | grep -Fqx 'proxy_outbound=vless-reality'
+run_service_tool youtube direct --yes-router --core auto >/dev/null
+run_service_tool youtube direct --yes-router --core auto >/dev/null
+run_service_tool telegram vpn --yes-router --core auto >/dev/null
+run_service_tool youtube vpn --yes-router --core auto >/dev/null
+jq -e '[.routing.rules[] | select(.outboundTag == "vless-backup")] | length == 1' "$routing_file" >/dev/null
+jq -e 'any(.routing.rules[]; .outboundTag == "vless-reality" and any(.domain[]?; . == "ext:geosite_v2fly.dat:discord"))' "$routing_file" >/dev/null
+jq -e '[.routing.rules[] | select((.ruleTag // "") | startswith("kdn-telegram")) | .outboundTag] | unique == ["vless-reality"]' "$routing_file" >/dev/null
+run_service_tool telegram unmanaged --yes-router --core auto >/dev/null
+jq '.routing.rules |= map(select(.outboundTag != "vless-backup"))' "$routing_file" > "$FIXTURE/routing.json"
+cp "$FIXTURE/routing.json" "$routing_file"
+jq '.outbounds |= map(select(.tag != "vless-backup"))' \
+  "$ROOT/opt/etc/xray/configs/04_outbounds.json" > "$FIXTURE/outbounds.json"
+cp "$FIXTURE/outbounds.json" "$ROOT/opt/etc/xray/configs/04_outbounds.json"
+apply_mode zapret zapret
+
+# --- A9: an attribute subset in a block rule stays a block rule, in front.
+ads_rule='{"type":"field","inboundTag":["redirect","tproxy"],"outboundTag":"block","domain":["ext:geosite_v2fly.dat:youtube@ads"]}'
+jq --argjson rule "$ads_rule" '.routing.rules += [$rule]' "$routing_file" > "$FIXTURE/routing.json"
+cp "$FIXTURE/routing.json" "$routing_file"
+run_tool --apply --yes-router --core xray --discord-route zapret --youtube-route zapret >/dev/null
+jq -e --argjson rule "$ads_rule" '.routing.rules[0] == $rule' "$routing_file" >/dev/null
+jq -e 'all(.routing.rules[]; all(.domain[]?; . != "ext:geosite_v2fly.dat:youtube@ads") or .outboundTag == "block")' \
+  "$routing_file" >/dev/null
+xray_config_test
+jq '.routing.rules |= .[1:]' "$routing_file" > "$FIXTURE/routing.json"
+cp "$FIXTURE/routing.json" "$routing_file"
+apply_mode zapret zapret
+
+# --- B10/C7: snapshots are pruned, but never the ones a pointer or the panel
+# history names.
+mkdir -p "$ROOT/opt/etc/xkeen-web/history"
+history_snapshot="$(sed -n '1p' "$ROOT/opt/etc/keenetic-discord-nfqws2/latest-preapply.ptr")"
+printf '{"job_id":"0123456789abcdef","snapshot":"%s"}\n' "$history_snapshot" \
+  > "$ROOT/opt/etc/xkeen-web/history/0123456789abcdef.json"
+KD_SNAPSHOT_KEEP=2
+KD_IMPORT_SNAPSHOT_KEEP=1
+export KD_SNAPSHOT_KEEP KD_IMPORT_SNAPSHOT_KEEP
+for _ in 1 2 3 4; do
+  run_tool --apply --yes-router --core xray --discord-route zapret --youtube-route zapret >/dev/null
+  run_tool --apply-import-profile "$voice_stage" --yes-router >/dev/null
+  run_tool --clear-imported-profile discord-voice --yes-router >/dev/null
+done
+unset KD_SNAPSHOT_KEEP KD_IMPORT_SNAPSHOT_KEEP
+[ -d "$history_snapshot" ]
+for kept_pointer in baseline.ptr baseline-xkeen.ptr latest-preapply.ptr latest-nfqws-import.ptr; do
+  [ -d "$(sed -n '1p' "$ROOT/opt/etc/keenetic-discord-nfqws2/$kept_pointer")" ]
+done
+# baseline, XKeen baseline, history, latest + the newest 2.
+[ "$(find "$ROOT/opt/etc/keenetic-discord-nfqws2/snapshots" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -le 6 ]
+[ "$(find "$ROOT/opt/etc/keenetic-discord-nfqws2/nfqws-import-snapshots" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" -le 2 ]
+# Import snapshots hold the nfqws2 data, not the package files.
+[ ! -e "$(sed -n '1p' "$ROOT/opt/etc/keenetic-discord-nfqws2/latest-nfqws-import.ptr")/nfqws2/lua" ]
+rm -rf "$ROOT/opt/etc/xkeen-web"
+assert_mode zapret zapret zapret
 
 # Full baseline rollback after standalone + integrated applies.
 run_tool --show-snapshots | grep -Fq 'XKeen baseline: '
@@ -979,5 +1448,49 @@ run_tool --rollback --yes-router >/dev/null
 [ ! -e "$ROOT/opt/etc/xray/configs/04_discord_nfqws2_outbound.json" ]
 [ ! -e "$ROOT/opt/etc/xray/configs/04_youtube_nfqws2_outbound.json" ]
 [ ! -e "$telegram_outbound_file" ]
+
+# --- E14/E1: XKeen with proxy_router=on, TProxy mode and a routed IPv6 WAN.
+sed -i 's/^proxy_router="off"/proxy_router="on"/; s/^ipv6_support="off"/ipv6_support="on"/' \
+  "$ROOT/opt/etc/init.d/S05xkeen"
+sed -i "s/^mode_proxy='Hybrid'/mode_proxy='TProxy'/; s/^proxy_router='off'/proxy_router='on'/" \
+  "$ROOT/opt/etc/ndm/netfilter.d/proxy.sh"
+cat > "$ROOT/opt/etc/xray/configs/03_inbounds.json" <<'EOF'
+{
+  "inbounds": [
+    {"tag":"redirect","sniffing":{"enabled":true,"destOverride":["http","tls"]}},
+    {"tag":"tproxy","settings":{"network":"tcp,udp"},"sniffing":{"enabled":true,"destOverride":["quic"]}}
+  ]
+}
+EOF
+sed -i 's#^  "-6 route get "\*).*#  "-6 route get "*) echo "2001:4860:4860::8888 from :: dev fixture-wan src 2001:db8::1 metric 1024"; exit 0 ;;#' \
+  "$MOCK_BIN/ip"
+# Everything on vless but Telegram=ws: the Telegram direct outbound and the
+# relay still need the direct mark 255 (E1).
+run_tool --apply --yes-router --core xray --discord-route vless --youtube-route vless --telegram-route ws >/dev/null
+grep -Fqx 'IPV6_ENABLED=1' "$nfqws_file"
+[ -s "$ROOT/ip6tables-mangle.rules" ]
+jq -e '.outbounds[] | select(.tag == "telegram-direct") | .streamSettings.sockopt.mark == 255' \
+  "$telegram_outbound_file" >/dev/null
+if grep -Fq '"--mark"' "$SCRIPT_DIR/tools/router/telegram_ws_relay.py"; then
+  grep -Fqx 'MARK="255"' "$ROOT/opt/etc/init.d/S99kdn-telegram-ws"
+  tr '\0' ' ' < "/proc/$(cat "$ROOT/opt/var/run/kdn-telegram-ws.pid")/cmdline" | grep -Fq -- '--mark 255'
+else
+  grep -Fqx 'MARK=""' "$ROOT/opt/etc/init.d/S99kdn-telegram-ws"
+fi
+[ "$(relay_count)" = 1 ]
+assert_config_checks
+run_tool --apply --yes-router --core xray --discord-route zapret --youtube-route zapret >/dev/null
+jq -e '.outbounds[0].streamSettings.sockopt.mark == 255' \
+  "$ROOT/opt/etc/xray/configs/04_discord_nfqws2_outbound.json" >/dev/null
+jq -e '.outbounds[0].streamSettings.sockopt.mark == 255' \
+  "$ROOT/opt/etc/xray/configs/04_youtube_nfqws2_outbound.json" >/dev/null
+# In TProxy mode TCP arrives on the tproxy inbound: it must sniff TLS/HTTP.
+jq -e '.inbounds[] | select(.tag == "tproxy") | .sniffing.destOverride | (index("tls") != null and index("http") != null and index("quic") != null)' \
+  "$ROOT/opt/etc/xray/configs/03_inbounds.json" >/dev/null
+assert_config_checks
+xray_config_test
+run_tool --status | grep -Fqx 'telegram_route=ws'
+run_tool --apply --yes-router --core xray --telegram-route unmanaged >/dev/null
+[ "$(relay_count)" = 0 ]
 
 echo "routing-mode-tests-ok"

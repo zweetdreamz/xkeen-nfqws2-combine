@@ -1169,6 +1169,7 @@ acquire_lock() {
   if mkdir "$LOCK_DIR" 2>/dev/null; then
     printf '%s\n' "$$" > "$LOCK_DIR/pid"
     LOCK_HELD=1
+    recover_stale_tuner_runs
     return 0
   fi
 
@@ -1199,6 +1200,48 @@ acquire_lock() {
   mkdir "$LOCK_DIR"
   printf '%s\n' "$$" > "$LOCK_DIR/pid"
   LOCK_HELD=1
+  recover_stale_tuner_runs
+}
+
+# The autotune candidate runner (it takes the same lock) records its state in
+# /opt/tmp/zapret-tuner.<runner PID>/runtime.state: runner_pid=,
+# candidate_pid=, was_running=, prepared=. A runner that died (SIGKILL, power
+# loss of the job) can leave a candidate nfqws2 on the queue and its
+# firewall rules; under the lock no runner is active, so clean up here.
+recover_stale_tuner_runs() {
+  for tuner_state in "$(root_path /opt/tmp)"/zapret-tuner.*/runtime.state; do
+    [ -f "$tuner_state" ] || continue
+    tuner_dir="$(dirname "$tuner_state")"
+    case "${tuner_dir##*/}" in
+      zapret-tuner.[0-9]*) ;;
+      *) continue ;;
+    esac
+    tuner_runner="$(sed -n 's/^runner_pid=//p' "$tuner_state" | sed -n '1p')"
+    case "$tuner_runner" in
+      ''|*[!0-9]*) ;;
+      *) ! kill -0 "$tuner_runner" 2>/dev/null || continue ;;
+    esac
+    echo "Cleaning up after an interrupted autotune run: $tuner_dir" >&2
+    tuner_candidate="$(sed -n 's/^candidate_pid=//p' "$tuner_state" | sed -n '1p')"
+    case "$tuner_candidate" in
+      ''|*[!0-9]*) ;;
+      *)
+        if tr '\0' ' ' 2>/dev/null < "/proc/$tuner_candidate/cmdline" | grep -q nfqws2; then
+          kill "$tuner_candidate" 2>/dev/null || true
+        fi
+        ;;
+    esac
+    if [ -x "$NFQWS_INIT" ]; then
+      run_nfqws_init firewall_stop >/dev/null 2>&1 || true
+      if [ "$(sed -n 's/^was_running=//p' "$tuner_state" | sed -n '1p')" = 1 ]; then
+        # firewall_stop removed the service rules too: start it afresh.
+        run_nfqws_init stop >/dev/null 2>&1 || true
+        run_nfqws_init start >/dev/null 2>&1 ||
+          echo "WARNING: nfqws2 did not start after the autotune cleanup." >&2
+      fi
+    fi
+    rm -rf "$tuner_dir"
+  done
 }
 
 atomic_pointer() {
@@ -1326,7 +1369,7 @@ nfqws_pid_is_service() {
   case "$service_pid" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$service_pid" 2>/dev/null || return 1
   [ -d "/proc/$service_pid" ] || return 0
-  service_cmdline="$(tr '\0' ' ' < "/proc/$service_pid/cmdline" 2>/dev/null || true)"
+  service_cmdline="$(tr '\0' ' ' 2>/dev/null < "/proc/$service_pid/cmdline" || true)"
   case "$service_cmdline" in
     *nfqws2*) ;;
     *) return 1 ;;
@@ -2146,7 +2189,7 @@ MARK="$ws_init_mark"
 # that process must never be reported as the relay or be killed (E2/C5).
 is_relay() {
   case "\$1" in ''|*[!0-9]*) return 1 ;; esac
-  tr '\\0' ' ' < "/proc/\$1/cmdline" 2>/dev/null | grep -Fq -- "\$RELAY --listen \$LISTEN"
+  tr '\\0' ' ' 2>/dev/null < "/proc/\$1/cmdline" | grep -Fq -- "\$RELAY --listen \$LISTEN"
 }
 
 # Every running relay of this service, with or without a pidfile.
@@ -4239,8 +4282,11 @@ nfqws_dry_run() {
   }
   dry_args="$(make_tmp)"
   if [ -n "$TEST_ROOT" ]; then
-    # Fixture paths: the composed arguments name the router's /opt paths.
-    sed "s#=/opt/#=$TEST_ROOT/opt/#g; s#@/opt/#@$TEST_ROOT/opt/#g" "$dry_tokens" > "$dry_args"
+    # Fixture paths: the composed arguments name the router's /opt paths;
+    # KD_TEST_NFQWS2_LUA holds the Lua files that match the test binary.
+    dry_lua="${KD_TEST_NFQWS2_LUA:-$TEST_ROOT/opt/etc/nfqws2/lua}"
+    sed "s#@/opt/etc/nfqws2/lua/#@$dry_lua/#g; s#=/opt/#=$TEST_ROOT/opt/#g; s#@/opt/#@$TEST_ROOT/opt/#g" \
+      "$dry_tokens" > "$dry_args"
   else
     cp "$dry_tokens" "$dry_args"
   fi
@@ -4746,7 +4792,7 @@ verify_nfqws_runtime() {
       return 1
     }
     verify_actual="$(make_tmp)"
-    tr '\0' '\n' < "/proc/$verify_pid/cmdline" | awk 'substr($0, 1, 1) == "-"' > "$verify_actual"
+    tr '\0' '\n' 2>/dev/null < "/proc/$verify_pid/cmdline" | awk 'substr($0, 1, 1) == "-"' > "$verify_actual"
     # The profile options must appear in order; global options that an
     # init may add differently are not compared.
     awk '

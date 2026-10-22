@@ -118,6 +118,7 @@ engine_write_nfqws2_init() {
 #   nfqws-init.keep-old     restart does nothing (the old daemon keeps running)
 #   nfqws-init.stale-rules  start keeps the firewall rules of the previous start
 #   nfqws-init.fail-start   start fails
+#   nfqws-init.wrong-args   start runs the daemon without the config's profiles
 NFQWS_BIN="$KD_TEST_ROOT/opt/usr/bin/nfqws2"
 CONFFILE="$KD_TEST_ROOT/opt/etc/nfqws2/nfqws2.conf"
 PIDFILE="$KD_TEST_ROOT/opt/var/run/nfqws2.pid"
@@ -214,8 +215,12 @@ start() {
     echo 'Service NFQWS2 is already running' >&2
     return 1
   fi
-  # shellcheck disable=SC2046
-  "$NFQWS_BIN" --daemon --pidfile="$PIDFILE" $(_startup_args) || return 1
+  if [ -f "$KD_TEST_ROOT/nfqws-init.wrong-args" ]; then
+    "$NFQWS_BIN" --daemon --pidfile="$PIDFILE" --qnum="$NFQUEUE_NUM" --filter-tcp=1 || return 1
+  else
+    # shellcheck disable=SC2046
+    "$NFQWS_BIN" --daemon --pidfile="$PIDFILE" $(_startup_args) || return 1
+  fi
   if [ ! -f "$KD_TEST_ROOT/nfqws-init.stale-rules" ] || [ ! -f "$RULES4" ]; then
     write_rules > "$RULES4"
     if [ -n "$IPV6_ENABLED" ] && [ "$IPV6_ENABLED" -ne 0 ]; then
@@ -245,6 +250,7 @@ case "${1:-}" in
     start
     ;;
   status) if is_running; then echo 'Service NFQWS2 is running'; else echo 'Service NFQWS2 is stopped'; fi ;;
+  firewall_stop) rm -f "$RULES4" "$RULES6" ;;
   *) echo "Usage: $0 {start|stop|restart|status}" ;;
 esac
 EOF

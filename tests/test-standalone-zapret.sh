@@ -91,6 +91,10 @@ case "${1:-}" in
         # The package ships this blob (Telegram Zapret registers it).
         cp "$KD_STANDALONE_FIXTURE/tls_clienthello.bin" \
           "$KD_TEST_ROOT/opt/etc/nfqws2/blobs/tls_clienthello.bin"
+        cp "$KD_STANDALONE_FIXTURE/quic_initial.bin" \
+          "$KD_TEST_ROOT/opt/etc/nfqws2/blobs/quic_initial.bin"
+        # The package postinst starts the service with its default config.
+        "$KD_TEST_ROOT/opt/etc/init.d/S51nfqws2" start >/dev/null 2>&1 || true
       fi
     done
     ;;
@@ -105,6 +109,8 @@ EOF
 
 cp "${NFQWS_TEST_BLOB_SOURCE:-/opt/etc/nfqws2/blobs}/tls_clienthello.bin" \
   "$FIXTURE/tls_clienthello.bin"
+cp "${NFQWS_TEST_BLOB_SOURCE:-/opt/etc/nfqws2/blobs}/quic_initial.bin" \
+  "$FIXTURE/quic_initial.bin"
 
 cat > "$MOCK_BIN/ip" <<'EOF'
 #!/bin/sh
@@ -223,5 +229,33 @@ grep -Fq '"installed":"later"' "$ROOT/opt/etc/xray/configs/sentinel.json"
 [ ! -e "$ROOT/opt/etc/init.d/S51nfqws2" ]
 [ ! -f "$PACKAGE_STATE/nfqws2-keenetic" ]
 [ ! -f "$PACKAGE_STATE/jq" ]
+
+rm -rf "$ROOT/opt/etc/xkeen" "$ROOT/opt/etc/xray" "$ROOT/opt/etc/init.d/S05xkeen"
+
+# C6: the package was removed after the snapshot. Its reinstall runs the
+# postinst, which starts nfqws2 with the package default; the restore must
+# still start it with the restored config.
+run_tool --apply --standalone-zapret --wan-interface fixture-wan --yes-router > "$FIXTURE/apply1.log" 2>&1 || {
+  cat "$FIXTURE/apply1.log" >&2
+  exit 1
+}
+grep -Fq 'WARNING: opkg update failed for one feed; continuing with the other package lists.' "$FIXTURE/apply1.log"
+run_tool --apply --standalone-zapret --youtube-route direct --wan-interface fixture-wan --yes-router >/dev/null
+restored_conf="$(sha256sum "$nfqws_conf" | awk '{print $1}')"
+run_tool --apply --standalone-zapret --wan-interface fixture-wan --yes-router >/dev/null
+rm -f "$PACKAGE_STATE/nfqws2-keenetic"
+"$ROOT/opt/etc/init.d/S51nfqws2" stop >/dev/null 2>&1 || true
+run_tool --rollback-latest --yes-router > "$FIXTURE/c6.log" 2>&1 || {
+  cat "$FIXTURE/c6.log" >&2
+  echo "ERROR: restore after a package removal failed" >&2
+  exit 1
+}
+grep -Fq 'Reinstalling baseline package: nfqws2-keenetic' "$FIXTURE/c6.log"
+[ -f "$PACKAGE_STATE/nfqws2-keenetic" ]
+[ "$(sha256sum "$nfqws_conf" | awk '{print $1}')" = "$restored_conf" ]
+run_tool --status | grep -Fqx 'nfqws_runtime=running'
+tr '\0' ' ' 2>/dev/null < "/proc/$(cat "$ROOT/opt/var/run/nfqws2.pid")/cmdline" |
+  grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/user.list'
+run_tool --check-config >/dev/null
 
 echo "standalone-zapret-tests-ok"
