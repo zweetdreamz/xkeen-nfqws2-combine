@@ -287,12 +287,13 @@ nfqws_file="$ROOT/opt/etc/nfqws2/nfqws2.conf"
 # Relays of this fixture (its port), zombies excluded.
 relay_count() {
   relay_total=0
-  for relay_cmdline in $(grep -Fl -- "$SCRIPT_DIR/tools/router/telegram_ws_relay.py" /proc/[0-9]*/cmdline 2>/dev/null); do
-    relay_proc_pid="${relay_cmdline#/proc/}"
-    relay_proc_pid="${relay_proc_pid%/cmdline}"
-    process_alive "$relay_proc_pid" || continue
-    tr '\0' ' ' 2>/dev/null < "$relay_cmdline" |
-      grep -Fq -- "--listen 127.0.0.1:$KD_TEST_TELEGRAM_WS_PORT" &&
+  for relay_proc in /proc/[0-9]*; do
+    relay_comm=""
+    read -r relay_comm 2>/dev/null < "$relay_proc/comm" || continue
+    case "$relay_comm" in python*) ;; *) continue ;; esac
+    process_alive "${relay_proc#/proc/}" || continue
+    tr '\0' ' ' 2>/dev/null < "$relay_proc/cmdline" |
+      grep -Fq -- "telegram_ws_relay.py --listen 127.0.0.1:$KD_TEST_TELEGRAM_WS_PORT" &&
       relay_total=$((relay_total + 1))
   done
   echo "$relay_total"

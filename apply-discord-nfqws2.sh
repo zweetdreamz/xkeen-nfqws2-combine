@@ -2192,11 +2192,14 @@ is_relay() {
   tr '\\0' ' ' 2>/dev/null < "/proc/\$1/cmdline" | grep -Fq -- "\$RELAY --listen \$LISTEN"
 }
 
-# Every running relay of this service, with or without a pidfile.
+# Every running relay of this service, with or without a pidfile. (busybox
+# grep stops at the first NUL of a cmdline, so each Python process is checked.)
 relay_pids() {
-  for cmdline in \$(grep -Fl -- "\$RELAY" /proc/[0-9]*/cmdline 2>/dev/null); do
-    pid="\${cmdline#/proc/}"
-    pid="\${pid%/cmdline}"
+  for proc in /proc/[0-9]*; do
+    comm=""
+    read -r comm 2>/dev/null < "\$proc/comm" || continue
+    case "\$comm" in python*) ;; *) continue ;; esac
+    pid="\${proc#/proc/}"
     is_relay "\$pid" && echo "\$pid"
   done
 }
