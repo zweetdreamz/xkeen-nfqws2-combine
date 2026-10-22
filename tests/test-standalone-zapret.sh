@@ -34,57 +34,18 @@ mkdir -p \
   "$ROOT/opt/etc/ndm/schedule.d" \
   "$ROOT/opt/tmp" \
   "$ROOT/opt/var/run" \
+  "$ROOT/opt/var/opkg-lists" \
   "$PACKAGE_STATE" \
   "$MOCK_BIN"
 
 touch "$PACKAGE_STATE/ca-certificates" "$PACKAGE_STATE/wget-ssl"
+printf 'Package: jq\n' > "$ROOT/opt/var/opkg-lists/entware"
 
-cat > "$FIXTURE/S51nfqws2.template" <<'EOF'
-#!/bin/sh
-pidfile="$KD_TEST_ROOT/opt/var/run/nfqws2.pid"
-stop_fixture() {
-  if [ -f "$pidfile" ]; then
-    pid="$(sed -n '1p' "$pidfile")"
-    case "$pid" in
-      ''|*[!0-9]*) ;;
-      *) kill "$pid" 2>/dev/null || true ;;
-    esac
-    rm -f "$pidfile"
-  fi
-}
-case "${1:-}" in
-  stop) stop_fixture ;;
-  start)
-    sleep 300 &
-    printf '%s\n' "$!" > "$pidfile"
-    ;;
-  restart)
-    stop_fixture
-    sleep 300 &
-    printf '%s\n' "$!" > "$pidfile"
-    ;;
-esac
-EOF
-chmod +x "$FIXTURE/S51nfqws2.template"
-
-cat > "$FIXTURE/nfqws2.conf.template" <<'EOF'
-NFQWS_BASE_ARGS="--lua-init=@/opt/etc/nfqws2/lua/zapret-lib.lua"
-NFQWS_ARGS="--filter-tcp=80,443 --filter-l7=http,tls"
-NFQWS_ARGS_QUIC="--filter-udp=443 --filter-l7=quic"
-NFQWS_ARGS_UDP="--filter-udp=443"
-MODE_LIST="--hostlist=/opt/etc/nfqws2/lists/user.list"
-MODE_ALL="--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list"
-MODE_AUTO="$MODE_LIST $MODE_ALL"
-NFQWS_EXTRA_ARGS="$MODE_AUTO"
-NFQWS_ARGS_IPSET=""
-NFQWS_ARGS_CUSTOM=""
-TCP_PORTS=80,443
-UDP_PORTS=443
-POLICY_NAME=""
-POLICY_EXCLUDE=0
-IPV6_ENABLED=0
-ISP_INTERFACE=""
-EOF
+# shellcheck source=tests/engine-nfqws2-fixture.sh
+. "$SCRIPT_DIR/tests/engine-nfqws2-fixture.sh"
+engine_write_nfqws2_init "$FIXTURE/S51nfqws2.template"
+engine_write_stock_nfqws2_conf "$FIXTURE/nfqws2.conf.template" "" 0
+engine_write_fake_nfqws2 "$FIXTURE/nfqws2.template"
 
 cat > "$MOCK_BIN/opkg" <<'EOF'
 #!/bin/sh
@@ -104,7 +65,13 @@ case "${1:-}" in
   print-architecture)
     echo 'arch all 1'
     ;;
-  update) ;;
+  update)
+    # One dead feed: opkg reports it and exits 1; the other list is there.
+    echo "Downloading https://bin.entware.net/mipselsf-k3.4/Packages.gz"
+    echo "Updated list of available packages in /opt/var/opkg-lists/entware"
+    echo " * Failed to download the package list from https://dead.example.invalid/Packages.gz"
+    exit 1
+    ;;
   install)
     shift
     for package in "$@"; do
@@ -117,11 +84,17 @@ case "${1:-}" in
         cp "$KD_STANDALONE_FIXTURE/S51nfqws2.template" \
           "$KD_TEST_ROOT/opt/etc/init.d/S51nfqws2"
         chmod +x "$KD_TEST_ROOT/opt/etc/init.d/S51nfqws2"
+        mkdir -p "$KD_TEST_ROOT/opt/usr/bin"
+        cp "$KD_STANDALONE_FIXTURE/nfqws2.template" "$KD_TEST_ROOT/opt/usr/bin/nfqws2"
         cp "$KD_STANDALONE_FIXTURE/nfqws2.conf.template" \
           "$KD_TEST_ROOT/opt/etc/nfqws2/nfqws2.conf"
         # The package ships this blob (Telegram Zapret registers it).
         cp "$KD_STANDALONE_FIXTURE/tls_clienthello.bin" \
           "$KD_TEST_ROOT/opt/etc/nfqws2/blobs/tls_clienthello.bin"
+        cp "$KD_STANDALONE_FIXTURE/quic_initial.bin" \
+          "$KD_TEST_ROOT/opt/etc/nfqws2/blobs/quic_initial.bin"
+        # The package postinst starts the service with its default config.
+        "$KD_TEST_ROOT/opt/etc/init.d/S51nfqws2" start >/dev/null 2>&1 || true
       fi
     done
     ;;
@@ -136,6 +109,8 @@ EOF
 
 cp "${NFQWS_TEST_BLOB_SOURCE:-/opt/etc/nfqws2/blobs}/tls_clienthello.bin" \
   "$FIXTURE/tls_clienthello.bin"
+cp "${NFQWS_TEST_BLOB_SOURCE:-/opt/etc/nfqws2/blobs}/quic_initial.bin" \
+  "$FIXTURE/quic_initial.bin"
 
 cat > "$MOCK_BIN/ip" <<'EOF'
 #!/bin/sh
@@ -149,15 +124,9 @@ esac
 exit 1
 EOF
 
-cat > "$MOCK_BIN/iptables-save" <<'EOF'
-#!/bin/sh
-cat <<'RULES'
--A POSTROUTING -j nfqws_post
--A nfqws_post -o fixture-wan -j NFQUEUE --queue-num 300
-RULES
-EOF
+engine_write_iptables_mocks "$MOCK_BIN"
 
-chmod +x "$MOCK_BIN/opkg" "$MOCK_BIN/ip" "$MOCK_BIN/iptables-save"
+chmod +x "$MOCK_BIN/opkg" "$MOCK_BIN/ip"
 
 run_tool() {
   PATH="$MOCK_BIN:$PATH" \
@@ -260,5 +229,33 @@ grep -Fq '"installed":"later"' "$ROOT/opt/etc/xray/configs/sentinel.json"
 [ ! -e "$ROOT/opt/etc/init.d/S51nfqws2" ]
 [ ! -f "$PACKAGE_STATE/nfqws2-keenetic" ]
 [ ! -f "$PACKAGE_STATE/jq" ]
+
+rm -rf "$ROOT/opt/etc/xkeen" "$ROOT/opt/etc/xray" "$ROOT/opt/etc/init.d/S05xkeen"
+
+# C6: the package was removed after the snapshot. Its reinstall runs the
+# postinst, which starts nfqws2 with the package default; the restore must
+# still start it with the restored config.
+run_tool --apply --standalone-zapret --wan-interface fixture-wan --yes-router > "$FIXTURE/apply1.log" 2>&1 || {
+  cat "$FIXTURE/apply1.log" >&2
+  exit 1
+}
+grep -Fq 'WARNING: opkg update failed for one feed; continuing with the other package lists.' "$FIXTURE/apply1.log"
+run_tool --apply --standalone-zapret --youtube-route direct --wan-interface fixture-wan --yes-router >/dev/null
+restored_conf="$(sha256sum "$nfqws_conf" | awk '{print $1}')"
+run_tool --apply --standalone-zapret --wan-interface fixture-wan --yes-router >/dev/null
+rm -f "$PACKAGE_STATE/nfqws2-keenetic"
+"$ROOT/opt/etc/init.d/S51nfqws2" stop >/dev/null 2>&1 || true
+run_tool --rollback-latest --yes-router > "$FIXTURE/c6.log" 2>&1 || {
+  cat "$FIXTURE/c6.log" >&2
+  echo "ERROR: restore after a package removal failed" >&2
+  exit 1
+}
+grep -Fq 'Reinstalling baseline package: nfqws2-keenetic' "$FIXTURE/c6.log"
+[ -f "$PACKAGE_STATE/nfqws2-keenetic" ]
+[ "$(sha256sum "$nfqws_conf" | awk '{print $1}')" = "$restored_conf" ]
+run_tool --status | grep -Fqx 'nfqws_runtime=running'
+tr '\0' ' ' 2>/dev/null < "/proc/$(cat "$ROOT/opt/var/run/nfqws2.pid")/cmdline" |
+  grep -Fq -- '--hostlist=/opt/etc/nfqws2/lists/user.list'
+run_tool --check-config >/dev/null
 
 echo "standalone-zapret-tests-ok"
