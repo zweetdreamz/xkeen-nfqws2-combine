@@ -3,6 +3,11 @@
 
 The module never changes routing, firewall, XKeen or nfqws2 configuration.
 It writes only bounded job state below /opt/tmp/xkeen-diagnostics.
+
+The web panel (xkeen_control_script.sh) loads this file for its
+post-apply check, so the invariant helpers below (nfqws2 port coverage,
+NFQUEUE rules, Xray routing file and outbounds, the Telegram WS relay and
+the QUIC probe) are shared by both and take their paths as arguments.
 """
 
 from __future__ import annotations
@@ -19,9 +24,12 @@ import re
 import secrets
 import shutil
 import signal
+import ssl
 import socket
 import stat
+import struct
 import subprocess
+import sys
 import tempfile
 import threading
 from typing import Any
@@ -33,9 +41,40 @@ JOB_DIR_LOGICAL = "/opt/tmp/xkeen-diagnostics"
 NFQWS_CONFIG_LOGICAL = "/opt/etc/nfqws2/nfqws2.conf"
 DISCORD_LIST_LOGICAL = "/opt/etc/nfqws2/lists/user.list"
 YOUTUBE_LIST_LOGICAL = "/opt/etc/nfqws2/lists/youtube.list"
-XRAY_ROUTING_LOGICAL = "/opt/etc/xray/configs/05_routing.json"
 XRAY_CONFIG_DIR_LOGICAL = "/opt/etc/xray/configs"
 PROJECT_LOCK_LOGICAL = "/opt/tmp/keenetic-discord-nfqws2.lock"
+TELEGRAM_WS_PIDFILE_LOGICAL = "/opt/var/run/kdn-telegram-ws.pid"
+NFQWS_PIDFILE_LOGICAL = "/opt/var/run/nfqws2.pid"
+TELEGRAM_WS_PORT = 18443
+ENGINE_PATH = PROJECT_DIR / "apply-discord-nfqws2.sh"
+# Written by the autotune part (contract item 2); optional until installed.
+QUIC_PROBE_PATH = PROJECT_DIR / "tools" / "router" / "quic_probe.py"
+QUIC_PROBE_HOST = "www.youtube.com"
+# The hostlist path inside nfqws2 arguments is always the router path.
+YOUTUBE_HOSTLIST_ARG = "--hostlist=/opt/etc/nfqws2/lists/youtube.list"
+VOICE_L7 = "--filter-l7=stun,discord"
+# Other DPI bypass tools for a router (process comm names; Windows-only
+# tools such as winws or GoodbyeDPI cannot run on Keenetic).
+RIVAL_PROCESSES = {
+    "nfqws": "zapret (nfqws)",
+    "tpws": "zapret (tpws)",
+    "youtubeUnblock": "youtubeUnblock",
+    "b4": "b4",
+    "ciadpi": "byedpi (ciadpi)",
+    "byedpi": "byedpi",
+    "dpitunnel": "DPITunnel",
+    "dpitunnel-cli": "DPITunnel",
+    "spoofdpi": "SpoofDPI",
+}
+# DoH resolvers by pinned IP (RFC 8484 wire format): the answer is compared
+# with the router's own resolver to spot DNS substitution.
+DOH_RESOLVERS = (
+    ("Yandex", "common.dot.dns.yandex.net", "77.88.8.8"),
+    ("Google", "dns.google", "8.8.8.8"),
+)
+# Unblocked SNI used to tell an SNI block from an IP block.
+SNI_CONTROL_HOST = "ya.ru"
+SNI_CHECK_HOSTS = ("discord.com", "www.youtube.com")
 STATE_LIMIT = 512 * 1024
 STANDARD_WORKERS = 4
 DPI_WORKERS = 3
@@ -136,7 +175,7 @@ def command_path(name: str) -> str:
     return shutil.which(name) or name
 
 
-def run(command: list[str], timeout: int) -> dict[str, Any]:
+def run(command: list[str], timeout: int, extra_env: dict[str, str] | None = None) -> dict[str, Any]:
     if CANCELLED.is_set():
         raise InterruptedError("diagnostics cancelled")
     try:
@@ -147,7 +186,7 @@ def run(command: list[str], timeout: int) -> dict[str, Any]:
             stderr=subprocess.STDOUT,
             timeout=timeout,
             check=False,
-            env={**os.environ, "PATH": "/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin"},
+            env={**os.environ, "PATH": "/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin", **(extra_env or {})},
         )
         output = completed.stdout.decode("utf-8", errors="replace").strip()
         return {"ok": completed.returncode == 0, "code": completed.returncode, "output": output[-12000:]}
@@ -321,22 +360,668 @@ def voice_profile_active(config: str) -> bool:
 
     Every Voice profile the engine writes or accepts selects --filter-l7=stun,discord.
     """
-    return "--filter-l7=stun,discord" in config
+    return VOICE_L7 in config
 
 
-def route_consistency(config: str, tags: set[str], discord_list: str) -> list[dict[str, str]]:
-    discord_tcp, discord_voice, youtube = parse_routes(config)
-    youtube_active = "--hostlist=/opt/etc/nfqws2/lists/youtube.list" in config
-    discord_tcp_active = bool(discord_list.strip())
-    discord_voice_active = voice_profile_active(config)
+# ---------------------------------------------------------------------------
+# Port ranges. nfqws2 filters write ranges with "-", TCP_PORTS/UDP_PORTS and
+# iptables multiport with ":"; both are compared as merged numeric ranges.
+
+def merge_ports(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for low, high in sorted(ranges):
+        if merged and low <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], high))
+        else:
+            merged.append((low, high))
+    return merged
+
+
+def parse_ports(spec: str) -> list[tuple[int, int]]:
+    """Parse "80,443", "19294-19344" or "19294:19344" into merged ranges."""
+    ranges = []
+    for item in spec.replace(" ", "").split(","):
+        if not item:
+            continue
+        left, separator, right = item.replace(":", "-").partition("-")
+        if not left.isdigit() or (separator and not right.isdigit()):
+            raise ValueError(f"некорректный порт: {item}")
+        low = int(left)
+        high = int(right) if separator else low
+        if not 1 <= low <= high <= 65535:
+            raise ValueError(f"некорректный порт: {item}")
+        ranges.append((low, high))
+    return merge_ports(ranges)
+
+
+def missing_ports(need: list[tuple[int, int]], have: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Parts of the ranges in need that no range in have covers."""
+    result = []
+    have = merge_ports(have)
+    for low, high in merge_ports(need):
+        cursor = low
+        for have_low, have_high in have:
+            if have_high < cursor:
+                continue
+            if have_low > high:
+                break
+            if have_low > cursor:
+                result.append((cursor, have_low - 1))
+            cursor = max(cursor, have_high + 1)
+            if cursor > high:
+                break
+        if cursor <= high:
+            result.append((cursor, high))
+    return result
+
+
+def format_ports(ranges: list[tuple[int, int]]) -> str:
+    return ",".join(str(low) if low == high else f"{low}-{high}" for low, high in ranges) or "—"
+
+
+# ---------------------------------------------------------------------------
+# nfqws2.conf is a shell file sourced by the nfqws2-keenetic init script.
+
+_SHELL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_SHELL_ASSIGN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=")
+_SHELL_IF = re.compile(r'if\s+\[\s+(-[nz])\s+"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"\s+\]\s*;?\s*(?:then)?$')
+
+
+def parse_shell_values(text: str) -> dict[str, str]:
+    """Final values of the assignments in a shell config such as nfqws2.conf.
+
+    Only what nfqws2.conf uses is understood: NAME=value with double, single
+    or no quotes (values may span lines), $NAME and ${NAME} expansion, and
+    `if [ -n|-z "$NAME" ]; then ... else ... fi`. Nothing is executed.
+    """
+    values: dict[str, str] = {}
+    conditions: list[bool] = []
+    length = len(text)
+
+    def expand(position: int) -> tuple[str, int]:
+        if text.startswith("${", position):
+            end = text.find("}", position + 2)
+            if end < 0 or not _SHELL_NAME.fullmatch(text[position + 2:end]):
+                return "$", position + 1
+            return values.get(text[position + 2:end], ""), end + 1
+        match = _SHELL_NAME.match(text, position + 1)
+        if not match:
+            return "$", position + 1
+        return values.get(match.group(0), ""), match.end()
+
+    def word(position: int) -> tuple[str, int]:
+        parts: list[str] = []
+        while position < length and text[position] not in " \t\r\n;":
+            char = text[position]
+            if char == '"':
+                position += 1
+                while position < length and text[position] != '"':
+                    char = text[position]
+                    if char == "\\" and position + 1 < length:
+                        following = text[position + 1]
+                        if following != "\n":
+                            parts.append(following if following in '$"\\`' else char + following)
+                        position += 2
+                    elif char == "$":
+                        value, position = expand(position)
+                        parts.append(value)
+                    else:
+                        parts.append(char)
+                        position += 1
+                position += 1
+            elif char == "'":
+                end = text.find("'", position + 1)
+                end = length if end < 0 else end
+                parts.append(text[position + 1:end])
+                position = end + 1
+            elif char == "\\" and position + 1 < length:
+                if text[position + 1] != "\n":
+                    parts.append(text[position + 1])
+                position += 2
+            elif char == "$":
+                value, position = expand(position)
+                parts.append(value)
+            else:
+                parts.append(char)
+                position += 1
+        return "".join(parts), position
+
+    index = 0
+    while index < length:
+        line_end = text.find("\n", index)
+        line_end = length if line_end < 0 else line_end
+        raw_line = text[index:line_end]
+        line = raw_line.strip()
+        start = index + len(raw_line) - len(raw_line.lstrip())
+        next_index = line_end + 1
+        if line.startswith("if "):
+            match = _SHELL_IF.match(line)
+            if match:
+                current = values.get(match.group(2), "")
+                conditions.append(bool(current) if match.group(1) == "-n" else not current)
+            else:
+                conditions.append(True)
+        elif line == "else" and conditions:
+            conditions[-1] = not conditions[-1]
+        elif line == "fi" and conditions:
+            conditions.pop()
+        elif line and not line.startswith("#"):
+            match = _SHELL_ASSIGN.match(text, start)
+            if match:
+                value, end = word(match.end())
+                if all(conditions):
+                    values[match.group(1)] = value
+                newline = text.find("\n", end)
+                next_index = length if newline < 0 else newline + 1
+        index = next_index
+    return values
+
+
+def compose_profiles(values: dict[str, str]) -> list[list[str]]:
+    """nfqws2 profiles in the order the nfqws2-keenetic init (_startup_args) builds them."""
+    profiles: list[list[str]] = []
+
+    def tokens(name: str) -> list[str]:
+        return values.get(name, "").split()
+
+    def add(arguments: list[str]) -> None:
+        current: list[str] = []
+        for token in arguments:
+            if token == "--new":
+                if current:
+                    profiles.append(current)
+                current = []
+            else:
+                current.append(token)
+        if current:
+            profiles.append(current)
+
+    add(tokens("NFQWS_ARGS_CUSTOM"))
+    add(tokens("NFQWS_ARGS_UDP"))
+    if tokens("NFQWS_ARGS_QUIC"):
+        if tokens("NFQWS_ARGS_IPSET"):
+            add(tokens("NFQWS_ARGS_QUIC") + tokens("NFQWS_ARGS_IPSET"))
+        add(tokens("NFQWS_ARGS_QUIC") + tokens("NFQWS_EXTRA_ARGS"))
+    if tokens("NFQWS_ARGS_IPSET"):
+        add(tokens("NFQWS_ARGS") + tokens("NFQWS_ARGS_IPSET"))
+    add(tokens("NFQWS_ARGS") + tokens("NFQWS_EXTRA_ARGS"))
+    return profiles
+
+
+def option_values(profile: list[str], option: str) -> list[str]:
+    prefix = f"--{option}="
+    return [token[len(prefix):] for token in profile if token.startswith(prefix)]
+
+
+def profile_ports(profile: list[str], proto: str) -> list[tuple[int, int]]:
+    return merge_ports([item for spec in option_values(profile, f"filter-{proto}") for item in parse_ports(spec)])
+
+
+def profile_label(profile: list[str]) -> str:
+    lists = [Path(value).name for option in ("hostlist", "ipset") for value in option_values(profile, option)]
+    if lists:
+        return ", ".join(lists)
+    l7 = option_values(profile, "filter-l7")
+    return "l7=" + ",".join(l7) if l7 else "без hostlist"
+
+
+def profile_matches_udp_443(profile: list[str]) -> bool:
+    if option_values(profile, "filter-udp"):
+        return not missing_ports([(443, 443)], profile_ports(profile, "udp"))
+    # A profile without any port filter matches every port of both protocols.
+    return not option_values(profile, "filter-tcp")
+
+
+CONFIG_CHECK_LABELS = {
+    "port-coverage": "nfqws2: порты профилей в очереди",
+    "unhandled-ports": "nfqws2: порты без профиля",
+    "listless-profile": "nfqws2: профили без hostlist",
+    "empty-hostlist": "nfqws2: пустые hostlist",
+    "legacy-blob": "nfqws2: fake без blob",
+}
+CHECK_LINE = re.compile(r"^CHECK\|(ok|warn|error)\|([A-Za-z0-9_.-]+)\|(.*)$", re.MULTILINE)
+
+
+def config_check_label(name: str) -> str:
+    return CONFIG_CHECK_LABELS.get(name, f"nfqws2: {name}")
+
+
+def static_port_checks(values: dict[str, str]) -> list[dict[str, str]]:
+    """Built-in fallback for the engine's port-coverage and unhandled-ports checks."""
+    try:
+        queued = {"tcp": parse_ports(values.get("TCP_PORTS", "")), "udp": parse_ports(values.get("UDP_PORTS", ""))}
+        profiles = compose_profiles(values)
+        problems = []
+        handled: dict[str, list[tuple[int, int]]] = {"tcp": [], "udp": []}
+        catch_all = False
+        for number, profile in enumerate(profiles, 1):
+            desync = bool(option_values(profile, "lua-desync"))
+            filters = {proto: profile_ports(profile, proto) for proto in ("tcp", "udp")}
+            if desync and not filters["tcp"] and not filters["udp"]:
+                catch_all = True
+            for proto in ("tcp", "udp"):
+                lack = missing_ports(filters[proto], queued[proto])
+                if lack:
+                    problems.append(
+                        f"профиль {number} ({profile_label(profile)}): {proto.upper()} {format_ports(lack)} "
+                        f"нет в {proto.upper()}_PORTS"
+                    )
+                if desync:
+                    handled[proto].extend(filters[proto])
+    except ValueError as exc:
+        return [make_check(config_check_label("port-coverage"), "error", f"nfqws2.conf не разобран: {exc}")]
+    checks = [make_check(
+        config_check_label("port-coverage"),
+        "error" if problems else "ok",
+        "; ".join(problems) + " — эти пакеты не попадают в nfqws2"
+        if problems
+        else f"TCP_PORTS={format_ports(queued['tcp'])}, UDP_PORTS={format_ports(queued['udp'])} "
+        f"покрывают фильтры всех профилей ({len(profiles)})",
+    )]
+    unhandled = [] if catch_all else [
+        f"{proto.upper()} {format_ports(lack)}"
+        for proto in ("tcp", "udp")
+        if (lack := missing_ports(queued[proto], handled[proto]))
+    ]
+    checks.append(make_check(
+        config_check_label("unhandled-ports"),
+        "warn" if unhandled else "ok",
+        "в очередь идут, но ни один профиль их не обрабатывает: " + "; ".join(unhandled)
+        if unhandled
+        else "каждый порт очереди обрабатывается профилем",
+    ))
+    return checks
+
+
+def youtube_quic_static_check(text: str, values: dict[str, str]) -> dict[str, str] | None:
+    """YouTube=zapret needs UDP 443 queued and a youtube.list QUIC profile that nothing shadows."""
+    routes = parse_active_routes(text)
+    if not routes or routes["youtube"] != "zapret":
+        return None
+    name = "YouTube QUIC (UDP 443)"
+    try:
+        udp = parse_ports(values.get("UDP_PORTS", ""))
+        profiles = compose_profiles(values)
+    except ValueError as exc:
+        return make_check(name, "error", f"nfqws2.conf не разобран: {exc}")
+    if missing_ports([(443, 443)], udp):
+        return make_check(
+            name,
+            "error",
+            f"UDP_PORTS={format_ports(udp)} без 443: QUIC YouTube не попадает в nfqws2, "
+            "приложение YouTube (QUIC/HTTP3) может не загружаться",
+        )
+    for number, profile in enumerate(profiles, 1):
+        try:
+            matches = profile_matches_udp_443(profile)
+        except ValueError:
+            continue
+        if not matches:
+            continue
+        if YOUTUBE_HOSTLIST_ARG in profile and option_values(profile, "lua-desync"):
+            return make_check(name, "ok", f"UDP 443 в очереди; профиль {number} (youtube.list) обрабатывает QUIC")
+        l7 = {item for value in option_values(profile, "filter-l7") for item in value.split(",")}
+        listed = option_values(profile, "hostlist") or option_values(profile, "ipset")
+        if not listed and (not l7 or "quic" in l7):
+            return make_check(
+                name,
+                "error",
+                f"профиль {number} ({profile_label(profile)}) перехватывает UDP 443 раньше профиля YouTube",
+            )
+    return make_check(name, "error", "нет профиля --filter-udp=443 с youtube.list: QUIC YouTube не обрабатывается")
+
+
+def config_invariant_checks(text: str, runner: Any, engine: Path = ENGINE_PATH) -> list[dict[str, str]]:
+    """nfqws2.conf invariants: the engine's --check-config, or a built-in fallback.
+
+    runner(command, timeout) returns {"ok", "code", "output"}. Every CHECK line
+    of the engine becomes one check. An engine without --check-config (an
+    older release) answers with usage and no CHECK lines; then the static
+    port checks of this module run instead. The YouTube QUIC check always runs.
+    """
+    values = parse_shell_values(text)
+    checks: list[dict[str, str]] = []
+    lines: list[tuple[str, str, str]] = []
+    reason = "движок не найден"
+    if engine.is_file():
+        result = runner(["/bin/sh", str(engine), "--check-config"], 90)
+        output = result.get("output", "") or ""
+        lines = CHECK_LINE.findall(output)
+        if "unknown argument" in output:
+            reason = "движок без --check-config"
+        else:
+            reason = "движок не выполнил проверку: " + (output.strip().splitlines() or ["нет вывода"])[-1][:200]
+    if lines:
+        for status, name, detail in lines:
+            checks.append(make_check(config_check_label(name), status, detail.strip() or "—"))
+    else:
+        for check in static_port_checks(values):
+            check["detail"] = (check["detail"] + f" · встроенная проверка ({reason})")[:1000]
+            checks.append(check)
+    quic = youtube_quic_static_check(text, values)
+    if quic:
+        checks.append(quic)
+    return checks
+
+
+# ---------------------------------------------------------------------------
+# Live firewall state built by the nfqws2-keenetic init from nfqws2.conf.
+
+_SAVE_RULE = re.compile(r"^(?:\[(\d+):(\d+)\]\s+)?-A\s+(\S+)\s+(.*)$")
+
+
+def nfqueue_rules(save_text: str, queue: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """NFQUEUE rules of nfqws_post/nfqws_pre and the jump counts, from iptables-save [-c]."""
+    rules: list[dict[str, Any]] = []
+    jumps = {"POSTROUTING": 0, "PREROUTING": 0}
+    target = re.compile(r"-j NFQUEUE --queue-num " + re.escape(queue) + r"(?:\s|$)")
+    for line in save_text.splitlines():
+        match = _SAVE_RULE.match(line.strip())
+        if not match:
+            continue
+        chain, spec = match.group(3), match.group(4).strip()
+        if (chain, spec) in {("POSTROUTING", "-j nfqws_post"), ("PREROUTING", "-j nfqws_pre")}:
+            jumps[chain] += 1
+            continue
+        if chain not in {"nfqws_post", "nfqws_pre"} or not target.search(spec):
+            continue
+        proto = re.search(r"-p (tcp|udp)\b", spec)
+        ports = re.search(r"--(?:dports|sports|dport|sport) (\S+)", spec)
+        if not proto or not ports:
+            continue
+        try:
+            ranges = parse_ports(ports.group(1))
+        except ValueError:
+            continue
+        rules.append({
+            "chain": chain,
+            "proto": proto.group(1),
+            "ports": ranges,
+            "packets": int(match.group(1)) if match.group(1) is not None else None,
+        })
+    return rules, jumps
+
+
+def nfqueue_live_checks(
+    save_text: str, values: dict[str, str], family: str = "IPv4", counters: bool = True,
+) -> list[dict[str, str]]:
+    """Compare the live NFQUEUE rules with TCP_PORTS/UDP_PORTS of nfqws2.conf.
+
+    The init rebuilds the rules from the config on every nfqws2 start, so a
+    mismatch means nfqws2 was not restarted after nfqws2.conf changed.
+    """
+    queue = values.get("NFQUEUE_NUM") or "300"
+    prefix = "NFQUEUE" if family == "IPv4" else f"NFQUEUE {family}"
+    rules, jumps = nfqueue_rules(save_text, queue)
     checks = []
-    for name, mode, tag, active in (
-        ("YouTube route", youtube, "youtube-direct", youtube_active),
-        ("Discord TCP route", discord_tcp, "discord-direct", discord_tcp_active),
-        ("Discord Voice route", discord_voice, "discord-direct", discord_voice_active),
+    try:
+        queued = {"tcp": parse_ports(values.get("TCP_PORTS", "")), "udp": parse_ports(values.get("UDP_PORTS", ""))}
+    except ValueError as exc:
+        return [make_check(f"{prefix}: порты", "error", f"TCP_PORTS/UDP_PORTS не разобраны: {exc}")]
+    problems = []
+    for chain in ("nfqws_post", "nfqws_pre"):
+        for proto in ("udp", "tcp"):
+            live = [item for rule in rules if rule["chain"] == chain and rule["proto"] == proto for item in rule["ports"]]
+            lack = missing_ports(queued[proto], live)
+            if lack:
+                problems.append(f"{chain} {proto.upper()} без {format_ports(lack)}")
+    checks.append(make_check(
+        f"{prefix}: порты",
+        "error" if problems else "ok",
+        "; ".join(problems) + f" из {'/'.join(sorted({p.split()[1] + '_PORTS' for p in problems}))} nfqws2.conf: "
+        "правила очереди устарели (nfqws2 не перезапущен после изменения конфига) или не созданы"
+        if problems
+        else f"очередь {queue}: TCP {format_ports(queued['tcp'])}, UDP {format_ports(queued['udp'])} как в nfqws2.conf",
+    ))
+    wrong = {chain: count for chain, count in jumps.items() if count != 1}
+    target = {"POSTROUTING": "nfqws_post", "PREROUTING": "nfqws_pre"}
+    checks.append(make_check(
+        f"{prefix}: переходы",
+        "error" if 0 in wrong.values() else "warn" if wrong else "ok",
+        "; ".join(f"{chain} → {target[chain]}: {count} раз(а), нужен ровно один" for chain, count in wrong.items())
+        if wrong
+        else "POSTROUTING → nfqws_post и PREROUTING → nfqws_pre ровно по одному разу",
+    ))
+    if counters:
+        parts = []
+        for chain, short in (("nfqws_post", "исх."), ("nfqws_pre", "ответы")):
+            for proto in ("udp", "tcp"):
+                selected = [rule for rule in rules if rule["chain"] == chain and rule["proto"] == proto]
+                if not selected:
+                    continue
+                ports = merge_ports([item for rule in selected for item in rule["ports"]])
+                packets = [rule["packets"] for rule in selected]
+                count = "?" if None in packets else str(sum(packets))
+                parts.append(f"{short} {proto.upper()} {format_ports(ports)}: {count} пак.")
+        checks.append(make_check(
+            f"{prefix}: счётчики",
+            "ok" if parts else "error",
+            "; ".join(parts) if parts else f"правил NFQUEUE {queue} в nfqws_post/nfqws_pre нет",
+        ))
+    return checks
+
+
+def ipv6_route_check(route_output: str, values: dict[str, str]) -> dict[str, str]:
+    """Warn when IPv6 leaves through the WAN while nfqws2 handles only IPv4."""
+    name = "IPv6 и nfqws2"
+    enabled = values.get("IPV6_ENABLED", "0").strip() not in {"", "0"}
+    interfaces = values.get("ISP_INTERFACE", "").split()
+    devices = [
+        match.group(1)
+        for line in route_output.splitlines()
+        if line.strip().startswith("default") and (match := re.search(r"\bdev (\S+)", line))
+    ]
+    wan = [device for device in devices if not interfaces or device in interfaces]
+    if enabled:
+        return make_check(name, "ok", "IPV6_ENABLED=1: nfqws2 обрабатывает и IPv6")
+    if wan:
+        return make_check(
+            name,
+            "warn",
+            f"IPv6 default route через {', '.join(sorted(set(wan)))}, а IPV6_ENABLED=0: соединения по IPv6 "
+            "(приложение YouTube на iPhone его предпочитает) идут мимо nfqws2",
+        )
+    return make_check(name, "ok", "IPv6 default route через WAN нет; nfqws2 работает по IPv4")
+
+
+# ---------------------------------------------------------------------------
+# Xray: the routing file Xray really uses, the outbounds, and the per-service
+# predicates of the engine's --status (status_report in apply-discord-nfqws2.sh).
+
+def read_xray_files(config_dir: Path) -> list[tuple[Path, Any]]:
+    """Parsed *.json (JSONC) files of the confdir in Xray's (filename) order; None when unreadable."""
+    result = []
+    try:
+        paths = sorted(config_dir.glob("*.json"))
+    except OSError:
+        return result
+    for path in paths:
+        try:
+            data = json.loads(strip_json_comments(safe_read(path)))
+        except (OSError, ValueError):
+            data = None
+        result.append((path, data))
+    return result
+
+
+def find_xray_routing_file(config_dir: Path, files: list[tuple[Path, Any]] | None = None) -> tuple[Path, dict] | None:
+    """The last confdir file with a routing object, as the engine's find_xray_routing_file.
+
+    Xray reads confdir files in filename order and a later routing object
+    replaces an earlier one.
+    """
+    active = None
+    for path, data in read_xray_files(config_dir) if files is None else files:
+        if isinstance(data, dict) and isinstance(data.get("routing"), dict):
+            active = (path, data["routing"])
+    return active
+
+
+def xray_outbounds(files: list[tuple[Path, Any]]) -> dict[str, dict]:
+    outbounds: dict[str, dict] = {}
+    for _path, data in files:
+        items = data.get("outbounds") if isinstance(data, dict) else None
+        for outbound in items if isinstance(items, list) else []:
+            if isinstance(outbound, dict) and isinstance(outbound.get("tag"), str):
+                outbounds[outbound["tag"]] = outbound
+    return outbounds
+
+
+def _domain_count(rule: dict) -> int:
+    domain = rule.get("domain")
+    return len(domain) if isinstance(domain, (list, str)) else 0
+
+
+def rule_port_ranges(rules: list[dict]) -> list[tuple[int, int]]:
+    """Union of the ports a set of Xray rules match; a rule without "port" matches all."""
+    ranges: list[tuple[int, int]] = []
+    for rule in rules:
+        port = rule.get("port")
+        if port is None:
+            return [(1, 65535)]
+        if isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535:
+            ranges.append((port, port))
+        elif isinstance(port, str):
+            try:
+                ranges.extend(parse_ports(port))
+            except ValueError:
+                continue
+    return merge_ports(ranges)
+
+
+def telegram_xray_route(rules: list[dict]) -> str:
+    outbounds = [
+        rule.get("outboundTag") for rule in rules
+        if str(rule.get("ruleTag", "")).startswith("kdn-telegram")
+    ]
+    if not outbounds:
+        return "unmanaged"
+    if "telegram-ws" in outbounds:
+        return "ws"
+    return "direct" if outbounds[0] == "telegram-direct" else "vless"
+
+
+def xray_service_rules(rules: Any) -> dict[str, Any]:
+    """Which managed services the routing sends to their -direct outbound (engine --status predicates)."""
+    items = [rule for rule in rules if isinstance(rule, dict)] if isinstance(rules, list) else []
+    voice = [
+        rule for rule in items
+        if rule.get("outboundTag") == "discord-direct" and rule.get("network") == "udp" and _domain_count(rule) == 0
+    ]
+    return {
+        "discord-tcp": any(rule.get("outboundTag") == "discord-direct" and _domain_count(rule) > 0 for rule in items),
+        "discord-voice": bool(voice),
+        "youtube": any(rule.get("outboundTag") == "youtube-direct" for rule in items),
+        "voice-ports": rule_port_ranges(voice),
+        "telegram": telegram_xray_route(items),
+        "tags": {rule.get("outboundTag") for rule in items if isinstance(rule.get("outboundTag"), str)},
+    }
+
+
+def inferred_route(present: bool, recorded: str) -> str:
+    """The route --status reports for a service, given its -direct rule."""
+    if not present:
+        return "vless"
+    return recorded if recorded in {"zapret", "direct"} else "direct"
+
+
+def voice_filter_ports(config: str) -> list[tuple[int, int]]:
+    """UDP ports of the Discord Voice profile without 443 (that is the QUIC port, not Voice)."""
+    try:
+        profiles = compose_profiles(parse_shell_values(config))
+        ports = [item for profile in profiles if VOICE_L7 in profile for item in profile_ports(profile, "udp")]
+    except ValueError:
+        return []
+    return missing_ports(ports, [(443, 443)])
+
+
+def outbound_checks(rules: Any, routing: dict, outbounds: dict[str, dict], telegram_port: int = TELEGRAM_WS_PORT) -> dict[str, str]:
+    """Project outbounds used by the routing must exist and go straight out.
+
+    Xray accepts a rule that points to a missing tag and then sends the
+    traffic to the first outbound, which in XKeen setups is the VPN.
+    """
+    items = [rule for rule in rules if isinstance(rule, dict)] if isinstance(rules, list) else []
+    used = {rule.get("outboundTag") for rule in items if isinstance(rule.get("outboundTag"), str)}
+    problems = []
+    for tag in sorted(used & {"discord-direct", "youtube-direct", "telegram-direct", "telegram-ws"}):
+        outbound = outbounds.get(tag)
+        if outbound is None:
+            problems.append(f"{tag}: outbound не найден — Xray отправит трафик в первый outbound (обычно VPN)")
+            continue
+        if outbound.get("protocol") != "freedom":
+            problems.append(f"{tag}: protocol={outbound.get('protocol')}, нужен freedom")
+            continue
+        stream = outbound.get("streamSettings")
+        sockopt = stream.get("sockopt") if isinstance(stream, dict) else None
+        if isinstance(sockopt, dict) and sockopt.get("dialerProxy"):
+            problems.append(f"{tag}: sockopt.dialerProxy={sockopt.get('dialerProxy')} уводит трафик в другой outbound")
+        if "proxySettings" in outbound:
+            problems.append(f"{tag}: proxySettings уводит трафик в другой outbound")
+        if tag == "telegram-ws":
+            settings = outbound.get("settings")
+            redirect = settings.get("redirect") if isinstance(settings, dict) else None
+            if redirect != f"127.0.0.1:{telegram_port}":
+                problems.append(f"telegram-ws: redirect={redirect}, нужен 127.0.0.1:{telegram_port}")
+    balancers = routing.get("balancers") if isinstance(routing, dict) else None
+    balancer_tags = {
+        item.get("tag") for item in balancers if isinstance(item, dict)
+    } if isinstance(balancers, list) else set()
+    undefined = sorted(used - set(outbounds) - {"discord-direct", "youtube-direct", "telegram-direct", "telegram-ws"})
+    undefined += sorted(
+        f"balancer {rule['balancerTag']}" for rule in items
+        if isinstance(rule.get("balancerTag"), str) and rule["balancerTag"] not in balancer_tags
+    )
+    if problems:
+        return make_check("Xray outbounds", "error", "; ".join(problems))
+    if undefined:
+        return make_check("Xray outbounds", "warn", "правила ссылаются на несуществующие outbound: " + ", ".join(undefined))
+    used_project = sorted(used & {"discord-direct", "youtube-direct", "telegram-direct", "telegram-ws"})
+    return make_check(
+        "Xray outbounds", "ok",
+        ("freedom без прокси: " + ", ".join(used_project)) if used_project else "outbound проекта не используются",
+    )
+
+
+def route_consistency(
+    config: str, rules: Any, discord_list: str, telegram: bool = True,
+) -> list[dict[str, str]]:
+    """Compare the recorded routes with the Xray routing rules and nfqws2 profiles.
+
+    The Xray side uses the same predicates as the engine's --status, which
+    feeds the panel's route badges.
+    """
+    discord_tcp, discord_voice, youtube = parse_routes(config)
+    state = xray_service_rules(rules)
+    active = {
+        "youtube": YOUTUBE_HOSTLIST_ARG in config,
+        "discord-tcp": bool(discord_list.strip()),
+        "discord-voice": voice_profile_active(config),
+    }
+    checks = []
+    for name, service, mode in (
+        ("YouTube route", "youtube", youtube),
+        ("Discord TCP route", "discord-tcp", discord_tcp),
+        ("Discord Voice route", "discord-voice", discord_voice),
     ):
-        okay = mode in ROUTE_VALUES and (mode == "vless" or tag in tags) and active == (mode == "zapret")
-        checks.append(make_check(name, "ok" if okay else "error", f"route={mode}, nfqws={'on' if active else 'off'}"))
+        xray = inferred_route(state[service], mode)
+        okay = mode in ROUTE_VALUES and xray == mode and active[service] == (mode == "zapret")
+        detail = f"route={mode}, nfqws={'on' if active[service] else 'off'}"
+        if mode in ROUTE_VALUES and xray != mode:
+            detail += f", Xray={xray}"
+        if service == "discord-voice" and mode != "vless" and state["discord-voice"]:
+            lack = missing_ports(voice_filter_ports(config), state["voice-ports"])
+            if lack:
+                okay = False
+                detail += f", правило Xray UDP без портов {format_ports(lack)}"
+        checks.append(make_check(name, "ok" if okay else "error", detail))
+    if telegram:
+        checks.extend(telegram_consistency(config, state["tags"]))
+    return checks
+
+
+def telegram_consistency(config: str, tags: set[str]) -> list[dict[str, str]]:
+    checks = []
     telegram = telegram_route(config)
     telegram_active = "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list" in config
     mtproto_active = "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list" in config
@@ -368,12 +1053,261 @@ def route_consistency(config: str, tags: set[str], discord_list: str) -> list[di
     return checks
 
 
+# ---------------------------------------------------------------------------
+# Processes and live probes.
+
+def telegram_relay_status(
+    pidfile: Path, port: int = TELEGRAM_WS_PORT, proc_root: Path = Path("/proc"), timeout: float = 2.0,
+) -> tuple[bool, str]:
+    """The Telegram WS relay runs when the pidfile PID is telegram_ws_relay.py and the port accepts."""
+    try:
+        raw = pidfile.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return False, f"нет pid-файла {pidfile}"
+    if not raw.isdigit() or int(raw) <= 1:
+        return False, f"некорректный pid-файл {pidfile}"
+    pid = int(raw)
+    try:
+        command = (proc_root / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        command = b""
+    if not command:
+        return False, f"процесс {pid} не запущен (pid-файл устарел)"
+    if b"telegram_ws_relay.py" not in command:
+        return False, f"PID {pid} — другой процесс, не telegram_ws_relay.py (pid-файл устарел)"
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            pass
+    except OSError as exc:
+        return False, f"PID {pid} запущен, но 127.0.0.1:{port} не принимает соединения: {exc}"
+    return True, f"PID {pid}, принимает соединения на 127.0.0.1:{port}"
+
+
+QUIC_EVENT = re.compile(r"^EVENT\|QUIC\|[^|]*\|([^|]*)\|([^|]*)\|([a-z-]+)\|([^|\s]*)", re.MULTILINE)
+
+
+def quic_live_check(
+    runner: Any, probe: Path = QUIC_PROBE_PATH, python: str = sys.executable, host: str = QUIC_PROBE_HOST,
+) -> dict[str, str]:
+    """Send a real QUIC Initial to YouTube from the router itself (through nfqws2, not Xray)."""
+    name = "YouTube QUIC с роутера"
+    if not probe.is_file():
+        return make_check(name, "warn", f"проверка недоступна: нет {probe.name}")
+    result = runner([python, str(probe), host, "--timeout", "2", "--tries", "2", "--label", "health"], 15)
+    match = QUIC_EVENT.search(result.get("output", "") or "")
+    if not match:
+        tail = (result.get("output", "") or "нет вывода").strip()[-200:]
+        return make_check(name, "warn", f"проверка не выполнена: {tail}")
+    probed_host, ip, status, elapsed = match.groups()
+    where = f"{probed_host} ({ip or 'IP неизвестен'})"
+    if status == "ok":
+        return make_check(name, "ok", f"QUIC Initial к {where}: ответ за {elapsed} мс. Проверка с самого роутера, не с телефона")
+    if status == "no-reply":
+        return make_check(
+            name, "error",
+            f"QUIC Initial к {where}: нет ответа — приложение YouTube (QUIC/HTTP3) может не загружаться. "
+            "Проверка с самого роутера: путь через nfqws2 и провайдера",
+        )
+    return make_check(name, "warn", f"проверка не выполнена: {status} для {where}")
+
+
+def rival_processes(proc_root: Path, our_nfqws: int | None) -> list[str]:
+    """Other DPI bypass tools running on the router, by process name."""
+    found: set[str] = set()
+    nfqws2 = []
+    try:
+        comm_paths = list(proc_root.glob("[0-9]*/comm"))
+    except OSError:
+        comm_paths = []
+    for comm_path in comm_paths:
+        try:
+            pid = int(comm_path.parent.name)
+            comm = comm_path.read_text(encoding="utf-8", errors="replace").strip()
+        except (OSError, ValueError):
+            continue
+        if comm in RIVAL_PROCESSES:
+            found.add(RIVAL_PROCESSES[comm])
+        elif comm == "nfqws2":
+            try:
+                command = (comm_path.parent / "cmdline").read_bytes()
+            except OSError:
+                continue
+            # Config checks and packet builders of our own tools, not a second bypass.
+            if b"--dry-run" in command or b"--intercept=0" in command:
+                continue
+            nfqws2.append(pid)
+    ours = our_nfqws if our_nfqws in nfqws2 else (nfqws2[0] if len(nfqws2) == 1 else None)
+    if any(pid != ours for pid in nfqws2):
+        found.add("ещё один nfqws2 (не наш)")
+    return sorted(found)
+
+
+def dns_wire_query(host: str, query_id: int = 0) -> bytes:
+    """RFC 1035 query for the A record of host (RFC 8484 recommends ID 0)."""
+    labels = host.rstrip(".").split(".")
+    if not all(0 < len(label) <= 63 and label.isascii() for label in labels):
+        raise ValueError(f"некорректное имя: {host}")
+    name = b"".join(bytes([len(label)]) + label.encode("ascii") for label in labels) + b"\x00"
+    return struct.pack("!HHHHHH", query_id, 0x0100, 1, 0, 0, 0) + name + struct.pack("!HH", 1, 1)
+
+
+def dns_wire_answers(message: bytes) -> list[str]:
+    """IPv4 addresses of the A records in a DNS response."""
+    if len(message) < 12:
+        raise ValueError("короткий DNS-ответ")
+    _identifier, flags, questions, answers, _authority, _additional = struct.unpack("!HHHHHH", message[:12])
+    if flags & 0x000F:
+        raise ValueError(f"DNS rcode {flags & 0x000F}")
+
+    def skip_name(offset: int) -> int:
+        while True:
+            if offset >= len(message):
+                raise ValueError("обрезанный DNS-ответ")
+            length = message[offset]
+            if length & 0xC0 == 0xC0:
+                return offset + 2
+            if length == 0:
+                return offset + 1
+            offset += 1 + length
+
+    offset = 12
+    for _ in range(questions):
+        offset = skip_name(offset) + 4
+    result = []
+    for _ in range(answers):
+        offset = skip_name(offset)
+        if offset + 10 > len(message):
+            raise ValueError("обрезанный DNS-ответ")
+        record_type, record_class, _ttl, size = struct.unpack("!HHIH", message[offset:offset + 10])
+        offset += 10
+        data = message[offset:offset + size]
+        offset += size
+        if record_type == 1 and record_class == 1 and len(data) == 4:
+            result.append(str(ipaddress.IPv4Address(data)))
+    return result
+
+
+def http_body(raw: bytes) -> bytes:
+    head, separator, body = raw.partition(b"\r\n\r\n")
+    if not separator:
+        raise ValueError("нет HTTP-ответа")
+    status_line, *header_lines = head.decode("latin-1").split("\r\n")
+    parts = status_line.split()
+    if len(parts) < 2 or parts[1] != "200":
+        raise ValueError(f"HTTP {parts[1] if len(parts) > 1 else '?'}")
+    headers = {key.strip().lower(): value.strip() for key, _sep, value in (line.partition(":") for line in header_lines)}
+    if "chunked" in headers.get("transfer-encoding", "").lower():
+        decoded, rest = b"", body
+        while rest:
+            size_line, _sep, rest = rest.partition(b"\r\n")
+            size = int(size_line.split(b";")[0].strip() or b"0", 16)
+            if size == 0:
+                break
+            decoded += rest[:size]
+            rest = rest[size + 2:]
+        return decoded
+    length = headers.get("content-length", "")
+    return body[:int(length)] if length.isdigit() else body
+
+
+def doh_resolve(host: str, server_name: str, server_ip: str, timeout: float = 4.0) -> list[str]:
+    """Resolve host through DNS-over-HTTPS (RFC 8484 POST) at a pinned server IP.
+
+    The TLS certificate is verified for server_name, so the pinned IP cannot
+    be answered by an interceptor. Standard library only.
+    """
+    query = dns_wire_query(host)
+    request = (
+        "POST /dns-query HTTP/1.1\r\n"
+        f"Host: {server_name}\r\n"
+        "Content-Type: application/dns-message\r\n"
+        "Accept: application/dns-message\r\n"
+        f"Content-Length: {len(query)}\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii") + query
+    context = ssl.create_default_context()
+    chunks, total = [], 0
+    with socket.create_connection((server_ip, 443), timeout=timeout) as raw:
+        with context.wrap_socket(raw, server_hostname=server_name) as stream:
+            stream.settimeout(timeout)
+            stream.sendall(request)
+            while total < 65536:
+                chunk = stream.recv(8192)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+    return dns_wire_answers(http_body(b"".join(chunks)))
+
+
+def dns_check(host: str) -> dict[str, str]:
+    """The router's resolver compared with DoH answers from pinned resolver IPs."""
+    local_ok, local_detail = resolve_public(host)
+    answers, failures = [], []
+    doh: set[str] = set()
+    for label, server_name, server_ip in DOH_RESOLVERS:
+        try:
+            addresses = doh_resolve(host, server_name, server_ip)
+        except (OSError, ValueError) as exc:
+            failures.append(f"{label}: {exc}"[:120])
+            continue
+        doh.update(addresses)
+        answers.append(f"DoH {label}: {', '.join(addresses[:3]) or 'нет A-записей'}")
+    doh_text = "; ".join(answers + ([f"DoH недоступен ({'; '.join(failures)})"] if failures and not answers else []))
+    if not local_ok:
+        if doh:
+            return make_check(
+                f"DNS {host}", "error",
+                f"DNS роутера: {local_detail}; {doh_text} — подмена или блокировка DNS у провайдера",
+            )
+        return make_check(f"DNS {host}", "error", f"{local_detail}; {doh_text}")
+    local = set(local_detail.split(", "))
+    note = "; адреса роутера не совпадают с DoH (другой узел CDN или подмена DNS)" if doh and not local & doh else ""
+    return make_check(f"DNS {host}", "ok", f"роутер: {local_detail}; {doh_text}{note}".strip("; "))
+
+
+def sni_block_check(host: str) -> dict[str, str]:
+    """Tell an SNI block from an IP block: the same IP is asked with SNI ya.ru.
+
+    Runs from the router: the router's own traffic passes nfqws2 but not Xray.
+    """
+    name = f"SNI/IP {host} (с роутера)"
+    base = [
+        command_path("curl"), "-sS", "-o", "/dev/null", "--max-time", "5", "--connect-timeout", "3",
+        "-w", "__XKSNI__%{http_code}",
+    ]
+    direct = run(base + [f"https://{host}/"], 9)
+    if direct["ok"]:
+        code = re.search(r"__XKSNI__(\d{3})", direct["output"])
+        return make_check(name, "ok", f"HTTPS отвечает (HTTP {code.group(1) if code else '?'})")
+    swapped = run(base + ["-k", "--connect-to", f"{SNI_CONTROL_HOST}:443:{host}:443", f"https://{SNI_CONTROL_HOST}/"], 9)
+    if swapped["ok"]:
+        return make_check(
+            name, "error",
+            f"HTTPS не отвечает (curl {direct['code']}), а тот же сервер с SNI {SNI_CONTROL_HOST} отвечает: "
+            "блокировка по SNI, текущая стратегия nfqws2 её не обходит",
+        )
+    return make_check(
+        name, "error",
+        f"сервер не отвечает и с SNI {SNI_CONTROL_HOST} (curl {direct['code']}/{swapped['code']}): "
+        "блокировка по IP или недоступен порт — обход nfqws2 не поможет, нужен VPN",
+    )
+
+
 def run_health(writer: StateWriter) -> list[dict[str, str]]:
     checks: list[dict[str, str]] = []
 
     def add(name: str, status: str, detail: str) -> None:
         checks.append(make_check(name, status, detail))
-        writer.write(progress=min(95, 8 + len(checks) * 7), checks=checks)
+        writer.write(progress=min(95, 5 + len(checks) * 3), checks=checks)
+
+    def add_check(check: dict[str, str]) -> None:
+        add(check["name"], check["status"], check["detail"])
+
+    def engine_run(command: list[str], timeout: int) -> dict[str, Any]:
+        if TEST_ROOT:
+            return run(command, timeout, extra_env={"KD_TEST_ROOT": TEST_ROOT})
+        return run(command, timeout)
 
     xray = process_ids("xray")
     nfqws = process_ids("nfqws2")
@@ -394,6 +1328,7 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
         config = ""
         discord_tcp_route = discord_voice_route = youtube_route = "unknown"
         add("Конфигурация nfqws2", "error", str(exc))
+    values = parse_shell_values(config)
 
     for label, logical, active in (
         ("Discord hostlist", DISCORD_LIST_LOGICAL, discord_tcp_route == "zapret"),
@@ -406,11 +1341,18 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
         except (OSError, ValueError) as exc:
             add(label, "error" if active else "warn", str(exc))
 
-    tags = set()
-    try:
-        routing = json.loads(strip_json_comments(safe_read(root_path(XRAY_ROUTING_LOGICAL))))
-        rules = routing.get("routing", {}).get("rules", [])
-        tags = {rule.get("outboundTag") for rule in rules if isinstance(rule, dict)}
+    config_dir = root_path(XRAY_CONFIG_DIR_LOGICAL)
+    xray_files = read_xray_files(config_dir) if config_dir.is_dir() else []
+    rules: list[Any] = []
+    active_routing = find_xray_routing_file(config_dir, xray_files)
+    if active_routing is None:
+        add("Xray routing", "error", f"нет файла с объектом routing в {config_dir}")
+        routing: dict = {}
+    else:
+        routing_path, routing = active_routing
+        raw_rules = routing.get("rules", [])
+        rules = raw_rules if isinstance(raw_rules, list) else []
+        state = xray_service_rules(rules)
         expected = set()
         if discord_tcp_route != "vless" or discord_voice_route != "vless":
             expected.add("discord-direct")
@@ -420,12 +1362,14 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
             expected.add("telegram-direct")
         if telegram_route(config) == "ws":
             expected.add("telegram-ws")
-        missing = sorted(expected - tags)
-        add("Xray routing", "error" if missing else "ok", "missing: " + ", ".join(missing) if missing else "service-direct rules согласованы")
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        add("Xray routing", "error", str(exc))
+        missing = sorted(expected - state["tags"])
+        add(
+            "Xray routing",
+            "error" if missing else "ok",
+            f"{routing_path.name}: " + ("missing: " + ", ".join(missing) if missing else "service-direct rules согласованы"),
+        )
+    add_check(outbound_checks(rules, routing, xray_outbounds(xray_files)))
 
-    config_dir = root_path(XRAY_CONFIG_DIR_LOGICAL)
     if config_dir.is_dir():
         files = {}
         for path in sorted(config_dir.glob("*.json")):
@@ -444,22 +1388,45 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
         discord_list = safe_read(root_path(DISCORD_LIST_LOGICAL))
     except (OSError, ValueError):
         discord_list = ""
-    for check in route_consistency(config, tags, discord_list):
-        add(check["name"], check["status"], check["detail"])
+    for check in route_consistency(config, rules, discord_list):
+        add_check(check)
+    if telegram_route(config) == "ws":
+        running, detail = telegram_relay_status(root_path(TELEGRAM_WS_PIDFILE_LOGICAL), TELEGRAM_WS_PORT)
+        add("Telegram WS relay", "ok" if running else "error", detail)
+
+    if config:
+        for check in config_invariant_checks(config, engine_run, ENGINE_PATH):
+            add_check(check)
 
     xtest = run([command_path("xkeen"), "-xtest"], 35)
     add("Xray config test", "ok" if xtest["ok"] else "error", "Configuration OK" if xtest["ok"] else xtest["output"][-500:])
 
-    firewall = run([command_path("iptables-save"), "-t", "mangle"], 12)
-    has_queue = "NFQUEUE" in firewall["output"] and "300" in firewall["output"]
-    add("NFQUEUE", "ok" if firewall["ok"] and has_queue else "error", "queue 300 присутствует" if has_queue else firewall["output"][-500:])
+    families = [("IPv4", "iptables-save")]
+    if values.get("IPV6_ENABLED", "0").strip() not in {"", "0"}:
+        families.append(("IPv6", "ip6tables-save"))
+    for family, tool in families:
+        firewall = run([command_path(tool), "-c", "-t", "mangle"], 12)
+        if not firewall["ok"]:
+            firewall = run([command_path(tool), "-t", "mangle"], 12)
+        label = "NFQUEUE" if family == "IPv4" else f"NFQUEUE {family}"
+        if not firewall["ok"]:
+            add(label, "error", firewall["output"][-500:] or f"{tool} не выполнен")
+            continue
+        for check in nfqueue_live_checks(firewall["output"], values, family):
+            add_check(check)
 
     route = run([command_path("ip"), "-4", "route", "show", "default"], 8)
     add("IPv4 WAN route", "ok" if route["ok"] and route["output"] else "error", route["output"] or "default route отсутствует")
+    route6 = run([command_path("ip"), "-6", "route", "show", "default"], 8)
+    add_check(ipv6_route_check(route6["output"] if route6["ok"] else "", values))
 
     for host in ("discord.com", "www.youtube.com"):
-        okay, detail = resolve_public(host)
-        add(f"DNS {host}", "ok" if okay else "error", detail)
+        add_check(dns_check(host))
+    for host, route_mode in (("discord.com", discord_tcp_route), ("www.youtube.com", youtube_route)):
+        if route_mode in {"zapret", "direct"}:
+            add_check(sni_block_check(host))
+    if youtube_route == "zapret":
+        add_check(quic_live_check(run, QUIC_PROBE_PATH))
 
     try:
         usage = shutil.disk_usage(root_path("/opt"))
@@ -471,8 +1438,8 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
 
     try:
         meminfo = safe_read(root_path("/proc/meminfo"), 128 * 1024)
-        values = {key: int(value.split()[0]) for key, value in (line.split(":", 1) for line in meminfo.splitlines()) if value.split()}
-        available = values.get("MemAvailable", values.get("MemFree", 0))
+        values_kb = {key: int(value.split()[0]) for key, value in (line.split(":", 1) for line in meminfo.splitlines()) if value.split()}
+        available = values_kb.get("MemAvailable", values_kb.get("MemFree", 0))
         status = "ok" if available >= 65536 else "warn" if available >= 32768 else "error"
         add("Доступная память", status, f"{available // 1024} MiB")
     except (OSError, ValueError) as exc:
@@ -493,10 +1460,12 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
     else:
         add("Project lock", "ok", "активной операции нет")
 
-    conflicts = []
-    for name in ("winws", "goodbyedpi", "tpws", "nfqws"):
-        if process_ids(name):
-            conflicts.append(name)
+    try:
+        raw_pid = safe_read(root_path(NFQWS_PIDFILE_LOGICAL), 100).strip()
+        our_nfqws = int(raw_pid) if raw_pid.isdigit() else None
+    except (OSError, ValueError):
+        our_nfqws = None
+    conflicts = rival_processes(root_path("/proc"), our_nfqws)
     add("Другие DPI bypass", "warn" if conflicts else "ok", ", ".join(conflicts) if conflicts else "конфликтующих процессов не найдено")
     return checks
 
