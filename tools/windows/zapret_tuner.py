@@ -253,13 +253,23 @@ def map_pattern_blob(value: str) -> tuple[str, str | None]:
     return "tls_clienthello", f"{name} substituted with router Google TLS blob"
 
 
+# Flowseal (zapret1) fooling -> zapret2 fooling options. zapret1 "ts"
+# lowers the TCP timestamp by 600000 (zapret2 tcp_ts=-600000; tcp_ts_up is
+# not a fooling, it only moves the option); "badseq" moves seq by the badseq
+# increment and ack by -66000 (tcp_seq=<inc>:tcp_ack=<badack increment>).
+TS_FOOLING_ONLY_NOTE = (
+    "fooling is tcp_ts only: it needs TCP timestamps; Windows clients send none "
+    "(Xray/Linux sockets do)"
+)
+
+
 def fooling_params(profile: Profile) -> tuple[list[str], list[str]]:
     params: list[str] = []
     notes: list[str] = []
     fooling = ",".join(profile.values("dpi-desync-fooling")).lower()
     parts = {part.strip() for part in fooling.split(",") if part.strip()}
     if "ts" in parts:
-        params.append("tcp_ts_up")
+        params.append("tcp_ts=-600000")
     if "md5sig" in parts:
         params.append("tcp_md5")
     if "badsum" in parts:
@@ -273,9 +283,16 @@ def fooling_params(profile: Profile) -> tuple[list[str], list[str]]:
         else:
             params.append("tcp_seq=-10000")
             notes.append("invalid badseq increment replaced with -10000")
+        ack_increment = profile.last("dpi-desync-badack-increment", "-66000")
+        if not re.fullmatch(r"-?[0-9]+", ack_increment):
+            ack_increment = "-66000"
+            notes.append("invalid badack increment replaced with -66000")
+        params.append(f"tcp_ack={ack_increment}")
     unsupported = sorted(parts - {"ts", "md5sig", "badsum", "datanoack", "badseq"})
     if unsupported:
         notes.append("ignored fooling: " + ",".join(unsupported))
+    if params == ["tcp_ts=-600000"]:
+        notes.append(TS_FOOLING_ONLY_NOTE)
     return params, notes
 
 
@@ -297,6 +314,10 @@ def translate_tls_profile(profile: Profile, service: str) -> Candidate | None:
     notes: list[str] = []
     functions: list[str] = []
     fooling, fooling_notes = fooling_params(profile)
+    if fooling and not any(mode in {"fake", "fakedsplit", "hostfakesplit"} for mode in chain):
+        # Only split functions: nothing sends a fake that the fooling could mark.
+        fooling_notes = [note for note in fooling_notes if note != TS_FOOLING_ONLY_NOTE]
+        fooling_notes.append("BAT fooling not applied: the profile sends no fakes")
     notes.extend(fooling_notes)
 
     repeats = profile.last("dpi-desync-repeats")
@@ -319,7 +340,8 @@ def translate_tls_profile(profile: Profile, service: str) -> Candidate | None:
             params.append(f"blob={blob}")
             if repeats_param:
                 params.append(repeats_param)
-            if tls_mod:
+            # tls_mod rewrites a TLS ClientHello; a raw hex fake is not one.
+            if tls_mod and not blob.lower().startswith("0x"):
                 params.append(f"tls_mod={safe_tls_mod(tls_mod)}")
             params.extend(fooling)
         elif mode in {"multisplit", "multidisorder"}:
@@ -337,7 +359,8 @@ def translate_tls_profile(profile: Profile, service: str) -> Candidate | None:
                     params.append(f"seqovl_pattern={pattern}")
                     if pattern_note:
                         notes.append(pattern_note)
-            params.extend(fooling)
+            # zapret1 fools only fakes. zapret2 multisplit/multidisorder
+            # apply fooling to the real data segments, which a server drops.
         elif mode == "fakedsplit":
             position = safe_marker(
                 profile.last("dpi-desync-split-pos", "midsld"), "midsld"

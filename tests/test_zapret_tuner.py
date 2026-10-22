@@ -53,7 +53,12 @@ class TunerTests(unittest.TestCase):
         joined = " ".join(candidate.args)
         self.assertIn("--lua-desync=fake:blob=tls_clienthello", joined)
         self.assertIn("--lua-desync=multisplit:pos=1:seqovl=681", joined)
-        self.assertIn("tcp_ts_up", joined)
+        # Flowseal "ts" lowers the timestamp of the fakes only.
+        fake = next(token for token in candidate.args if token.startswith("--lua-desync=fake:"))
+        self.assertTrue(fake.endswith(":tcp_ts=-600000"), fake)
+        self.assertNotIn("tcp_ts_up", joined)
+        self.assertNotIn("tcp_ts", next(t for t in candidate.args if "multisplit" in t))
+        self.assertIn(TUNER.TS_FOOLING_ONLY_NOTE, candidate.notes)
         TUNER.validate_args(candidate.args)
 
     def test_tls_mod_keeps_allowlisted_sni(self):

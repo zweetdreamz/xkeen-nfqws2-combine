@@ -236,11 +236,12 @@ class FoolingTests(unittest.TestCase):
         self.assertEqual(
             params,
             [
-                "tcp_ts_up",
+                "tcp_ts=-600000",
                 "tcp_md5",
                 "badsum",
                 "tcp_flags_unset=ack",
                 "tcp_seq=-10000",
+                "tcp_ack=-66000",
             ],
         )
         self.assertEqual(
@@ -256,10 +257,58 @@ class FoolingTests(unittest.TestCase):
             ("dpi-desync-fooling", "badseq"),
             ("dpi-desync-badseq-increment", "-5"),
         )
-        self.assertEqual(TUNER.fooling_params(explicit), (["tcp_seq=-5"], []))
+        self.assertEqual(TUNER.fooling_params(explicit), (["tcp_seq=-5", "tcp_ack=-66000"], []))
         default = make_profile(("dpi-desync-fooling", "badseq"))
-        self.assertEqual(TUNER.fooling_params(default), (["tcp_seq=-10000"], []))
+        self.assertEqual(TUNER.fooling_params(default), (["tcp_seq=-10000", "tcp_ack=-66000"], []))
         self.assertEqual(TUNER.fooling_params(make_profile()), ([], []))
+        badack = make_profile(
+            ("dpi-desync-fooling", "badseq"),
+            ("dpi-desync-badack-increment", "-1"),
+        )
+        self.assertEqual(TUNER.fooling_params(badack), (["tcp_seq=-10000", "tcp_ack=-1"], []))
+        invalid = make_profile(
+            ("dpi-desync-fooling", "badseq"),
+            ("dpi-desync-badack-increment", "x"),
+        )
+        self.assertEqual(
+            TUNER.fooling_params(invalid),
+            (["tcp_seq=-10000", "tcp_ack=-66000"], ["invalid badack increment replaced with -66000"]),
+        )
+
+    def test_ts_is_a_timestamp_fooling_not_tcp_ts_up(self):
+        params, notes = TUNER.fooling_params(make_profile(("dpi-desync-fooling", "ts")))
+        self.assertEqual(params, ["tcp_ts=-600000"])
+        self.assertEqual(notes, [TUNER.TS_FOOLING_ONLY_NOTE])
+        params, notes = TUNER.fooling_params(make_profile(("dpi-desync-fooling", "ts,md5sig")))
+        self.assertEqual(params, ["tcp_ts=-600000", "tcp_md5"])
+        self.assertEqual(notes, [])
+
+    def test_fooling_is_applied_to_fakes_only(self):
+        profile = make_profile(
+            ("dpi-desync", "fake,multisplit"),
+            ("dpi-desync-fooling", "badseq"),
+        )
+        candidate = TUNER.translate_tls_profile(profile, "discord-tcp")
+        self.assertEqual(
+            candidate.args[-2:],
+            (
+                "--lua-desync=fake:blob=fake_default_tls:tcp_seq=-10000:tcp_ack=-66000",
+                "--lua-desync=multisplit:pos=midsld",
+            ),
+        )
+        split_only = make_profile(("dpi-desync", "multidisorder"), ("dpi-desync-fooling", "ts"))
+        candidate = TUNER.translate_tls_profile(split_only, "discord-tcp")
+        self.assertEqual(candidate.args[-1], "--lua-desync=multidisorder:pos=midsld")
+        self.assertEqual(candidate.notes, ("BAT fooling not applied: the profile sends no fakes",))
+
+    def test_tls_mod_is_not_added_to_hex_fakes(self):
+        profile = make_profile(
+            ("dpi-desync", "fake"),
+            ("dpi-desync-fake-tls", "0x00000000"),
+            ("dpi-desync-fake-tls-mod", "rnd,dupsid,sni=www.google.com"),
+        )
+        candidate = TUNER.translate_tls_profile(profile, "youtube")
+        self.assertEqual(candidate.args[-1], "--lua-desync=fake:blob=0x00000000")
 
     def test_lua_function_drops_empty_params(self):
         self.assertEqual(
@@ -329,7 +378,7 @@ class TlsTranslationTests(unittest.TestCase):
         candidate = TUNER.translate_tls_profile(profile, "youtube")
         self.assertEqual(
             candidate.args[-1],
-            "--lua-desync=hostfakesplit:host=www.google.com:tcp_ts_up",
+            "--lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000",
         )
         no_host = make_profile(
             ("dpi-desync", "hostfakesplit"),
