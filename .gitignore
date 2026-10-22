@@ -24,6 +24,7 @@ venv/
 *.key
 .agents/
 .codex/
+.claude/worktrees/
 .aws/
 .idea/
 .vscode/
