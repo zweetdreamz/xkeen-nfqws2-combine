@@ -135,9 +135,8 @@ class TunerTests(unittest.TestCase):
         self.assertTrue(
             any("seqovl=5" in candidate.command_line() for candidate in sweeps)
         )
-        self.assertTrue(
-            any("youtube_quic:repeats=6" in candidate.command_line() for candidate in sweeps)
-        )
+        # QUIC changes are not generated: the checks cannot see them (B3).
+        self.assertFalse(any("QUIC" in candidate.family for candidate in sweeps))
         self.assertLessEqual(len(sweeps), 8)
 
     def test_extended_sweep_is_curated_not_full_cartesian(self):

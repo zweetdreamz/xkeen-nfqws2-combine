@@ -4,7 +4,8 @@
 Downloaded BAT files are parsed as data and are never executed. Only a small
 allowlisted subset of zapret1 options is translated to nfqws2 Lua functions.
 Candidates run temporarily on the router; the active nfqws2 configuration file
-is not changed and the original service is restored by a remote EXIT trap.
+is not changed and the original service is restored by the runner's EXIT,
+signal and SIGPIPE traps on the router.
 """
 
 from __future__ import annotations
@@ -448,22 +449,100 @@ def translate_voice_profile(profile: Profile) -> Candidate | None:
     )
 
 
-def youtube_quic_for_source(profiles: Sequence[Profile]) -> tuple[str, ...]:
+# A YouTube candidate changes only the TCP section: the router checks TCP
+# with HTTP probes and QUIC only for reachability, so a different QUIC
+# strategy could never be judged. Every YouTube candidate therefore carries
+# the QUIC section that is applied on the router now (or the engine's own).
+QUIC_REQUIRED_TOKENS = frozenset({
+    "--filter-udp=443",
+    "--filter-l7=quic",
+    "--hostlist=/opt/etc/nfqws2/lists/youtube.list",
+    "--payload=quic_initial",
+})
+QUIC_SAFE_OPTIONS = frozenset({"filter-udp", "filter-l7", "hostlist", "payload", "out-range", "lua-desync"})
+
+
+def youtube_quic_section(tokens: Sequence[str] | None) -> tuple[str, ...]:
+    """A validated YouTube QUIC profile, or NATIVE_QUIC when it is unusable.
+
+    The section must be the import-safe shape the engine and the panel accept:
+    UDP 443 + quic + youtube.list + quic_initial, allowlisted fake desync only.
+    """
+    if not tokens:
+        return NATIVE_QUIC
+    section = tuple(tokens)
+    if "--new" in section or not QUIC_REQUIRED_TOKENS.issubset(section):
+        return NATIVE_QUIC
+    for token in section:
+        if not SAFE_TOKEN_RE.fullmatch(token):
+            return NATIVE_QUIC
+        name, value = token[2:].split("=", 1)
+        if name not in QUIC_SAFE_OPTIONS:
+            return NATIVE_QUIC
+        if name == "lua-desync" and value.split(":", 1)[0] != "fake":
+            return NATIVE_QUIC
+        if name == "filter-udp" and value != "443":
+            return NATIVE_QUIC
+        if name == "filter-l7" and value != "quic":
+            return NATIVE_QUIC
+        if name == "hostlist" and value != "/opt/etc/nfqws2/lists/youtube.list":
+            return NATIVE_QUIC
+    if not any(token.startswith("--lua-desync=") for token in section):
+        return NATIVE_QUIC
+    return section
+
+
+def applied_youtube_quic(custom_args: str) -> tuple[str, ...] | None:
+    """The YouTube QUIC profile inside an NFQWS_ARGS_CUSTOM value, if any."""
+    profiles: list[list[str]] = [[]]
+    for token in custom_args.split():
+        if token == "--new":
+            profiles.append([])
+        else:
+            profiles[-1].append(token)
     for profile in profiles:
-        if "youtube-quic" not in profile_roles(profile):
-            continue
-        repeats = profile.last("dpi-desync-repeats", "6")
-        if not repeats.isdigit():
-            repeats = "6"
-        return (
-            "--new",
-            "--filter-udp=443",
-            "--filter-l7=quic",
-            "--hostlist=/opt/etc/nfqws2/lists/youtube.list",
-            "--payload=quic_initial",
-            f"--lua-desync=fake:blob=youtube_quic:repeats={repeats}",
-        )
-    return ("--new", *NATIVE_QUIC)
+        if (
+            "--hostlist=/opt/etc/nfqws2/lists/youtube.list" in profile
+            and any(token.startswith("--filter-udp=") for token in profile)
+        ):
+            return tuple(profile)
+    return None
+
+
+VOICE_RANGES = ("narrow", "wide")
+
+
+def widen_voice_ports(value: str) -> str:
+    """Rewrite the 50000-50100 voice range of a UDP filter to 50000-65535."""
+    items = []
+    for item in value.split(","):
+        left, separator, right = item.partition("-")
+        if separator and left.isdigit() and right == "50100" and int(left) >= 50000:
+            item = f"{left}-65535"
+        items.append(item)
+    return ",".join(items)
+
+
+def voice_candidate_in_range(candidate: Candidate, voice_range: str) -> Candidate:
+    """The same Voice candidate with the configured port range (new id)."""
+    if voice_range != "wide":
+        return candidate
+    args = tuple(
+        "--filter-udp=" + widen_voice_ports(token.removeprefix("--filter-udp="))
+        if token.startswith("--filter-udp=") else token
+        for token in candidate.args
+    )
+    if args == candidate.args:
+        return candidate
+    widened = make_candidate(
+        service=candidate.service,
+        source=SourceFile(candidate.source_name, "", candidate.source_sha, candidate.source_url),
+        family=candidate.family,
+        args=args,
+        notes=(*candidate.notes, "voice range widened to 50000-65535 (range=wide)"),
+        rank=candidate.rank,
+    )
+    return dataclasses.replace(widened, pinned=candidate.pinned)
 
 
 def make_candidate(
@@ -499,7 +578,11 @@ def validate_args(args: Sequence[str]) -> None:
             raise ValueError(f"unsafe generated nfqws2 token: {token!r}")
 
 
-def known_candidate(service: str, sources: Sequence[SourceFile]) -> Candidate:
+def known_candidate(
+    service: str,
+    sources: Sequence[SourceFile],
+    youtube_quic: Sequence[str] = NATIVE_QUIC,
+) -> Candidate:
     preferred = next(
         (
             source
@@ -518,7 +601,7 @@ def known_candidate(service: str, sources: Sequence[SourceFile]) -> Candidate:
             NATIVE_FAKE,
             NATIVE_SPLIT,
             "--new",
-            *NATIVE_QUIC,
+            *youtube_quic,
         )
         family = "router-verified ALT11-like mix"
         notes = ("HTTP 200 on this router/provider on 2026-07-23",)
@@ -694,7 +777,6 @@ def mutate_tls_recipe(
     tcp_seq: str | None = None,
     position: str | None = None,
     seqovl: str | None = None,
-    quic_repeats: str | None = None,
 ) -> tuple[str, ...] | None:
     changed: tuple[str, ...] = tuple(args)
     mutation_applied = False
@@ -741,18 +823,6 @@ def mutate_tls_recipe(
         if next_args is not None:
             changed = next_args
             mutation_applied = True
-
-    if quic_repeats is not None:
-        next_args = replace_lua_parameter(
-            changed,
-            {"fake"},
-            "repeats",
-            quic_repeats,
-            section="udp",
-        )
-        if next_args is not None:
-            changed = next_args
-            mutation_applied = True
     return changed if mutation_applied else None
 
 
@@ -762,16 +832,18 @@ def parameter_sweep_candidates(
     sources: Sequence[SourceFile],
     level: str,
     base: Candidate | None = None,
+    youtube_quic: Sequence[str] = NATIVE_QUIC,
 ) -> list[Candidate]:
     """Build a bounded sweep without an uncontrolled Cartesian product.
 
     The sweep varies the built-in profile, or ``base`` (a translated profile
-    of a selected BAT file) when given.
+    of a selected BAT file) when given. Only the TCP section is varied: QUIC
+    changes cannot be verified by the router checks.
     """
     if level == "off":
         return []
 
-    native = base or known_candidate(service, sources)
+    native = base or known_candidate(service, sources, youtube_quic)
     result: list[Candidate] = []
     rank = 20
 
@@ -852,15 +924,6 @@ def parameter_sweep_candidates(
             rank,
         )
         rank += 1
-    if service == "youtube":
-        add_sweep_candidate(
-            result,
-            native,
-            mutate_tls_recipe(native.args, quic_repeats="6"),
-            "QUIC repeats=6",
-            rank,
-        )
-        rank += 1
 
     if level != "extended":
         return result
@@ -873,11 +936,6 @@ def parameter_sweep_candidates(
         ("seqovl=1", {"seqovl": "1"}),
         ("seqovl=681", {"seqovl": "681"}),
     )
-    if service == "youtube":
-        extended_axes += (
-            ("QUIC repeats=3", {"quic_repeats": "3"}),
-            ("QUIC repeats=11", {"quic_repeats": "11"}),
-        )
     for label, values in extended_axes:
         add_sweep_candidate(
             result,
@@ -908,13 +966,6 @@ def parameter_sweep_candidates(
             },
         ),
     )
-    if service == "youtube":
-        recipes += (
-            (
-                "TCP repeats=6 + QUIC repeats=6",
-                {"repeats": "6", "quic_repeats": "6"},
-            ),
-        )
     for label, values in recipes:
         add_sweep_candidate(
             result,
@@ -970,20 +1021,18 @@ def mixed_candidates(
     exact: Sequence[Candidate],
     sources: Sequence[SourceFile],
     level: str,
+    youtube_quic: Sequence[str] = NATIVE_QUIC,
 ) -> list[Candidate]:
     if service == "discord-voice" or level == "off":
         return []
     result: list[Candidate] = []
-    native = known_candidate(service, sources)
+    native = known_candidate(service, sources, youtube_quic)
+    quic_suffix = ("--new", *youtube_quic) if service == "youtube" else ()
     _, native_fake, native_split = split_components(native)
 
     for candidate in exact:
         base, source_fake, source_split = split_components(candidate)
-        if service == "youtube":
-            quic_start = candidate.args.index("--new") if "--new" in candidate.args else -1
-            suffix = candidate.args[quic_start:] if quic_start >= 0 else ("--new", *NATIVE_QUIC)
-        else:
-            suffix = ()
+        suffix = quic_suffix
         if source_split and native_fake:
             result.append(
                 make_candidate(
@@ -1023,13 +1072,7 @@ def mixed_candidates(
         for _base_b, _fake_b, split, split_candidate in component_rows[:10]:
             if split is None or fake_candidate.source_name == split_candidate.source_name:
                 continue
-            suffix: tuple[str, ...] = ()
-            if service == "youtube":
-                if "--new" in fake_candidate.args:
-                    offset = fake_candidate.args.index("--new")
-                    suffix = fake_candidate.args[offset:]
-                else:
-                    suffix = ("--new", *NATIVE_QUIC)
+            suffix = quic_suffix
             source = next(
                 (s for s in sources if s.name == fake_candidate.source_name),
                 sources[0],
@@ -1077,15 +1120,25 @@ def build_candidates(
     mix_level: str,
     *,
     include_builtin: bool = True,
+    youtube_quic: Sequence[str] | None = None,
+    voice_range: str = "narrow",
 ) -> list[Candidate]:
     """Translate, sweep and mix candidates for ``service``.
 
     ``include_builtin=False`` leaves out the router-native known-good profile
     and everything built on it (native sweeps and native/source mixes), so
     that only profiles derived from ``sources`` are tested.
+
+    ``youtube_quic`` is the YouTube QUIC profile applied on the router (every
+    YouTube candidate carries it unchanged; NATIVE_QUIC when unknown or
+    unusable). ``voice_range`` is the "# Discord UDP: range=" setting: with
+    "wide" every Voice candidate filters 50000-65535, as the engine does.
     """
     if service not in TUNER_SERVICES:
         raise ValueError(f"unsupported service: {service}")
+    if voice_range not in VOICE_RANGES:
+        raise ValueError(f"unsupported voice range: {voice_range}")
+    quic = youtube_quic_section(youtube_quic)
     by_source = {
         source.name: parse_profiles(source)
         for source in sources
@@ -1093,7 +1146,6 @@ def build_candidates(
     exact: list[Candidate] = []
     for source in sources:
         profiles = by_source[source.name]
-        quic = youtube_quic_for_source(profiles)
         for profile in profiles:
             roles = profile_roles(profile)
             if service in {"youtube", "discord-tcp"} and service in roles:
@@ -1104,7 +1156,7 @@ def build_candidates(
                             service=candidate.service,
                             source=profile.source,
                             family=candidate.family,
-                            args=(*candidate.args, *quic),
+                            args=(*candidate.args, "--new", *quic),
                             notes=candidate.notes,
                             rank=candidate.rank,
                         )
@@ -1115,12 +1167,12 @@ def build_candidates(
                     exact.append(candidate)
 
     if include_builtin:
-        candidates = [known_candidate(service, sources)]
+        candidates = [known_candidate(service, sources, quic)]
         candidates.extend(
-            parameter_sweep_candidates(service, exact, sources, mix_level)
+            parameter_sweep_candidates(service, exact, sources, mix_level, youtube_quic=quic)
         )
         candidates.extend(exact)
-        candidates.extend(mixed_candidates(service, exact, sources, mix_level))
+        candidates.extend(mixed_candidates(service, exact, sources, mix_level, quic))
     else:
         # Only what the selected BAT file defines: its translated profiles
         # first, then (Safe/Extended) the same parameter sweep that otherwise
@@ -1128,8 +1180,13 @@ def build_candidates(
         candidates = [dataclasses.replace(candidate, pinned=True) for candidate in exact]
         for base in exact:
             candidates.extend(
-                parameter_sweep_candidates(service, exact, sources, mix_level, base=base)
+                parameter_sweep_candidates(
+                    service, exact, sources, mix_level, base=base, youtube_quic=quic
+                )
             )
+    if service == "discord-voice":
+        # Before the ids are compared: an import keeps the configured range.
+        candidates = [voice_candidate_in_range(candidate, voice_range) for candidate in candidates]
     # Identical args behave identically: test them once, but remember which
     # other BAT files share the profile so the log can name them.
     unique: dict[tuple[str, ...], Candidate] = {}
@@ -1460,8 +1517,28 @@ def run_remote(
                 number = int(parts[2])
                 if 1 <= number <= len(candidates):
                     found = candidates[number - 1]
+            elif event == "FATAL" and parts[2:3] == ["project-busy"]:
+                print(
+                    "Роутер занят: идёт применение профиля, подбор в веб-панели или другой "
+                    "запуск тюнера. Дождитесь его окончания и повторите."
+                )
+            elif event == "RAW_BASELINE" and len(parts) >= 3:
+                print({
+                    "pass": "Без обхода всё открывается: провайдер не блокирует сервис с роутера.",
+                    "ip-block": "Без обхода ни один адрес не принимает TCP: блокировка по IP, nfqws2 не поможет.",
+                    "dns-error": "Без обхода имена не резолвятся: проверьте DNS роутера.",
+                }.get(parts[2], "Без обхода проверки не проходят: блокировка подтверждена."))
+            elif event == "UDP_RANGE" and len(parts) >= 3 and parts[2] in VOICE_RANGES:
+                if parts[2] != getattr(args, "udp_range", "narrow"):
+                    print(
+                        f"ВНИМАНИЕ: на роутере диапазон голоса range={parts[2]}, а кандидаты "
+                        f"собраны для {getattr(args, 'udp_range', 'narrow')}. Запустите с "
+                        f"--udp-range {parts[2]}, иначе импорт изменит диапазон."
+                    )
     except KeyboardInterrupt:
-        print("\nПрерывание: закрываю SSH; trap на роутере восстановит nfqws2.")
+        # The runner on the router traps SIGPIPE/HUP: when this SSH session
+        # closes, its next output restores nfqws2 (after the current check).
+        print("\nПрерывание: закрываю SSH; runner на роутере восстановит nfqws2 после текущей проверки.")
         process.terminate()
         raise
     finally:
@@ -1542,15 +1619,55 @@ def parse_probe_event(line: str) -> dict | None:
         return None
 
 
-def verification_report(service: str, output: Sequence[str]) -> dict:
+def parse_quic_event(line: str) -> dict | None:
+    """EVENT|QUIC|label|host|ip|status|ms printed by tools/router/quic_probe.py."""
+    parts = line.split("|")
+    if len(parts) != 7 or parts[:2] != ["EVENT", "QUIC"]:
+        return None
+    return {
+        "label": parts[2], "host": parts[3], "ip": parts[4], "status": parts[5],
+        "ms": int(parts[6]) if parts[6].isdigit() else None,
+    }
+
+
+def last_event_fields(output: Sequence[str], event: str) -> list[str] | None:
+    prefix = f"EVENT|{event}|"
+    for line in reversed(output):
+        if line.startswith(prefix):
+            return line[len(prefix):].split("|")
+    return None
+
+
+def verification_report(service: str, output: Sequence[str], found_number: int | None = None) -> dict:
+    """What the router actually checked, from the runner output.
+
+    quic_verified is true only when the QUIC gate was on and the found
+    candidate's own QUIC_RESULT passed. network_discriminates is false when
+    the raw (no bypass) baseline already passed: then any candidate passes.
+    """
+    raw = last_event_fields(output, "RAW_BASELINE")
+    gate = last_event_fields(output, "QUIC_GATE")
+    quic_results = [line for line in output if line.startswith("EVENT|QUIC_RESULT|")]
+    quic_verified = False
+    if gate and gate[0] == "on" and found_number is not None:
+        quic_verified = any(
+            line.startswith(f"EVENT|QUIC_RESULT|{found_number}|pass|") for line in quic_results
+        )
     return {
         "method": "manual-duplex-voice" if service == "discord-voice" else "router-http-content-two-rounds",
         "voice_audio_automatic": False,
-        "quic_verified": False,
+        "quic_verified": quic_verified,
         "video_playback_verified": False,
         "probes": [result for line in output if (result := parse_probe_event(line)) is not None],
         "suite_results": [line for line in output if line.startswith("EVENT|SUITE_RESULT|")],
         "voice_observations": [line for line in output if line.startswith("EVENT|VOICE_OBSERVATION|")],
+        "raw_baseline": raw[0] if raw else None,
+        "network_discriminates": {"pass": False, "fail": True}.get(raw[0]) if raw else None,
+        "quic_gate": gate[0] if gate else None,
+        "quic_gate_reason": gate[1] if gate and len(gate) > 1 else None,
+        "quic_probes": [result for line in output if (result := parse_quic_event(line)) is not None],
+        "quic_results": quic_results,
+        "volume_checks": [line for line in output if line.startswith("EVENT|PROBE_VOLUME|")],
     }
 
 
@@ -1576,7 +1693,11 @@ def write_report(
         "candidate_count": len(candidates),
         "found": dataclasses.asdict(found) if found else None,
         "remote_output": list(output),
-        "verification": verification_report(args.service, output),
+        "verification": verification_report(
+            args.service,
+            output,
+            next((number for number, item in enumerate(candidates, 1) if item is found), None),
+        ),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -1618,6 +1739,15 @@ def parser() -> argparse.ArgumentParser:
         "--mix-level",
         choices=("off", "safe", "extended"),
         default="safe",
+    )
+    result.add_argument(
+        "--udp-range",
+        choices=VOICE_RANGES,
+        default="narrow",
+        help=(
+            "Discord Voice port range configured on the router (\"# Discord UDP: "
+            "range=\" in nfqws2.conf); wide makes Voice candidates filter 50000-65535"
+        ),
     )
     result.add_argument("--repository", default=DEFAULT_REPOSITORY)
     result.add_argument("--ref", default=DEFAULT_REF)
@@ -1690,6 +1820,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sources,
             args.mix_level,
             include_builtin=not args.source_file,
+            voice_range=args.udp_range,
         ),
         args.max_candidates,
         args.search_seed,
@@ -1724,7 +1855,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.yes_router:
         print(
             "\nВо время теста nfqws2 будет временно перезапускаться. "
-            "Файлы конфигурации не изменяются; EXIT trap восстановит службу."
+            "Файлы конфигурации не изменяются; runner на роутере восстановит "
+            "службу при выходе, ошибке или обрыве SSH."
         )
         answer = input("Продолжить? Введите YES: ").strip()
         if answer != "YES":

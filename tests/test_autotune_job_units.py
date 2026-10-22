@@ -7,6 +7,7 @@ No network, no root, no real nfqws2 runner: subprocesses are faked.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import dataclasses
 import importlib.util
@@ -14,6 +15,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -460,6 +462,10 @@ class VoiceAutoTests(TempRootTestCase):
         ):
             with self.subTest(ip=ip, port=port):
                 self.assertFalse(JOB.voice_endpoint_valid(ip, port))
+        # B9: in the wide range the candidates do process 50101-65535.
+        self.assertTrue(JOB.voice_endpoint_valid("162.159.130.234", 50101, "wide"))
+        self.assertTrue(JOB.voice_endpoint_valid("162.159.130.234", 65535, "wide"))
+        self.assertFalse(JOB.voice_endpoint_valid("162.159.130.234", 443, "wide"))
 
     def test_endpoint_store_round_trip_and_rejections(self):
         self.assertIsNone(JOB.load_voice_endpoint())
@@ -503,6 +509,42 @@ class ParseEventTests(unittest.TestCase):
 
     def parse(self, line):
         return JOB.parse_event(self.writer, line, self.candidates)
+
+    def test_raw_baseline_quic_and_firewall_events(self):
+        self.parse("EVENT|SUITE_RESULT|0|raw|1|pass|4|4")
+        self.assertEqual(self.writer.payload["raw_baseline_result"]["phase"], "raw")
+        self.assertNotIn("last_suite_result", self.writer.payload)
+        self.parse("EVENT|RAW_BASELINE|pass|4|4")
+        self.assertEqual(self.writer.payload["raw_baseline"], "pass")
+        self.assertIs(self.writer.payload["network_discriminates"], False)
+        self.assertIn("провайдер не блокирует", self.writer.logs[-1])
+        self.parse("EVENT|RAW_BASELINE|ip-block|0|4")
+        self.assertIsNone(self.writer.payload["network_discriminates"])
+        self.assertIn("блокировка по IP", self.writer.logs[-1])
+        self.parse("EVENT|QUIC|candidate-2|www.youtube.com|142.250.74.14|ok|12")
+        self.assertEqual(self.writer.payload["last_quic_probe"]["ms"], 12)
+        self.parse("EVENT|QUIC_GATE|on|active-reply")
+        self.assertEqual(self.writer.payload["quic_gate"], {"state": "on", "reason": "active-reply"})
+        self.parse("EVENT|QUIC_RESULT|2|fail|1|2")
+        self.assertEqual(self.writer.payload["last_quic_result"], {"candidate": 2, "result": "fail", "ok": 1, "total": 2})
+        self.assertIn("QUIC перестал отвечать", self.writer.logs[-1])
+        self.parse("EVENT|FIREWALL_REASSERT|3|missing")
+        self.assertNotIn("firewall_reasserted", self.writer.payload)
+        self.parse("EVENT|FIREWALL_REASSERT|3|restored")
+        self.assertEqual(self.writer.payload["firewall_reasserted"], 1)
+        self.parse("EVENT|FIREWALL_LOST|3")
+        self.assertIn("не засчитан", self.writer.logs[-1])
+        self.parse("EVENT|FATAL|project-busy")
+        self.assertEqual(self.writer.payload["runner_fatal"], "project-busy")
+
+    def test_builtin_profile_is_recognised_with_router_quic_and_range(self):
+        quic = (*TUNER.NATIVE_QUIC[:-1], "--lua-desync=fake:blob=youtube_quic:repeats=4")
+        youtube = TUNER.known_candidate("youtube", [SOURCE], quic)
+        voice = TUNER.voice_candidate_in_range(TUNER.known_candidate("discord-voice", [SOURCE]), "wide")
+        self.assertTrue(JOB.is_builtin_profile(youtube))
+        self.assertTrue(JOB.is_builtin_profile(voice))
+        changed = dataclasses.replace(youtube, args=(*youtube.args[:5], "--lua-desync=fake:blob=x", *youtube.args[6:]))
+        self.assertFalse(JOB.is_builtin_profile(changed))
 
     def test_voice_auto_events(self):
         self.parse("EVENT|VOICE_ENDPOINT|162.159.130.234|50007|15|12")
@@ -831,6 +873,109 @@ class StopAndDrainTests(unittest.TestCase):
         )
 
 
+class RouterConfigReadTests(TempRootTestCase):
+    def test_recorded_udp_settings(self):
+        self.assertEqual(
+            JOB.recorded_udp_settings("# Discord UDP: strategy=legacy, range=wide.\n"), ("legacy", "wide")
+        )
+        self.assertEqual(
+            JOB.recorded_udp_settings("UDP_PORTS=443,3478:3481,5349,19294:19344,50000:65535\n"), ("flowseal", "wide")
+        )
+        self.assertEqual(JOB.recorded_udp_settings("UDP_PORTS=443,50000:50100\n"), ("flowseal", "narrow"))
+        self.assertEqual(
+            JOB.recorded_udp_settings("# Discord UDP: strategy=odd, range=wide.\n"), ("flowseal", "narrow")
+        )
+
+    def test_applied_custom_args_sources_the_conf_like_the_init(self):
+        self.write_conf(extra=(
+            'NFQWS_ARGS_CUSTOM="--filter-tcp=80"\n'
+            'if [ -n "$NFQWS_ARGS_CUSTOM" ]; then\n  NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM\n--new"\nfi\n'
+            'NFQWS_ARGS_CUSTOM="$NFQWS_ARGS_CUSTOM\n--filter-udp=443 --filter-l7=quic\n'
+            '--hostlist=/opt/etc/nfqws2/lists/youtube.list\n--payload=quic_initial\n'
+            '--lua-desync=fake:blob=youtube_quic:repeats=11"\n'
+        ))
+        custom = JOB.applied_custom_args()
+        self.assertEqual(TUNER.applied_youtube_quic(custom), TUNER.NATIVE_QUIC)
+        (self.root / "opt" / "etc" / "nfqws2" / "nfqws2.conf").unlink()
+        self.assertEqual(JOB.applied_custom_args(), "")
+
+
+class RunnerRecoveryTests(TempRootTestCase):
+    """A SIGKILLed runner leaves its candidate nfqws2 and a stopped service."""
+
+    def setUp(self):
+        super().setUp()
+        self.runtime = self.root / "opt" / "tmp" / "zapret-tuner.4321"
+        self.runtime.mkdir(parents=True)
+        init = self.root / "opt" / "etc" / "init.d" / "S51nfqws2"
+        init.parent.mkdir(parents=True)
+        self.init_log = self.root / "init.log"
+        pidfile = self.root / "opt" / "var" / "run" / "nfqws2.pid"
+        pidfile.parent.mkdir(parents=True)
+        init.write_text(
+            "#!/bin/sh\n"
+            f"echo \"$1\" >> '{self.init_log}'\n"
+            f"[ \"$1\" != start ] || echo 99 > '{pidfile}'\n",
+            encoding="utf-8",
+        )
+        init.chmod(0o755)
+        # One process whose command line names nfqws2, like the real candidate.
+        self.candidate = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)", "/opt/usr/bin/nfqws2", "--qnum=300"]
+        )
+        self.addCleanup(self.stop_candidate)
+
+    def stop_candidate(self):
+        if self.candidate.poll() is None:
+            self.candidate.kill()
+        self.candidate.wait()
+
+    def write_state(self, **values):
+        state = {"runner_pid": "4321", "candidate_pid": str(self.candidate.pid),
+                 "was_running": "1", "prepared": "1", **values}
+        (self.runtime / "runtime.state").write_text(
+            "".join(f"{key}={value}\n" for key, value in state.items()), encoding="ascii")
+
+    def test_killed_runner_candidate_is_killed_and_service_started(self):
+        self.write_state()
+        writer = FakeWriter()
+        process = FakeRunner(remaining="", timeout_first=True)
+        JOB.stop_and_drain_runner(writer, process, [])
+        self.assertTrue(process.killed)
+        self.assertIsNotNone(self.candidate.wait(timeout=10))
+        self.assertEqual(writer.payload["orphan_candidate_killed"], self.candidate.pid)
+        self.assertEqual(writer.payload["nfqws_restored"], "running")
+        self.assertEqual(writer.payload["restored_by"], "job")
+        self.assertEqual(self.init_log.read_text().split(), ["firewall_stop", "start"])
+        self.assertFalse(self.runtime.exists())
+
+    def test_service_that_was_stopped_stays_stopped(self):
+        self.write_state(was_running="0")
+        writer = FakeWriter()
+        JOB.recover_runner_runtime(writer, 4321)
+        self.assertEqual(writer.payload["nfqws_restored"], "stopped")
+        self.assertEqual(self.init_log.read_text().split(), ["firewall_stop"])
+
+    def test_no_state_or_foreign_state_does_nothing(self):
+        writer = FakeWriter()
+        JOB.recover_runner_runtime(writer, 4321)
+        self.write_state(runner_pid="999")
+        JOB.recover_runner_runtime(writer, 4321)
+        self.assertEqual(writer.payload, {})
+        self.assertIsNone(self.candidate.poll())
+        self.assertFalse(self.init_log.exists())
+
+    def test_a_pid_that_is_not_nfqws2_is_never_killed(self):
+        other = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(other.wait)
+        self.addCleanup(other.kill)
+        self.write_state(candidate_pid=str(other.pid), prepared="0")
+        writer = FakeWriter()
+        JOB.recover_runner_runtime(writer, 4321)
+        self.assertIsNone(other.poll())
+        self.assertNotIn("orphan_candidate_killed", writer.payload)
+
+
 class MainTests(TempRootTestCase):
     JOB_ID = "0123456789abcdef"
 
@@ -841,6 +986,7 @@ class MainTests(TempRootTestCase):
         (self.sources / "general (ALT11).bat").write_text(SAMPLE, encoding="utf-8")
         self.job_dir = self.root / "opt" / "tmp" / "xkeen-zapret-tuner"
         self.popen_calls = []
+        self.custom_args = ""
 
     def run_main(self, runner, *extra, core=None, service="youtube", source_dir=True):
         argv = ["zapret_autotune_job.py", "--service", service, "--job-id",
@@ -856,6 +1002,7 @@ class MainTests(TempRootTestCase):
         with mock.patch.object(sys, "argv", argv), \
                 mock.patch.object(JOB.signal, "signal") as signal_mock, \
                 mock.patch.object(JOB.subprocess, "Popen", side_effect=fake_popen), \
+                mock.patch.object(JOB, "applied_custom_args", return_value=self.custom_args), \
                 mock.patch.object(JOB, "core_pids", core_mock):
             code = JOB.main()
         self.signal_mock = signal_mock
@@ -920,6 +1067,74 @@ class MainTests(TempRootTestCase):
         self.assertIn("verification", state)
         self.assertFalse((self.job_dir / "verdict.txt").exists())
         self.assertTrue((self.job_dir / "result-report.json").exists())
+
+    def test_runner_is_told_that_the_job_holds_the_lock(self):
+        self.write_conf()
+        seen = {}
+
+        class LockCheckingRunner(FakeRunner):
+            pass
+
+        runner = LockCheckingRunner(["EVENT|NONE\n"])
+        original = runner._iter
+
+        def lines():
+            seen["lock_pid"] = (self.lock_dir / "pid").read_text(encoding="ascii").strip()
+            yield from original()
+
+        runner.stdout = lines()
+        self.assertEqual(self.run_main(runner), 0)
+        _command, kwargs = self.popen_calls[0]
+        self.assertEqual(kwargs["env"]["KD_TUNER_LOCK_HELD"], str(os.getpid()))
+        self.assertEqual(seen["lock_pid"], str(os.getpid()))
+
+    def test_youtube_candidates_carry_the_applied_quic_section(self):
+        self.write_conf()
+        self.custom_args = (
+            "--filter-tcp=443 --hostlist=/opt/etc/nfqws2/lists/youtube.list --lua-desync=fake:blob=x --new "
+            "--filter-udp=443 --filter-l7=quic --hostlist=/opt/etc/nfqws2/lists/youtube.list "
+            "--payload=quic_initial --lua-desync=fake:blob=youtube_quic:repeats=4"
+        )
+        self.assertEqual(self.run_main(FakeRunner(), "--mix-level", "extended", "--max-candidates", "64"), 0)
+        state = self.state()
+        self.assertEqual(state["youtube_quic"]["origin"], "applied")
+        script = (self.job_dir / "runner.sh").read_text(encoding="utf-8")
+        encoded = [line.split("|")[2] for line in script.splitlines() if re.fullmatch(r"\d+\|[0-9a-f]{12}\|\S+", line)]
+        self.assertGreater(len(encoded), 5)
+        for value in encoded:
+            args = base64.b64decode(value).decode().split()
+            self.assertEqual(args[args.index("--new") + 1:][-1], "--lua-desync=fake:blob=youtube_quic:repeats=4")
+
+    def test_unsafe_applied_quic_falls_back_to_native(self):
+        self.write_conf()
+        self.custom_args = (
+            "--filter-udp=443 --filter-l7=quic --hostlist=/opt/etc/nfqws2/lists/youtube.list "
+            "--payload=quic_initial --lua-desync=circular:fails=2"
+        )
+        self.assertEqual(self.run_main(FakeRunner()), 0)
+        self.assertEqual(self.state()["youtube_quic"]["origin"], "native")
+        log = (self.job_dir / "events.log").read_text(encoding="utf-8")
+        self.assertIn("не проходит проверку импорта", log)
+
+    def test_voice_candidates_follow_the_configured_wide_range(self):
+        self.write_conf(extra="# Discord UDP: strategy=legacy, range=wide.\n")
+        code = self.run_main(
+            FakeRunner(["EVENT|VOICE_VERDICT|1\n"]), "--client-ip", "192.168.2.50", service="discord-voice"
+        )
+        self.assertEqual(code, 0)
+        state = self.state()
+        self.assertEqual((state["udp_strategy"], state["udp_range"]), ("legacy", "wide"))
+        script = (self.job_dir / "runner.sh").read_text(encoding="utf-8")
+        encoded = [line.split("|")[2] for line in script.splitlines() if re.fullmatch(r"\d+\|[0-9a-f]{12}\|\S+", line)]
+        self.assertTrue(encoded)
+        for value in encoded:
+            self.assertIn("50000-65535", base64.b64decode(value).decode())
+
+    def test_runner_fatal_reason_is_in_the_error(self):
+        self.write_conf()
+        code = self.run_main(FakeRunner(["EVENT|FATAL|project-busy\n"], returncode=1))
+        self.assertEqual(code, 1)
+        self.assertIn("(FATAL: project-busy)", self.state()["error"])
 
     def test_route_not_zapret_is_error(self):
         self.write_conf(youtube="vless")
@@ -1013,6 +1228,7 @@ class MainTests(TempRootTestCase):
         with mock.patch.object(sys, "argv", argv), \
                 mock.patch.object(JOB.signal, "signal", side_effect=handlers.__setitem__), \
                 mock.patch.object(JOB.subprocess, "Popen", return_value=runner), \
+                mock.patch.object(JOB, "applied_custom_args", return_value=""), \
                 mock.patch.object(JOB, "core_pids", mock.Mock(side_effect=[{}, {}])):
             code = JOB.main()
         self.assertEqual(code, 130)
