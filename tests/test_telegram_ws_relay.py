@@ -15,6 +15,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -30,6 +31,64 @@ def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+@contextlib.contextmanager
+def captured_log():
+    lines = []
+    original = RELAY.log
+    RELAY.log = lines.append
+    try:
+        yield lines
+    finally:
+        RELAY.log = original
+
+
+def mark_permitted() -> bool:
+    with socket.socket() as sock:
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, RELAY.SO_MARK, 1)
+        except OSError:
+            return False
+    return True
+
+
+class MarkRecordingSocket(socket.socket):
+    """Records every socket the relay makes and the SO_MARK set on it.
+
+    The mark is applied for real when the test runs as root; elsewhere only
+    the call is recorded, so the test also runs without CAP_NET_ADMIN.
+    """
+
+    created = 0
+    marks: list = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        type(self).created += 1
+
+    def setsockopt(self, level, option, value, *rest):
+        if level == socket.SOL_SOCKET and option == RELAY.SO_MARK:
+            try:
+                super().setsockopt(level, option, value, *rest)
+            except PermissionError:
+                type(self).marks.append(value)
+                return
+            type(self).marks.append(super().getsockopt(level, option))
+            return
+        super().setsockopt(level, option, value, *rest)
+
+
+class MarkDeniedSocket(socket.socket):
+    """A socket on a system that does not allow SO_MARK."""
+
+    attempts = 0
+
+    def setsockopt(self, level, option, value, *rest):
+        if level == socket.SOL_SOCKET and option == RELAY.SO_MARK:
+            type(self).attempts += 1
+            raise PermissionError(1, "Operation not permitted")
+        super().setsockopt(level, option, value, *rest)
 
 
 class FakeWebSocketServer:
@@ -283,10 +342,10 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         relay.note_rtt("slow.example.org", 0.01)  # tried first
         original = relay.upgrade
 
-        async def upgrade(address, host, cloudflare=False, rotate=0):
+        async def upgrade(address, host, cloudflare=False, rotate=0, **kwargs):
             if host.endswith("slow.example.org"):
                 await asyncio.sleep(30)  # hangs like a throttled domain
-            return await original(address, host, cloudflare, rotate)
+            return await original(address, host, cloudflare, rotate, **kwargs)
 
         relay.upgrade = upgrade
         started = time.monotonic()
@@ -415,6 +474,319 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
             writer.close()
         self.assertEqual(relay.stats["rejected"], 3)
 
+    async def start_data_center(self, answer=b"direct-answer"):
+        """A fake data center for the direct TCP route: reads the header, answers."""
+        async def data_center(reader, writer):
+            with contextlib.suppress(asyncio.IncompleteReadError, OSError):
+                await reader.readexactly(64)
+                writer.write(answer)
+                await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(data_center, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        return server.sockets[0].getsockname()[1]
+
+    async def start_fake_websocket(self, reply=b"ok"):
+        fake = FakeWebSocketServer(reply=reply)
+        server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        return fake, server.sockets[0].getsockname()[1]
+
+    async def mtproto_exchange(self, port, dc, timeout=5.0):
+        header, _, _ = MT.make_header(dc)
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(header + b"hello")
+        await writer.drain()
+        try:
+            return await asyncio.wait_for(reader.read(100), timeout)
+        finally:
+            writer.close()
+
+    async def test_mark_is_set_on_every_outgoing_socket(self):
+        MarkRecordingSocket.created, MarkRecordingSocket.marks = 0, []
+        _, ws_port = await self.start_fake_websocket()
+        dc_port = await self.start_data_center()
+        relay = RELAY.Relay(use_tls=False, ws_port=ws_port, address_override="127.0.0.1",
+                            fallback_port=dc_port, cf_domains=["cf.example.test"], pool_size=0,
+                            connect_timeout=2, mark=255)
+        relay.socket_type = MarkRecordingSocket
+        # Direct WebSocket and Cloudflare.
+        _, writer, _ = await relay.open_websocket(2, False)
+        writer.close()
+        _, writer, _ = await relay.open_cloudflare(2)
+        writer.close()
+        self.assertEqual(MarkRecordingSocket.created, 2)
+        # Direct TCP fallback.
+        relay.cf_enabled = False
+        port = await self.start_relay(relay)
+        self.assertEqual(await self.mtproto_exchange(port, 1), b"direct-answer")
+        self.assertEqual(MarkRecordingSocket.created, 3)
+        # The self-test.
+        relay.cf_enabled = True
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(await RELAY.self_test(relay), 0)
+        self.assertGreater(MarkRecordingSocket.created, 3 + len(RELAY.DIRECT_ADDRESSES))
+        self.assertEqual(MarkRecordingSocket.marks, [255] * MarkRecordingSocket.created)
+
+    async def test_no_mark_by_default(self):
+        MarkRecordingSocket.created, MarkRecordingSocket.marks = 0, []
+        _, ws_port = await self.start_fake_websocket()
+        relay = RELAY.Relay(use_tls=False, ws_port=ws_port, address_override="127.0.0.1",
+                            cf_domains=["cf.example.test"], pool_size=0)
+        relay.socket_type = MarkRecordingSocket
+        _, writer, _ = await relay.open_cloudflare(2)
+        writer.close()
+        self.assertEqual((MarkRecordingSocket.created, MarkRecordingSocket.marks), (1, []))
+
+    @unittest.skipUnless(mark_permitted(), "SO_MARK needs CAP_NET_ADMIN")
+    async def test_mark_reaches_the_kernel(self):
+        _, ws_port = await self.start_fake_websocket()
+        relay = RELAY.Relay(use_tls=False, ws_port=ws_port, address_override="127.0.0.1",
+                            cf_domains=["cf.example.test"], pool_size=0, mark=255)
+        _, writer, _ = await relay.open_cloudflare(2)
+        self.assertEqual(writer.get_extra_info("socket").getsockopt(socket.SOL_SOCKET, RELAY.SO_MARK), 255)
+        writer.close()
+
+    async def test_mark_not_permitted_is_logged_once_and_connections_go_on(self):
+        MarkDeniedSocket.attempts = 0
+        _, ws_port = await self.start_fake_websocket()
+        dc_port = await self.start_data_center()
+        relay = RELAY.Relay(use_tls=False, ws_port=ws_port, address_override="127.0.0.1",
+                            fallback_port=dc_port, cf_domains=["cf.example.test"], pool_size=0,
+                            connect_timeout=2, mark=255)
+        relay.socket_type = MarkDeniedSocket
+        with captured_log() as lines:
+            for _ in range(2):
+                _, writer, _ = await relay.open_cloudflare(2)
+                writer.close()
+            relay.cf_enabled = False
+            port = await self.start_relay(relay)
+            self.assertEqual(await self.mtproto_exchange(port, 1), b"direct-answer")
+        self.assertEqual(MarkDeniedSocket.attempts, 1)
+        self.assertEqual(len([line for line in lines if "mark 255" in line]), 1, lines)
+
+    async def test_direct_route_that_comes_back_to_the_relay_is_cut(self):
+        # As with XKeen proxy_router=on and no mark: the direct TCP connection
+        # to the data center is redirected by Xray to the relay again.
+        relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1",
+                            cf_enabled=False, connect_timeout=2)
+        accepted = 0
+        original = relay.handle
+
+        async def counted(reader, writer):
+            nonlocal accepted
+            accepted += 1
+            await original(reader, writer)
+
+        relay.handle = counted
+        with captured_log() as lines:
+            port = await self.start_relay(relay)
+            relay.fallback_port = port  # the "data center" is the relay itself
+            self.assertEqual(await self.mtproto_exchange(port, 1), b"")
+            await asyncio.sleep(0.3)
+            self.assertEqual(accepted, 2)
+            self.assertTrue(relay.blocked(("tcp", 1)))
+            self.assertEqual(relay.direct_headers, {})
+            # Later connections to that DC do not loop at all.
+            self.assertEqual(await self.mtproto_exchange(port, 1), b"")
+            await asyncio.sleep(0.1)
+        self.assertEqual(accepted, 3)
+        self.assertEqual(len([line for line in lines if "loop" in line]), 1, lines)
+
+    @contextlib.contextmanager
+    def failing_dns(self, error=None, hang=False, answer=None):
+        """The loop's getaddrinfo raises error, hangs, or returns answer."""
+        loop = asyncio.get_running_loop()
+
+        async def getaddrinfo(*args, **kwargs):
+            if hang:
+                await asyncio.sleep(30)
+            if error is not None:
+                raise error
+            return answer or []
+
+        loop.getaddrinfo = getaddrinfo
+        try:
+            yield
+        finally:
+            del loop.getaddrinfo
+
+    async def test_dns_outage_uses_known_addresses_and_blames_no_domain(self):
+        _, ws_port = await self.start_fake_websocket()
+        domains = [f"d{n}.example.org" for n in range(6)]
+        relay = RELAY.Relay(use_tls=False, ws_port=ws_port, cf_domains=domains, pool_size=0)
+        relay.note_ip_rtt("127.0.0.1", 0.05)  # an edge that worked before
+        for error in (socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution"),
+                      socket.gaierror(socket.EAI_FAIL, "Non-recoverable failure in name resolution")):
+            with self.failing_dns(error):
+                for _ in range(4):  # more than enough to use up every domain before
+                    _, writer, _ = await relay.open_cloudflare(2)
+                    self.assertEqual(writer.get_extra_info("peername")[0], "127.0.0.1")
+                    writer.close()
+        self.assertEqual(sorted(domain for domain in domains if not relay.blocked(("cf", domain))), domains)
+        self.assertEqual(len(relay.cf_order(2)), RELAY.CF_ATTEMPTS)
+
+    async def test_dns_outage_without_known_addresses_blames_no_domain(self):
+        domains = [f"d{n}.example.org" for n in range(6)]
+        relay = RELAY.Relay(use_tls=False, ws_port=free_port(), cf_domains=domains, pool_size=0,
+                            connect_timeout=0.3)
+        stagger = mock.patch.object(RELAY, "CF_STAGGER", 0.05)
+        stagger.start()
+        self.addCleanup(stagger.stop)
+        with self.failing_dns(socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")):
+            for _ in range(3):
+                with self.assertRaisesRegex(ConnectionError, "DNS"):
+                    await relay.open_cloudflare(2)
+        with self.failing_dns(hang=True):
+            with self.assertRaisesRegex(ConnectionError, "DNS timeout"):
+                await relay.open_cloudflare(2)
+        self.assertFalse(any(relay.blocked(("cf", domain)) for domain in domains))
+
+    async def test_a_definite_dns_answer_still_blames_the_domain(self):
+        _, ws_port = await self.start_fake_websocket()
+        relay = RELAY.Relay(use_tls=False, ws_port=ws_port, cf_domains=["gone.example.org"], pool_size=0)
+        relay.note_ip_rtt("127.0.0.1", 0.05)
+        with self.failing_dns(socket.gaierror(socket.EAI_NONAME, "Name or service not known")):
+            with self.assertRaisesRegex(ConnectionError, "DNS"):
+                await relay.open_cloudflare(2)
+        self.assertTrue(relay.blocked(("cf", "gone.example.org")))
+        relay.failed_until.clear()
+        with self.failing_dns(answer=[]):  # an answer without IPv4
+            with self.assertRaisesRegex(ConnectionError, "no IPv4 address"):
+                await relay.open_cloudflare(2)
+        self.assertTrue(relay.blocked(("cf", "gone.example.org")))
+
+    async def test_refills_against_dead_edges_leave_slots_for_clients(self):
+        # Every TCP connect hangs, as when the provider drops SYNs.
+        relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1",
+                            cf_domains=[f"d{n}.example.org" for n in range(6)],
+                            cf_ips=[f"127.0.0.{n}" for n in range(2, 10)], connect_timeout=10)
+        self.addCleanup(relay.close)
+        started = []
+
+        async def black_hole(address, port, *args):
+            started.append(time.monotonic())
+            await asyncio.sleep(30)
+
+        relay.open_tcp = black_hole
+        relay.schedule_refill(("cf", 4))
+        await asyncio.sleep(2.5)
+        background = len(started)
+        self.assertLessEqual(background, RELAY.REFILL_LIMIT)
+        asked = time.monotonic()
+        client = asyncio.ensure_future(relay.take(("cf", 2)))
+        self.addCleanup(client.cancel)
+        await self.wait_for(lambda: len(started) > background, timeout=RELAY.IP_STAGGER + 0.2)
+        self.assertLess(started[background] - asked, 0.2)
+
+    async def test_refill_skips_cloudflare_when_every_address_failed_recently(self):
+        relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1",
+                            cf_domains=["cf.example.test"], pool_size=1)
+        relay.ip_failed("127.0.0.1")
+        calls = []
+        original = relay.open_tcp
+
+        async def recorded(address, port, *args):
+            calls.append(address)
+            return await original(address, port, *args)
+
+        relay.open_tcp = recorded
+        await relay.refill(("cf", 2))
+        self.assertEqual(calls, [])
+        # A client still tries the last resort.
+        with self.assertRaises(ConnectionError):
+            await relay.open_cloudflare(2)
+        self.assertEqual(calls, ["127.0.0.1"])
+
+    async def test_blocked_direct_websocket_is_not_refilled(self):
+        fake = FakeWebSocketServer(reply=b"ok")
+        server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
+                            address_override="127.0.0.1", pool_size=1, cf_domains=["cf.example.test"])
+        self.addCleanup(relay.close)
+        relay.ws_state[2] = "ok"
+        _, writer, _, _ = await relay.take(("ws", 2, False))
+        writer.close()
+        await self.wait_for(lambda: len(relay.pool.get(("ws", 2, False), ())) == 1)
+        server.close()  # the route is blocked from now on
+        relay.ws_failed(2)
+        for entry in relay.pool[("ws", 2, False)]:
+            entry[1].close()
+        routes = []
+        original = relay.connect_route
+
+        async def recorded(key, *args, **kwargs):
+            routes.append(key)
+            return await original(key, *args, **kwargs)
+
+        relay.connect_route = recorded
+        probed = []
+        relay.schedule_probe = probed.append
+        with mock.patch.object(RELAY, "POOL_TICK", 0.05):
+            maintainer = asyncio.ensure_future(relay.maintain())
+            await asyncio.sleep(0.5)
+            maintainer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await maintainer
+        self.assertNotIn(("ws", 2, False), routes)
+        self.assertNotIn(("ws", 2, False), relay.pool_used)
+        self.assertFalse(relay.pool.get(("ws", 2, False)))
+        self.assertIn(2, probed)  # the DC was in use: it is still re-probed
+
+    async def test_pooled_websocket_closed_by_the_server_is_not_handed_out(self):
+        async def closing(reader, writer):
+            request = b""
+            while not request.endswith(b"\r\n\r\n"):
+                chunk = await reader.read(1)
+                if not chunk:
+                    return
+                request += chunk
+            key = next(line.split(b":", 1)[1].strip() for line in request.split(b"\r\n")
+                       if line.lower().startswith(b"sec-websocket-key"))
+            accept = base64.b64encode(hashlib.sha1(key + RELAY.WS_GUID).digest())
+            writer.write(b"HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n")
+            writer.write(bytes([0x88, 2]) + b"\x03\xe8")  # close frame, then FIN
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(closing, "127.0.0.1", 0)
+        self.addAsyncCleanup(self.close_server, server)
+        relay = RELAY.Relay(use_tls=False, ws_port=server.sockets[0].getsockname()[1],
+                            address_override="127.0.0.1", pool_size=1, cf_domains=["cf.example.test"])
+        self.addCleanup(relay.close)
+        _, writer, _, pooled = await relay.take(("cf", 3))
+        writer.close()
+        self.assertFalse(pooled)
+        await self.wait_for(lambda: len(relay.pool.get(("cf", 3), ())) == 1)
+        await asyncio.sleep(0.2)
+        _, writer, _, pooled = await relay.take(("cf", 3))
+        writer.close()
+        self.assertFalse(pooled)
+
+    async def test_blackholed_cloudflare_edges_fall_back_to_direct_in_bounded_time(self):
+        dc_port = await self.start_data_center()
+        relay = RELAY.Relay(use_tls=False, ws_port=free_port(), address_override="127.0.0.1",
+                            fallback_port=dc_port, connect_timeout=0.3, pool_size=0,
+                            cf_domains=["a.example.org", "b.example.org", "c.example.org"],
+                            cf_ips=["127.0.0.2", "127.0.0.3"])
+        original = relay.open_tcp
+
+        async def black_hole(address, port, *args):
+            if port == relay.ws_port:
+                await asyncio.sleep(30)
+            return await original(address, port, *args)
+
+        relay.open_tcp = black_hole
+        port = await self.start_relay(relay)
+        started = time.monotonic()
+        self.assertEqual(await self.mtproto_exchange(port, 1, timeout=10), b"direct-answer")
+        self.assertLess(time.monotonic() - started, RELAY.CF_STAGGER * 2 + RELAY.IP_STAGGER * 2 + 1)
+        self.assertEqual(relay.stats["direct"], 1)
+        self.assertTrue(all(relay.blocked(("ip", ip)) for ip in ("127.0.0.1", "127.0.0.2", "127.0.0.3")))
+        self.assertFalse(any(relay.blocked(("cf", domain)) for domain in relay.cf_domains))
+
     @staticmethod
     async def close_server(server):
         server.close()
@@ -446,6 +818,7 @@ class ProcessTests(unittest.TestCase):
                             raise
                         time.sleep(0.1)
                 with client:
+                    self.assertEqual(pidfile.read_text(encoding="ascii"), f"{process.pid}\n")
                     client.sendall(b"partial header")  # Telegram keeps its connections open
                     time.sleep(0.3)
                     process.send_signal(signal.SIGTERM)
@@ -455,6 +828,29 @@ class ProcessTests(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                     process.wait()
+
+    def test_no_pidfile_when_the_port_is_taken(self):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory, socket.socket() as taken:
+            taken.bind(("127.0.0.1", 0))
+            taken.listen()
+            port = taken.getsockname()[1]
+            pidfile = Path(directory) / "relay.pid"
+            command = [sys.executable, str(ROOT / "tools" / "router" / "telegram_ws_relay.py"),
+                       "--listen", f"127.0.0.1:{port}", "--pidfile", str(pidfile),
+                       "--log", str(Path(directory) / "relay.log")]
+            process = subprocess.Popen(command, stderr=subprocess.DEVNULL)
+            seen = False
+            while process.poll() is None:
+                seen = seen or pidfile.exists()
+                time.sleep(0.001)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertFalse(seen or pidfile.exists())
+            # The pidfile of a relay that does run is left alone.
+            pidfile.write_text("4242\n", encoding="ascii")
+            self.assertNotEqual(subprocess.run(command, stderr=subprocess.DEVNULL, timeout=30).returncode, 0)
+            self.assertEqual(pidfile.read_text(encoding="ascii"), "4242\n")
 
 
 class HelperTests(unittest.TestCase):
@@ -643,6 +1039,26 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(relay.ws_state[2], "ok")
         relay.ws_failed(2)
         self.assertEqual(round(relay.ws_next_probe[2] - time.monotonic()), 300)
+
+    def test_mark_option(self):
+        seen = []
+
+        async def fake_self_test(relay):
+            seen.append(relay.so_mark)
+            return 0
+
+        original = RELAY.self_test
+        RELAY.self_test = fake_self_test
+        try:
+            self.assertEqual(RELAY.main(["--self-test", "--mark", "255"]), 0)
+            self.assertEqual(RELAY.main(["--self-test", "--mark", "0x1ff"]), 0)
+            self.assertEqual(RELAY.main(["--self-test"]), 0)
+        finally:
+            RELAY.self_test = original
+        self.assertEqual(seen, [255, 0x1FF, 0])
+        for bad in ("-1", "x", str(2 ** 32)):
+            with self.subTest(bad=bad), self.assertRaises(RELAY.argparse.ArgumentTypeError):
+                RELAY.parse_mark(bad)
 
     def test_listen_validation(self):
         self.assertEqual(RELAY.parse_listen("127.0.0.1:18443"), ("127.0.0.1", 18443))

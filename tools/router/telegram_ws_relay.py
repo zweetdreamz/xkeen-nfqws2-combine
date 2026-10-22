@@ -24,10 +24,15 @@ The WebSocket and Cloudflare parts follow Flowseal/tg-ws-proxy (MIT): the same
 endpoints, headers, fixed address and default Cloudflare domains (kept encoded
 as there). Here no secret is involved and the bytes are not re-encrypted.
 
+Every outgoing connection carries the firewall mark given with --mark (as
+Xray's direct outbounds do), so that XKeen's interception of the router's own
+traffic does not send it back to Xray and so to this relay. A direct
+connection that still comes back (same header) is cut and its route paused.
+
 Usage: telegram_ws_relay.py [--listen 127.0.0.1:18443] [--pidfile PATH]
                             [--log PATH] [--cf-domains-file PATH]
-                            [--cf-ips-file PATH] [--no-cf]
-       telegram_ws_relay.py --self-test
+                            [--cf-ips-file PATH] [--no-cf] [--mark N]
+       telegram_ws_relay.py --self-test [--mark N]
        telegram_ws_relay.py --print-cf-domains
 """
 
@@ -94,13 +99,21 @@ IP_BACKOFF = 1800.0
 # Cloudflare edge may itself be unable to reach Telegram.
 IP_RETRY = 60.0
 # New TCP connections at once; more only provoke that throttling. Pool
-# refills open at most REFILL_LIMIT WebSockets at a time so that clients'
-# connections do not queue behind them.
+# refills open at most REFILL_LIMIT WebSockets at a time, and background work
+# (refills, probes) holds at most REFILL_LIMIT of the CONNECT_LIMIT connect
+# slots, so that clients' connections do not queue behind them.
 CONNECT_LIMIT = 8
 REFILL_LIMIT = 2
 # WebSocket sessions shorter than this are logged as drops.
 SHORT_SESSION = 10.0
 CF_REFRESH_INTERVAL = 6 * 3600
+# Linux SO_MARK; Python names it from 3.7 on Linux only.
+SO_MARK = getattr(socket, "SO_MARK", 36)
+# getaddrinfo errors that mean the name has no IPv4 address; the others
+# (EAI_AGAIN, EAI_FAIL ...) mean that DNS did not answer.
+DNS_NO_NAME = frozenset(
+    getattr(socket, name) for name in ("EAI_NONAME", "EAI_NODATA", "EAI_ADDRFAMILY") if hasattr(socket, name)
+)
 
 # The default Cloudflare domains of tg-ws-proxy, encoded as in its
 # proxy/config.py, and the list it refreshes them from.
@@ -330,7 +343,7 @@ class Relay:
                  use_tls: bool = True, address_override: str | None = None,
                  fallback_port: int = 443, cf_domains: list[str] | None = None,
                  cf_enabled: bool = True, pool_size: int = POOL_SIZE,
-                 cf_ips: list[str] | None = None) -> None:
+                 cf_ips: list[str] | None = None, mark: int = 0) -> None:
         self.connect_timeout = connect_timeout
         self.ws_port = ws_port
         self.use_tls = use_tls
@@ -346,6 +359,7 @@ class Relay:
         self.failed_until: dict[tuple, float] = {}
         self.connect_slots = asyncio.Semaphore(CONNECT_LIMIT)
         self.refill_slots = asyncio.Semaphore(REFILL_LIMIT)
+        self.background_slots = asyncio.Semaphore(REFILL_LIMIT)
         self.ip_failures: dict[str, int] = {}
         # Direct WebSocket per DC: "ok" or "blocked"; unknown until probed.
         self.ws_state: dict[int, str] = {}
@@ -356,6 +370,13 @@ class Relay:
         self.pool_used: dict[tuple, float] = {}
         self.tasks: dict[tuple, asyncio.Future] = {}
         self.stats = {"ws": 0, "cf": 0, "direct": 0, "rejected": 0, "pooled": 0}
+        # Firewall mark of every outgoing socket; 0 = none. Dropped (once,
+        # logged) when the system does not allow it.
+        self.so_mark = mark
+        self.socket_type = socket.socket  # tests replace it
+        # The 64-byte header of each direct TCP connection in progress, and
+        # its DC: a connection arriving with one of them is our own, back.
+        self.direct_headers: dict[bytes, int] = {}
 
     # -- route bookkeeping -------------------------------------------------
 
@@ -436,7 +457,7 @@ class Relay:
 
     async def probe(self, dc: int) -> None:
         try:
-            _, writer, _ = await self.open_websocket(dc, False)
+            _, writer, _ = await self.open_websocket(dc, False, background=True)
         except ConnectionError as error:
             self.ws_failed(dc)
             log(f"DC{dc}: direct WebSocket unavailable ({error}); next check in "
@@ -449,15 +470,19 @@ class Relay:
 
     # -- pool of ready WebSockets ------------------------------------------
 
-    async def connect_route(self, key: tuple):
+    async def connect_route(self, key: tuple, background: bool = False):
         if key[0] == "cf":
-            return await self.open_cloudflare(key[1])
-        return await self.open_websocket(key[1], key[2])
+            return await self.open_cloudflare(key[1], background)
+        return await self.open_websocket(key[1], key[2], background)
 
     @staticmethod
     def fresh(entry) -> bool:
+        """Young, open and idle. A pooled WebSocket carries no data yet, so
+        anything received (a close frame, EOF; at worst a ping) means the
+        server is done with it."""
         reader, writer, _, created = entry
         return (time.monotonic() - created < POOL_MAX_AGE and not writer.is_closing()
+                and not getattr(reader, "_buffer", None) and not getattr(reader, "_eof", False)
                 and not reader.at_eof() and reader.exception() is None)
 
     async def take(self, key: tuple):
@@ -487,7 +512,7 @@ class Relay:
 
         async def one():
             async with self.refill_slots:
-                return await self.connect_route(key)
+                return await self.connect_route(key, background=True)
 
         results = await asyncio.gather(*(one() for _ in range(missing)), return_exceptions=True)
         for result in results:
@@ -499,9 +524,12 @@ class Relay:
         while True:
             await asyncio.sleep(POOL_TICK)
             now = time.monotonic()
+            in_use = {key[1] for key, used in self.pool_used.items() if now - used < POOL_KEEP}
             for key, used in list(self.pool_used.items()):
                 bucket = self.pool.get(key, deque())
-                keep = now - used < POOL_KEEP
+                # A direct WebSocket found blocked is not kept warm; the
+                # probe below finds out when it works again.
+                keep = now - used < POOL_KEEP and (key[0] != "ws" or self.ws_state.get(key[1]) == "ok")
                 for entry in list(bucket):
                     if not keep or not self.fresh(entry):
                         bucket.remove(entry)
@@ -511,9 +539,7 @@ class Relay:
                 else:
                     del self.pool_used[key]
             for dc in WS_FIXED_ADDRESS:
-                if self.ws_state.get(dc) == "blocked" and any(
-                    key[1] == dc for key in self.pool_used
-                ):
+                if self.ws_state.get(dc) == "blocked" and dc in in_use:
                     self.schedule_probe(dc)
 
     def close(self) -> None:
@@ -524,37 +550,100 @@ class Relay:
                 entry[1].close()
         self.pool.clear()
 
+    # -- outgoing sockets --------------------------------------------------
+
+    @contextlib.asynccontextmanager
+    async def connect_slot(self, background: bool):
+        """One of the CONNECT_LIMIT slots; background work takes at most
+        REFILL_LIMIT of them, so a client always finds the rest."""
+        if background:
+            async with self.background_slots, self.connect_slots:
+                yield
+        else:
+            async with self.connect_slots:
+                yield
+
+    def new_socket(self, family: int) -> socket.socket:
+        """A non-blocking TCP socket carrying the mark, if one is set."""
+        sock = self.socket_type(family, socket.SOCK_STREAM)
+        try:
+            sock.setblocking(False)
+            if self.so_mark:
+                try:
+                    sock.setsockopt(socket.SOL_SOCKET, SO_MARK, self.so_mark)
+                except OSError as error:
+                    log(f"cannot set mark {self.so_mark} on outgoing connections ({describe(error)}); "
+                        "continuing without it")
+                    self.so_mark = 0
+        except BaseException:
+            sock.close()
+            raise
+        return sock
+
+    async def open_tcp(self, address: str, port: int, ssl_context=None, server_hostname=None):
+        """asyncio.open_connection() on a socket from new_socket().
+
+        With ssl_context (Python < 3.11 only) TLS follows in the same step.
+        """
+        try:
+            family = socket.AF_INET6 if ipaddress.ip_address(address).version == 6 else socket.AF_INET
+        except ValueError:
+            family = socket.AF_INET
+        sock = self.new_socket(family)
+        try:
+            await asyncio.get_running_loop().sock_connect(sock, (address, port))
+        except BaseException:
+            sock.close()
+            raise
+        # From here the transport owns the socket and closes it on failure.
+        if ssl_context is None:
+            return await asyncio.open_connection(sock=sock)
+        return await asyncio.open_connection(sock=sock, ssl=ssl_context, server_hostname=server_hostname)
+
     # -- WebSocket ---------------------------------------------------------
 
-    async def upgrade(self, address: str, host: str, cloudflare: bool = False, rotate: int = 0):
+    async def upgrade(self, address: str, host: str, cloudflare: bool = False, rotate: int = 0,
+                      background: bool = False):
         """DNS (IPv4), TCP, TLS (SNI = host), then the WebSocket upgrade to /apiws.
 
         The steps are timed separately so an error says where it stalled. For
         Cloudflare several addresses race (see IP_ATTEMPTS).
         """
         loop = asyncio.get_running_loop()
+        dns_error = f"{host}: nothing to try"
         try:
             infos = await asyncio.wait_for(
                 loop.getaddrinfo(address, self.ws_port, family=socket.AF_INET, type=socket.SOCK_STREAM),
                 self.connect_timeout,
             )
+        except (OSError, asyncio.TimeoutError) as error:
+            # Only a definite "no such name" blames the domain. DNS that is
+            # down or slow (EAI_AGAIN, EAI_FAIL, a timeout) does not, and for
+            # Cloudflare the addresses known to work need no DNS at all.
+            if isinstance(error, socket.gaierror) and error.errno in DNS_NO_NAME:
+                raise DomainError(f"{host}: DNS {describe(error)}") from None
+            resolved, dns_error = [], f"{host}: DNS {describe(error)}"
+        else:
             resolved = list(dict.fromkeys(info[4][0] for info in infos))
             if not resolved:
-                raise OSError("no IPv4 address")
-        except (OSError, asyncio.TimeoutError) as error:
-            raise DomainError(f"{host}: DNS {describe(error)}") from None
+                raise DomainError(f"{host}: DNS no IPv4 address")
+        candidates = self.ip_candidates(resolved, cloudflare, rotate)
+        if not candidates:
+            raise ConnectionError(dns_error)
+        if background and cloudflare and all(self.blocked(("ip", ip)) for ip in candidates):
+            # Only a client tries addresses that all failed just now.
+            raise ConnectionError(f"{host}: every address failed recently")
         legacy_tls = self.use_tls and not hasattr(asyncio.StreamWriter, "start_tls")
 
         def tcp_attempt(ip):
             async def attempt():
                 try:
-                    async with self.connect_slots:
+                    async with self.connect_slot(background):
                         started = time.monotonic()
                         if legacy_tls:  # Python < 3.11: TCP and TLS in one step.
-                            connection = asyncio.open_connection(
-                                ip, self.ws_port, ssl=self.ssl_context, server_hostname=host)
+                            connection = self.open_tcp(ip, self.ws_port, self.ssl_context, host)
                         else:
-                            connection = asyncio.open_connection(ip, self.ws_port)
+                            connection = self.open_tcp(ip, self.ws_port)
                         reader, writer = await asyncio.wait_for(connection, self.connect_timeout)
                 except (OSError, asyncio.TimeoutError, ssl.SSLError) as error:
                     if cloudflare:
@@ -565,7 +654,7 @@ class Relay:
             return attempt
 
         ip, started, reader, writer = await race(
-            [tcp_attempt(ip) for ip in self.ip_candidates(resolved, cloudflare, rotate)],
+            [tcp_attempt(ip) for ip in candidates],
             IP_STAGGER, lambda result: result[3].close(),
         )
         substituted = cloudflare and ip not in resolved
@@ -622,19 +711,19 @@ class Relay:
         writer.close()
         raise rejected(f"{host} via {ip}: {status.strip().decode('latin-1') or 'no answer'}")
 
-    async def open_websocket(self, dc: int, media: bool):
+    async def open_websocket(self, dc: int, media: bool, background: bool = False):
         """kws{N}.web.telegram.org on the fixed address (DC2/DC4)."""
         address = self.address_override or WS_FIXED_ADDRESS[dc]
         last = "no host"
         for host in ws_hosts(dc, media):
             try:
-                reader, writer = await self.upgrade(address, host)
+                reader, writer = await self.upgrade(address, host, background=background)
                 return reader, writer, host
             except ConnectionError as error:
                 last = str(error)
         raise ConnectionError(last)
 
-    async def open_cloudflare(self, dc: int):
+    async def open_cloudflare(self, dc: int, background: bool = False):
         """kws{N}.<domain> through Cloudflare, which connects to the data center.
 
         Domains are tried staggered: the next starts CF_STAGGER seconds after
@@ -650,7 +739,7 @@ class Relay:
                 started = time.monotonic()
                 try:
                     reader, writer = await self.upgrade(self.address_override or host, host,
-                                                        cloudflare=True, rotate=index)
+                                                        cloudflare=True, rotate=index, background=background)
                 except DomainError:
                     self.mark_failed(("cf", domain))
                     raise
@@ -670,6 +759,16 @@ class Relay:
         try:
             header = await asyncio.wait_for(client_reader.readexactly(64), 30)
         except (asyncio.IncompleteReadError, asyncio.TimeoutError, OSError):
+            client_writer.close()
+            return
+        looped = self.direct_headers.get(header)
+        if looped is not None:
+            # Our own direct connection, redirected back here (router traffic
+            # intercepted without the mark): cut it, pause the route.
+            self.stats["rejected"] += 1
+            self.mark_failed(("tcp", looped))
+            log(f"DC{looped}: direct connection came back to the relay (redirect loop; "
+                "is the Xray direct mark passed with --mark?); direct route paused")
             client_writer.close()
             return
         parsed = mtproto.read_header(header)
@@ -795,9 +894,16 @@ class Relay:
             log(f"DC{dc}: {reason}; direct to {address} skipped (failed recently)")
             client_writer.close()
             return
+        self.direct_headers[header] = dc
+        try:
+            await self.pipe_direct(dc, address, header, client_reader, client_writer, reason)
+        finally:
+            self.direct_headers.pop(header, None)
+
+    async def pipe_direct(self, dc, address, header, client_reader, client_writer, reason: str) -> None:
         try:
             dc_reader, dc_writer = await asyncio.wait_for(
-                asyncio.open_connection(address, self.fallback_port), self.connect_timeout
+                self.open_tcp(address, self.fallback_port), self.connect_timeout
             )
         except (OSError, asyncio.TimeoutError) as error:
             self.mark_failed(("tcp", dc))
@@ -886,7 +992,7 @@ async def self_test(relay: Relay) -> int:
         address = relay.address_override or DIRECT_ADDRESSES[dc]
         try:
             _, writer = await asyncio.wait_for(
-                asyncio.open_connection(address, relay.fallback_port), relay.connect_timeout
+                relay.open_tcp(address, relay.fallback_port), relay.connect_timeout
             )
             writer.close()
             parts.append(f"TCP {address}:{relay.fallback_port} ok")
@@ -899,6 +1005,16 @@ async def self_test(relay: Relay) -> int:
     return 0 if any(working for _, working in results) else 1
 
 
+def parse_mark(value: str) -> int:
+    try:
+        mark = int(value, 0)
+    except ValueError:
+        mark = -1
+    if not 0 <= mark <= 0xFFFFFFFF:
+        raise argparse.ArgumentTypeError("mark must be a number from 0 to 4294967295")
+    return mark
+
+
 def parse_listen(value: str) -> tuple[str, int]:
     host, _, port = value.rpartition(":")
     if host not in {"127.0.0.1", "0.0.0.0"} or not port.isdigit() or not 1 <= int(port) <= 65535:
@@ -907,8 +1023,15 @@ def parse_listen(value: str) -> tuple[str, int]:
 
 
 async def serve(listen: tuple[str, int], relay: Relay, ready: asyncio.Event | None = None,
-                refresh: bool = False) -> None:
-    server = await asyncio.start_server(relay.handle, *listen)
+                refresh: bool = False, pidfile: Path | None = None) -> None:
+    try:
+        server = await asyncio.start_server(relay.handle, *listen)
+    except OSError as error:
+        log(f"cannot listen on {listen[0]}:{listen[1]}: {describe(error)}")
+        raise
+    # Only now: the init script takes the pidfile for a running relay.
+    if pidfile is not None:
+        pidfile.write_text(f"{os.getpid()}\n", encoding="ascii")
     log(f"listening on {listen[0]}:{listen[1]}; Cloudflare "
         + (f"on ({len(relay.cf_domains)} domains)" if relay.cf_enabled and relay.cf_domains else "off"))
     if ready is not None:
@@ -942,6 +1065,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cf-ips-file", type=Path,
                         help="own Cloudflare addresses (IPv4), one per line, tried first")
     parser.add_argument("--no-cf", action="store_true", help="do not use Cloudflare")
+    parser.add_argument("--mark", type=parse_mark, default=0,
+                        help="firewall mark (SO_MARK) of every outgoing connection; 0 = none")
     parser.add_argument("--self-test", action="store_true",
                         help="try WebSocket, Cloudflare and TCP to every data center, then exit")
     parser.add_argument("--print-cf-domains", action="store_true",
@@ -953,19 +1078,20 @@ def main(argv: list[str] | None = None) -> int:
         if not args.no_cf:
             print("\n".join(domains))
         return 0
-    relay = Relay(cf_domains=domains, cf_enabled=not args.no_cf, cf_ips=read_ips_file(args.cf_ips_file))
+    relay = Relay(cf_domains=domains, cf_enabled=not args.no_cf, cf_ips=read_ips_file(args.cf_ips_file),
+                  mark=args.mark)
     if args.self_test:
         return asyncio.run(self_test(relay))
     global LOG_PATH
     LOG_PATH = args.log
-    if args.pidfile:
-        args.pidfile.write_text(f"{os.getpid()}\n", encoding="ascii")
     try:
-        asyncio.run(serve(args.listen, relay, refresh=not args.no_cf and not own_domains))
+        asyncio.run(serve(args.listen, relay, refresh=not args.no_cf and not own_domains, pidfile=args.pidfile))
     finally:
+        # Only our own: a relay that failed to start leaves another's alone.
         if args.pidfile:
             with contextlib.suppress(OSError):
-                args.pidfile.unlink()
+                if args.pidfile.read_text(encoding="ascii").strip() == str(os.getpid()):
+                    args.pidfile.unlink()
     return 0
 
 
