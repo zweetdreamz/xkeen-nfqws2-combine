@@ -15,6 +15,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -592,6 +593,69 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.1)
         self.assertEqual(accepted, 3)
         self.assertEqual(len([line for line in lines if "loop" in line]), 1, lines)
+
+    @contextlib.contextmanager
+    def failing_dns(self, error=None, hang=False, answer=None):
+        """The loop's getaddrinfo raises error, hangs, or returns answer."""
+        loop = asyncio.get_running_loop()
+
+        async def getaddrinfo(*args, **kwargs):
+            if hang:
+                await asyncio.sleep(30)
+            if error is not None:
+                raise error
+            return answer or []
+
+        loop.getaddrinfo = getaddrinfo
+        try:
+            yield
+        finally:
+            del loop.getaddrinfo
+
+    async def test_dns_outage_uses_known_addresses_and_blames_no_domain(self):
+        _, ws_port = await self.start_fake_websocket()
+        domains = [f"d{n}.example.org" for n in range(6)]
+        relay = RELAY.Relay(use_tls=False, ws_port=ws_port, cf_domains=domains, pool_size=0)
+        relay.note_ip_rtt("127.0.0.1", 0.05)  # an edge that worked before
+        for error in (socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution"),
+                      socket.gaierror(socket.EAI_FAIL, "Non-recoverable failure in name resolution")):
+            with self.failing_dns(error):
+                for _ in range(4):  # more than enough to use up every domain before
+                    _, writer, _ = await relay.open_cloudflare(2)
+                    self.assertEqual(writer.get_extra_info("peername")[0], "127.0.0.1")
+                    writer.close()
+        self.assertEqual(sorted(domain for domain in domains if not relay.blocked(("cf", domain))), domains)
+        self.assertEqual(len(relay.cf_order(2)), RELAY.CF_ATTEMPTS)
+
+    async def test_dns_outage_without_known_addresses_blames_no_domain(self):
+        domains = [f"d{n}.example.org" for n in range(6)]
+        relay = RELAY.Relay(use_tls=False, ws_port=free_port(), cf_domains=domains, pool_size=0,
+                            connect_timeout=0.3)
+        stagger = mock.patch.object(RELAY, "CF_STAGGER", 0.05)
+        stagger.start()
+        self.addCleanup(stagger.stop)
+        with self.failing_dns(socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")):
+            for _ in range(3):
+                with self.assertRaisesRegex(ConnectionError, "DNS"):
+                    await relay.open_cloudflare(2)
+        with self.failing_dns(hang=True):
+            with self.assertRaisesRegex(ConnectionError, "DNS timeout"):
+                await relay.open_cloudflare(2)
+        self.assertFalse(any(relay.blocked(("cf", domain)) for domain in domains))
+
+    async def test_a_definite_dns_answer_still_blames_the_domain(self):
+        _, ws_port = await self.start_fake_websocket()
+        relay = RELAY.Relay(use_tls=False, ws_port=ws_port, cf_domains=["gone.example.org"], pool_size=0)
+        relay.note_ip_rtt("127.0.0.1", 0.05)
+        with self.failing_dns(socket.gaierror(socket.EAI_NONAME, "Name or service not known")):
+            with self.assertRaisesRegex(ConnectionError, "DNS"):
+                await relay.open_cloudflare(2)
+        self.assertTrue(relay.blocked(("cf", "gone.example.org")))
+        relay.failed_until.clear()
+        with self.failing_dns(answer=[]):  # an answer without IPv4
+            with self.assertRaisesRegex(ConnectionError, "no IPv4 address"):
+                await relay.open_cloudflare(2)
+        self.assertTrue(relay.blocked(("cf", "gone.example.org")))
 
     @staticmethod
     async def close_server(server):

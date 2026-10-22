@@ -108,6 +108,11 @@ SHORT_SESSION = 10.0
 CF_REFRESH_INTERVAL = 6 * 3600
 # Linux SO_MARK; Python names it from 3.7 on Linux only.
 SO_MARK = getattr(socket, "SO_MARK", 36)
+# getaddrinfo errors that mean the name has no IPv4 address; the others
+# (EAI_AGAIN, EAI_FAIL ...) mean that DNS did not answer.
+DNS_NO_NAME = frozenset(
+    getattr(socket, name) for name in ("EAI_NONAME", "EAI_NODATA", "EAI_ADDRFAMILY") if hasattr(socket, name)
+)
 
 # The default Cloudflare domains of tg-ws-proxy, encoded as in its
 # proxy/config.py, and the list it refreshes them from.
@@ -586,16 +591,26 @@ class Relay:
         Cloudflare several addresses race (see IP_ATTEMPTS).
         """
         loop = asyncio.get_running_loop()
+        dns_error = f"{host}: nothing to try"
         try:
             infos = await asyncio.wait_for(
                 loop.getaddrinfo(address, self.ws_port, family=socket.AF_INET, type=socket.SOCK_STREAM),
                 self.connect_timeout,
             )
+        except (OSError, asyncio.TimeoutError) as error:
+            # Only a definite "no such name" blames the domain. DNS that is
+            # down or slow (EAI_AGAIN, EAI_FAIL, a timeout) does not, and for
+            # Cloudflare the addresses known to work need no DNS at all.
+            if isinstance(error, socket.gaierror) and error.errno in DNS_NO_NAME:
+                raise DomainError(f"{host}: DNS {describe(error)}") from None
+            resolved, dns_error = [], f"{host}: DNS {describe(error)}"
+        else:
             resolved = list(dict.fromkeys(info[4][0] for info in infos))
             if not resolved:
-                raise OSError("no IPv4 address")
-        except (OSError, asyncio.TimeoutError) as error:
-            raise DomainError(f"{host}: DNS {describe(error)}") from None
+                raise DomainError(f"{host}: DNS no IPv4 address")
+        candidates = self.ip_candidates(resolved, cloudflare, rotate)
+        if not candidates:
+            raise ConnectionError(dns_error)
         legacy_tls = self.use_tls and not hasattr(asyncio.StreamWriter, "start_tls")
 
         def tcp_attempt(ip):
@@ -617,7 +632,7 @@ class Relay:
             return attempt
 
         ip, started, reader, writer = await race(
-            [tcp_attempt(ip) for ip in self.ip_candidates(resolved, cloudflare, rotate)],
+            [tcp_attempt(ip) for ip in candidates],
             IP_STAGGER, lambda result: result[3].close(),
         )
         substituted = cloudflare and ip not in resolved
