@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import socket
 import subprocess
 import sys
 import tempfile
@@ -51,31 +52,103 @@ def write_file(base: Path, logical: str, content: str) -> Path:
     return path
 
 
-HEALTHY_ROUTING = {
-    "routing": {
-        "rules": [
-            {"outboundTag": "discord-direct"},
-            {"outboundTag": "youtube-direct"},
-            "not-a-dict-is-ignored",
-        ]
-    }
-}
+VOICE_RULE_PORTS = "3478-3481,5349,19294-19344,50000-50100"
 
 
-def build_healthy_tree(base: Path, module) -> None:
-    write_file(base, module.NFQWS_CONFIG_LOGICAL, "# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=direct.\n--filter-tcp=443\n--filter-l7=stun,discord\n")
+def engine_rules(tags, voice_ports=VOICE_RULE_PORTS):
+    """Xray rules as patch_xray writes them, for a set of -direct tags."""
+    rules = []
+    if "discord-direct" in tags:
+        rules.append({"type": "field", "outboundTag": "discord-direct", "domain": ["domain:discord.com"]})
+        rules.append({"type": "field", "outboundTag": "discord-direct", "network": "udp", "port": voice_ports})
+    if "youtube-direct" in tags:
+        rules.append({"type": "field", "outboundTag": "youtube-direct", "domain": ["domain:youtube.com"]})
+    if "telegram-ws" in tags:
+        rules.append({"ruleTag": "kdn-telegram-domain", "outboundTag": "telegram-direct", "domain": ["x"]})
+        rules.append({"ruleTag": "kdn-telegram-ip", "outboundTag": "telegram-ws", "network": "tcp"})
+    elif "telegram-direct" in tags:
+        rules.append({"ruleTag": "kdn-telegram-domain", "outboundTag": "telegram-direct", "domain": ["x"]})
+        rules.append({"ruleTag": "kdn-telegram-ip", "outboundTag": "telegram-direct", "ip": ["y"]})
+    return rules
+
+
+HEALTHY_ROUTING = {"routing": {"rules": engine_rules({"discord-direct", "youtube-direct"}) + ["not-a-dict-is-ignored"]}}
+HEALTHY_OUTBOUNDS = {"outbounds": [
+    {"tag": "vless-reality", "protocol": "vless", "streamSettings": {"sockopt": {"dialerProxy": "x"}}},
+    {"tag": "discord-direct", "protocol": "freedom", "settings": {}},
+    {"tag": "youtube-direct", "protocol": "freedom", "settings": {}, "streamSettings": {"sockopt": {"mark": 255}}},
+]}
+HEALTHY_CONF = """\
+# BEGIN keenetic-discord-nfqws2
+# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=direct.
+# Discord UDP: strategy=flowseal, range=narrow.
+NFQWS_ARGS_UDP="--filter-udp=19294-19344,50000-50100
+--filter-l7=stun,discord
+--payload=stun,discord_ip_discovery
+--lua-desync=fake:blob=discord_udp:repeats=6"
+NFQWS_ARGS="--filter-tcp=443 --filter-l7=tls --lua-desync=multisplit:pos=1"
+NFQWS_EXTRA_ARGS="--hostlist=/opt/etc/nfqws2/lists/user.list"
+TCP_PORTS=443
+UDP_PORTS=19294:19344,50000:50100
+IPV6_ENABLED=0
+ISP_INTERFACE="eth3"
+# END keenetic-discord-nfqws2
+"""
+# The 3.1.0/3.1.1 incident: YouTube=zapret and its QUIC profile, but UDP_PORTS
+# (and the live NFQUEUE rule) hold only the Discord Voice ports.
+INCIDENT_CONF = HEALTHY_CONF.replace("YouTube=direct", "YouTube=zapret").replace(
+    "UDP_PORTS=19294:19344,50000:50100", "UDP_PORTS={udp}"
+).replace(
+    'NFQWS_ARGS="',
+    'NFQWS_ARGS_CUSTOM="--filter-tcp=443 --filter-l7=tls --hostlist=/opt/etc/nfqws2/lists/youtube.list\n'
+    "--lua-desync=multisplit:pos=1 --new\n"
+    "--filter-udp=443 --filter-l7=quic --hostlist=/opt/etc/nfqws2/lists/youtube.list\n"
+    '--payload=quic_initial --lua-desync=fake:blob=youtube_quic:repeats=11"\nNFQWS_ARGS="',
+)
+
+
+def iptables_save(tcp="443", udp="19294:19344,50000:50100", counters=True, jumps=1):
+    """iptables-save -c -t mangle as the nfqws2-keenetic init builds it."""
+    prefix = "[12:3456] " if counters else ""
+    nfqueue = "-j NFQUEUE --queue-num 300 --queue-bypass"
+    mark = "-m mark ! --mark 0x40000000/0x40000000"
+    lines = ["*mangle"]
+    lines += [f"{prefix}-A POSTROUTING -j nfqws_post"] * jumps + [f"{prefix}-A PREROUTING -j nfqws_pre"] * jumps
+    lines += [
+        f"{prefix}-A nfqws_post -o eth3 -p udp {mark} -m multiport --dports {udp} -m connbytes --connbytes 1:15 "
+        f"--connbytes-mode packets --connbytes-dir original {nfqueue}",
+        f"{prefix}-A nfqws_post -o eth3 -p tcp {mark} -m multiport --dports {tcp} -m connbytes --connbytes 1:15 "
+        f"--connbytes-mode packets --connbytes-dir original {nfqueue}",
+        f"{prefix}-A nfqws_post -o eth3 -p tcp {mark} -m multiport --dports {tcp} -m tcp --tcp-flags FIN FIN {nfqueue}",
+        f"{prefix}-A nfqws_pre -i eth3 -m mark --mark 0x40000000/0x40000000 -j RETURN",
+        f"{prefix}-A nfqws_pre -i eth3 -p udp {mark} -m multiport --sports {udp} -m connbytes --connbytes 1:15 "
+        f"--connbytes-mode packets --connbytes-dir reply {nfqueue}",
+        f"{prefix}-A nfqws_pre -i eth3 -p tcp {mark} -m multiport --sports {tcp} -m connbytes --connbytes 1:15 "
+        f"--connbytes-mode packets --connbytes-dir reply {nfqueue}",
+        "COMMIT",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def build_healthy_tree(base: Path, module, conf: str = HEALTHY_CONF) -> None:
+    write_file(base, module.NFQWS_CONFIG_LOGICAL, conf)
     write_file(base, module.DISCORD_LIST_LOGICAL, "# comment\ndiscord.com\ndiscord.gg\n")
     write_file(base, module.YOUTUBE_LIST_LOGICAL, "# only a comment\n")
-    write_file(base, module.XRAY_ROUTING_LOGICAL, json.dumps(HEALTHY_ROUTING))
+    write_file(base, module.XRAY_CONFIG_DIR_LOGICAL + "/05_routing.json", json.dumps(HEALTHY_ROUTING))
+    write_file(base, module.XRAY_CONFIG_DIR_LOGICAL + "/04_outbounds.json", json.dumps(HEALTHY_OUTBOUNDS))
     write_file(base, "/proc/meminfo", "MemTotal:  262144 kB\nMemAvailable:  131072 kB\nBroken:\n")
     write_file(base, "/proc/sys/net/netfilter/nf_conntrack_count", "100\n")
     write_file(base, "/proc/sys/net/netfilter/nf_conntrack_max", "1000\n")
 
 
-def healthy_run(pids=None):
-    pids = {"xray": "101", "nfqws2": "202"} if pids is None else pids
+ENGINE_WITHOUT_CHECK = "ERROR: unknown argument: --check-config\nUsage: sh apply-discord-nfqws2.sh [options]"
 
-    def fake_run(command, timeout):
+
+def healthy_run(pids=None, iptables=None, engine_output=ENGINE_WITHOUT_CHECK, ipv6_route="", curl=None):
+    pids = {"xray": "101", "nfqws2": "202"} if pids is None else pids
+    iptables = iptables_save() if iptables is None else iptables
+
+    def fake_run(command, timeout, extra_env=None):
         name = Path(command[0]).name
         if name == "pidof":
             value = pids.get(command[1])
@@ -83,9 +156,17 @@ def healthy_run(pids=None):
         if name == "xkeen":
             return {"ok": True, "code": 0, "output": "ok"}
         if name == "iptables-save":
-            return {"ok": True, "code": 0, "output": "-A POSTROUTING -j NFQUEUE --queue-num 300 --queue-bypass"}
+            return {"ok": True, "code": 0, "output": iptables}
         if name == "ip":
+            if command[1] == "-6":
+                return {"ok": True, "code": 0, "output": ipv6_route}
             return {"ok": True, "code": 0, "output": "default via 192.0.2.1 dev eth3"}
+        if name == "sh" and command[-1] == "--check-config":
+            return {"ok": False, "code": 2, "output": engine_output}
+        if name == "curl":
+            if curl is not None:
+                return curl(command)
+            return {"ok": True, "code": 0, "output": "__XKSNI__200"}
         raise AssertionError(f"unexpected command {command}")
 
     return fake_run
@@ -184,7 +265,7 @@ class XrayUpgradeTests(DiagnosticsUnitBase):
 class RouteConsistencyTests(DiagnosticsUnitBase):
     def test_vless_mode_does_not_require_direct_tags(self):
         config = "# Active routes: Discord=vless, YouTube=vless."
-        checks = self.module.route_consistency(config, set(), "")
+        checks = self.module.route_consistency(config, engine_rules(set()), "")
         self.assertEqual([c["status"] for c in checks], ["ok", "ok", "ok"])
         self.assertEqual(
             [c["name"] for c in checks],
@@ -199,16 +280,16 @@ class RouteConsistencyTests(DiagnosticsUnitBase):
             "--filter-l7=stun,discord"
         )
         tags = {"discord-direct", "youtube-direct"}
-        checks = self.module.route_consistency(config, tags, "discord.com\n")
+        checks = self.module.route_consistency(config, engine_rules(tags), "discord.com\n")
         self.assertEqual([c["status"] for c in checks], ["ok", "ok", "ok"])
         self.assertEqual(checks[1]["detail"], "route=zapret, nfqws=on")
 
         # Whitespace-only Discord list means nfqws is not active for Discord TCP.
-        checks = self.module.route_consistency(config, tags, "  \n")
+        checks = self.module.route_consistency(config, engine_rules(tags), "  \n")
         self.assertEqual([c["status"] for c in checks], ["ok", "error", "ok"])
 
     def test_unknown_routes_are_errors(self):
-        checks = self.module.route_consistency("garbage", {"discord-direct", "youtube-direct"}, "")
+        checks = self.module.route_consistency("garbage", engine_rules({"discord-direct", "youtube-direct"}), "")
         self.assertEqual([c["status"] for c in checks], ["error", "error", "error", "error"])
         self.assertEqual(checks[0]["detail"], "route=unknown, nfqws=off")
 
@@ -219,7 +300,7 @@ class TelegramRouteTests(DiagnosticsUnitBase):
 
     def telegram_check(self, route, tags, profile=False):
         config = self.HEADER.format(route) + (self.PROFILE if profile else "")
-        checks = self.module.route_consistency(config, tags, "")
+        checks = self.module.route_consistency(config, engine_rules(tags), "")
         return [check for check in checks if check["name"] == "Telegram route"]
 
     def test_header_with_telegram_is_parsed(self):
@@ -266,7 +347,7 @@ class TelegramRouteTests(DiagnosticsUnitBase):
     def test_ws_route_must_not_keep_the_mtproto_ipset(self):
         config = (self.HEADER.format("ws") + self.PROFILE
                   + "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list\n")
-        [check] = [c for c in self.module.route_consistency(config, {"telegram-direct", "telegram-ws"}, "")
+        [check] = [c for c in self.module.route_consistency(config, engine_rules({"telegram-direct", "telegram-ws"}), "")
                    if c["name"] == "Telegram route"]
         self.assertEqual(check["status"], "error")
 
@@ -588,47 +669,62 @@ class ProbeTests(DiagnosticsUnitBase):
         self.assertEqual(self.module.classify_dpi(0, None, "", 6), "fail")
 
 
+HEALTHY_NAMES = [
+    "Xray",
+    "nfqws2",
+    "Управляемые маршруты",
+    "Discord hostlist",
+    "YouTube hostlist",
+    "Xray routing",
+    "Xray outbounds",
+    "Xray 26.10+ совместимость",
+    "YouTube route",
+    "Discord TCP route",
+    "Discord Voice route",
+    "nfqws2: порты профилей в очереди",
+    "nfqws2: порты без профиля",
+    "Xray config test",
+    "NFQUEUE: порты",
+    "NFQUEUE: переходы",
+    "NFQUEUE: счётчики",
+    "IPv4 WAN route",
+    "IPv6 и nfqws2",
+    "DNS discord.com",
+    "DNS www.youtube.com",
+    "SNI/IP discord.com (с роутера)",
+    "SNI/IP www.youtube.com (с роутера)",
+    "Свободное место /opt",
+    "Доступная память",
+    "Conntrack",
+    "Project lock",
+    "Другие DPI bypass",
+]
+
+
 class RunHealthTests(DiagnosticsUnitBase):
-    def run_health(self, fake_run, resolve=(True, "1.1.1.1"), disk=None):
+    def run_health(self, fake_run, resolve=(True, "1.1.1.1"), disk=None, doh=None, probe=None):
         disk = disk or SimpleNamespace(total=1000 * 1024 * 1024, used=0, free=500 * 1024 * 1024)
         disk_kwargs = {"side_effect": disk} if isinstance(disk, Exception) else {"return_value": disk}
+        doh = doh or (lambda host, _name, _ip: ["1.1.1.1"])
         writer = RecordingWriter()
         with mock.patch.object(self.module, "TEST_ROOT", str(self.tmp)), \
                 mock.patch.object(self.module, "run", side_effect=fake_run), \
                 mock.patch.object(self.module, "resolve_public", return_value=resolve), \
+                mock.patch.object(self.module, "doh_resolve", side_effect=doh), \
+                mock.patch.object(self.module, "QUIC_PROBE_PATH", probe or self.tmp / "missing-quic_probe.py"), \
                 mock.patch.object(self.module.shutil, "disk_usage", **disk_kwargs) as disk_usage:
             checks = self.module.run_health(writer)
         disk_usage.assert_called_once_with(self.tmp / "opt")
         return checks, writer
 
+    def by_name(self, *args, **kwargs):
+        checks, _writer = self.run_health(*args, **kwargs)
+        return {check["name"]: check for check in checks}
+
     def test_healthy_fixture_tree_is_all_ok(self):
         build_healthy_tree(self.tmp, self.module)
         checks, writer = self.run_health(healthy_run())
-        self.assertEqual(
-            [check["name"] for check in checks],
-            [
-                "Xray",
-                "nfqws2",
-                "Управляемые маршруты",
-                "Discord hostlist",
-                "YouTube hostlist",
-                "Xray routing",
-                "Xray 26.10+ совместимость",
-                "YouTube route",
-                "Discord TCP route",
-                "Discord Voice route",
-                "Xray config test",
-                "NFQUEUE",
-                "IPv4 WAN route",
-                "DNS discord.com",
-                "DNS www.youtube.com",
-                "Свободное место /opt",
-                "Доступная память",
-                "Conntrack",
-                "Project lock",
-                "Другие DPI bypass",
-            ],
-        )
+        self.assertEqual([check["name"] for check in checks], HEALTHY_NAMES)
         bad = [check for check in checks if check["status"] != "ok"]
         self.assertEqual(bad, [])
         by_name = {check["name"]: check["detail"] for check in checks}
@@ -639,21 +735,272 @@ class RunHealthTests(DiagnosticsUnitBase):
         )
         self.assertEqual(by_name["Discord hostlist"], "2 записей; route=zapret")
         self.assertEqual(by_name["YouTube hostlist"], "0 записей; route=не zapret")
+        self.assertEqual(by_name["Xray routing"], "05_routing.json: service-direct rules согласованы")
+        self.assertEqual(by_name["Xray outbounds"], "freedom без прокси: discord-direct, youtube-direct")
         self.assertEqual(by_name["Xray config test"], "Configuration OK")
+        self.assertIn("движок без --check-config", by_name["nfqws2: порты профилей в очереди"])
+        self.assertEqual(
+            by_name["NFQUEUE: счётчики"],
+            "исх. UDP 19294-19344,50000-50100: 12 пак.; исх. TCP 443: 24 пак.; "
+            "ответы UDP 19294-19344,50000-50100: 12 пак.; ответы TCP 443: 12 пак.",
+        )
+        self.assertEqual(by_name["DNS discord.com"], "роутер: 1.1.1.1; DoH Yandex: 1.1.1.1; DoH Google: 1.1.1.1")
         self.assertEqual(by_name["Доступная память"], "128 MiB")
         self.assertEqual(by_name["Conntrack"], "100/1000 (10.0%)")
         self.assertEqual(by_name["Свободное место /opt"], "500 MiB (50.0%)")
         self.assertEqual(len(writer.calls), len(checks))
-        self.assertEqual(writer.calls[0]["progress"], 15)
-        self.assertEqual(writer.calls[-1]["progress"], 95)
+        self.assertEqual(writer.calls[0]["progress"], 8)
+        self.assertEqual(writer.calls[-1]["progress"], 89)
+
+    def test_engine_check_config_lines_are_shown(self):
+        # D1: the engine's invariant check, one item per CHECK line.
+        build_healthy_tree(self.tmp, self.module)
+        engine = (
+            "CHECK|ok|port-coverage|all filter ports are queued\n"
+            "CHECK|error|listless-profile|profile 3 has --lua-desync without a hostlist\n"
+            "CHECK|warn|some-new-check|details\n"
+        )
+        seen = []
+        base = healthy_run(engine_output=engine)
+
+        def fake_run(command, timeout, extra_env=None):
+            if command[-1:] == ["--check-config"]:
+                seen.append((command, extra_env))
+            return base(command, timeout)
+
+        checks = self.by_name(fake_run)
+        [(command, extra_env)] = seen
+        self.assertEqual(command, ["/bin/sh", str(self.module.ENGINE_PATH), "--check-config"])
+        # The engine reads the same test tree.
+        self.assertEqual(extra_env, {"KD_TEST_ROOT": str(self.tmp)})
+        self.assertEqual(checks["nfqws2: порты профилей в очереди"]["detail"], "all filter ports are queued")
+        self.assertEqual(checks["nfqws2: профили без hostlist"]["status"], "error")
+        self.assertEqual(checks["nfqws2: some-new-check"]["status"], "warn")
+        self.assertNotIn("nfqws2: порты без профиля", checks)
+
+    def test_incident_youtube_quic_port_missing_is_an_error(self):
+        # D1/E17: the 3.1.0 output (UDP_PORTS without 443) with the incident's live rules.
+        build_healthy_tree(self.tmp, self.module, INCIDENT_CONF.replace("{udp}", "19294:19344,50000:50100"))
+        write_file(self.tmp, self.module.YOUTUBE_LIST_LOGICAL, "youtube.com\n")
+        checks = self.by_name(healthy_run())
+        self.assertEqual(checks["YouTube route"]["status"], "ok")
+        coverage = checks["nfqws2: порты профилей в очереди"]
+        self.assertEqual(coverage["status"], "error")
+        self.assertIn("UDP 443 нет в UDP_PORTS", coverage["detail"])
+        self.assertEqual(checks["YouTube QUIC (UDP 443)"]["status"], "error")
+        self.assertIn("443", checks["YouTube QUIC (UDP 443)"]["detail"])
+        # The live QUIC probe is offered for YouTube=zapret; missing probe file -> warning.
+        self.assertEqual(checks["YouTube QUIC с роутера"]["status"], "warn")
+        # The 3.1.1 output passes.
+        build_healthy_tree(self.tmp, self.module, INCIDENT_CONF.replace("{udp}", "443,19294:19344,50000:50100"))
+        checks = self.by_name(healthy_run(iptables=iptables_save(udp="443,19294:19344,50000:50100")))
+        self.assertEqual(checks["nfqws2: порты профилей в очереди"]["status"], "ok")
+        self.assertEqual(checks["YouTube QUIC (UDP 443)"]["status"], "ok")
+        self.assertEqual(checks["NFQUEUE: порты"]["status"], "ok")
+
+    def test_stale_nfqueue_rules_are_an_error(self):
+        # D1: the config has 443, the live rules do not (nfqws2 not restarted).
+        build_healthy_tree(self.tmp, self.module, INCIDENT_CONF.replace("{udp}", "443,19294:19344,50000:50100"))
+        write_file(self.tmp, self.module.YOUTUBE_LIST_LOGICAL, "youtube.com\n")
+        checks = self.by_name(healthy_run(iptables=iptables_save(udp="19294:19344,50000:50100")))
+        self.assertEqual(checks["nfqws2: порты профилей в очереди"]["status"], "ok")
+        self.assertEqual(checks["NFQUEUE: порты"]["status"], "error")
+        self.assertIn("nfqws_post UDP без 443", checks["NFQUEUE: порты"]["detail"])
+        self.assertIn("nfqws_pre UDP без 443", checks["NFQUEUE: порты"]["detail"])
+
+    def test_nfqueue_jumps_must_exist_exactly_once(self):
+        build_healthy_tree(self.tmp, self.module)
+        for jumps, status in ((0, "error"), (2, "warn"), (1, "ok")):
+            with self.subTest(jumps=jumps):
+                checks = self.by_name(healthy_run(iptables=iptables_save(jumps=jumps)))
+                self.assertEqual(checks["NFQUEUE: переходы"]["status"], status)
+        checks = self.by_name(healthy_run(iptables=iptables_save(counters=False)))
+        self.assertIn("UDP 19294-19344,50000-50100: ? пак.", checks["NFQUEUE: счётчики"]["detail"])
+
+    def test_ipv6_default_route_with_ipv6_off_is_a_warning(self):
+        build_healthy_tree(self.tmp, self.module)
+        checks = self.by_name(healthy_run(ipv6_route="default via fe80::1 dev eth3 proto ra metric 1024"))
+        self.assertEqual(checks["IPv6 и nfqws2"]["status"], "warn")
+        self.assertIn("мимо nfqws2", checks["IPv6 и nfqws2"]["detail"])
+        # A default route through another interface (not the WAN of nfqws2) is not.
+        checks = self.by_name(healthy_run(ipv6_route="default via fe80::1 dev br0"))
+        self.assertEqual(checks["IPv6 и nfqws2"]["status"], "ok")
+        # With IPv6 on, the ip6tables rules are checked as well.
+        build_healthy_tree(self.tmp, self.module, HEALTHY_CONF.replace("IPV6_ENABLED=0", "IPV6_ENABLED=1"))
+        base = healthy_run(ipv6_route="default via fe80::1 dev eth3")
+        tools = []
+
+        def fake_run(command, timeout, extra_env=None):
+            if Path(command[0]).name == "ip6tables-save":
+                tools.append(command)
+                return {"ok": True, "code": 0, "output": iptables_save(udp="19294:19344")}
+            return base(command, timeout)
+
+        checks = self.by_name(fake_run)
+        self.assertEqual(checks["IPv6 и nfqws2"]["status"], "ok")
+        self.assertEqual(tools[0][1:], ["-c", "-t", "mangle"])
+        self.assertEqual(checks["NFQUEUE IPv6: порты"]["status"], "error")
+        self.assertEqual(checks["NFQUEUE: порты"]["status"], "ok")
+
+    def test_routing_file_is_the_last_one_with_a_routing_object(self):
+        # D6: a later routing file replaces 05_routing.json in Xray.
+        build_healthy_tree(self.tmp, self.module)
+        write_file(
+            self.tmp, self.module.XRAY_CONFIG_DIR_LOGICAL + "/06_routing_user.json",
+            json.dumps({"routing": {"rules": [{"outboundTag": "vless-reality"}]}}),
+        )
+        write_file(self.tmp, self.module.XRAY_CONFIG_DIR_LOGICAL + "/07_policy.json", '{"policy": {}}')
+        checks = self.by_name(healthy_run())
+        self.assertEqual(checks["Xray routing"]["status"], "error")
+        self.assertTrue(checks["Xray routing"]["detail"].startswith("06_routing_user.json: missing: "))
+        self.assertEqual(checks["Discord TCP route"]["status"], "error")
+        self.assertEqual(checks["Discord Voice route"]["status"], "error")
+
+    def test_project_outbounds_are_checked(self):
+        # D7: a missing or proxied -direct outbound sends the service through the VPN.
+        build_healthy_tree(self.tmp, self.module)
+        outbounds = [item for item in HEALTHY_OUTBOUNDS["outbounds"] if item["tag"] != "youtube-direct"]
+        write_file(self.tmp, self.module.XRAY_CONFIG_DIR_LOGICAL + "/04_outbounds.json", json.dumps({"outbounds": outbounds}))
+        checks = self.by_name(healthy_run())
+        self.assertEqual(checks["Xray outbounds"]["status"], "error")
+        self.assertIn("youtube-direct: outbound не найден", checks["Xray outbounds"]["detail"])
+        proxied = outbounds + [{"tag": "youtube-direct", "protocol": "freedom",
+                                "streamSettings": {"sockopt": {"dialerProxy": "vless-reality"}}}]
+        write_file(self.tmp, self.module.XRAY_CONFIG_DIR_LOGICAL + "/04_outbounds.json", json.dumps({"outbounds": proxied}))
+        checks = self.by_name(healthy_run())
+        self.assertEqual(checks["Xray outbounds"]["status"], "error")
+        self.assertIn("dialerProxy=vless-reality", checks["Xray outbounds"]["detail"])
+        # Any rule that points to an undefined tag is a warning.
+        routing = {"routing": {"rules": HEALTHY_ROUTING["routing"]["rules"] + [{"outboundTag": "typo"}]}}
+        write_file(self.tmp, self.module.XRAY_CONFIG_DIR_LOGICAL + "/05_routing.json", json.dumps(routing))
+        write_file(self.tmp, self.module.XRAY_CONFIG_DIR_LOGICAL + "/04_outbounds.json", json.dumps(HEALTHY_OUTBOUNDS))
+        checks = self.by_name(healthy_run())
+        self.assertEqual(checks["Xray outbounds"]["status"], "warn")
+        self.assertIn("typo", checks["Xray outbounds"]["detail"])
+
+    def test_telegram_ws_relay_is_checked(self):
+        # D9: the relay must be our process and accept connections on its port.
+        conf = HEALTHY_CONF.replace("YouTube=direct.", "YouTube=direct, Telegram=ws.").replace(
+            'NFQWS_ARGS="', 'NFQWS_ARGS_CUSTOM="--filter-tcp=443 --hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list"\nNFQWS_ARGS="'
+        )
+        build_healthy_tree(self.tmp, self.module, conf)
+        routing = {"routing": {"rules": engine_rules({"discord-direct", "youtube-direct", "telegram-ws"})}}
+        write_file(self.tmp, self.module.XRAY_CONFIG_DIR_LOGICAL + "/05_routing.json", json.dumps(routing))
+        checks = self.by_name(healthy_run())
+        self.assertEqual(checks["Telegram route"]["status"], "ok")
+        self.assertEqual(checks["Telegram WS relay"]["status"], "error")
+        self.assertIn("нет pid-файла", checks["Telegram WS relay"]["detail"])
+        pidfile = write_file(self.tmp, self.module.TELEGRAM_WS_PIDFILE_LOGICAL, f"{os.getpid()}\n")
+        checks = self.by_name(healthy_run())
+        self.assertIn("не telegram_ws_relay.py", checks["Telegram WS relay"]["detail"])
+
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        self.addCleanup(listener.close)
+        relay = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "telegram_ws_relay.py"])
+        self.addCleanup(relay.wait)
+        self.addCleanup(relay.kill)
+        pidfile.write_text(f"{relay.pid}\n", encoding="ascii")
+        with mock.patch.object(self.module, "TELEGRAM_WS_PORT", listener.getsockname()[1]):
+            checks = self.by_name(healthy_run())
+            self.assertEqual(checks["Telegram WS relay"]["status"], "ok", checks["Telegram WS relay"])
+            listener.close()
+            checks = self.by_name(healthy_run())
+        self.assertEqual(checks["Telegram WS relay"]["status"], "error")
+        self.assertIn("не принимает соединения", checks["Telegram WS relay"]["detail"])
+
+    def test_live_quic_probe_from_the_router(self):
+        build_healthy_tree(self.tmp, self.module, INCIDENT_CONF.replace("{udp}", "443,19294:19344,50000:50100"))
+        write_file(self.tmp, self.module.YOUTUBE_LIST_LOGICAL, "youtube.com\n")
+        probe = write_file(self.tmp, "/project/tools/router/quic_probe.py", "# stub\n")
+        base = healthy_run(iptables=iptables_save(udp="443,19294:19344,50000:50100"))
+        answers = {}
+
+        def fake_run(command, timeout, extra_env=None):
+            if command[1:2] == [str(probe)]:
+                answers["command"] = command
+                status = answers["status"]
+                return {"ok": status == "ok", "code": 0 if status == "ok" else 1,
+                        "output": f"EVENT|QUIC|health|www.youtube.com|142.250.74.110|{status}|41\n"}
+            return base(command, timeout)
+
+        for status, expected in (("ok", "ok"), ("no-reply", "error"), ("dns-error", "warn")):
+            answers["status"] = status
+            with self.subTest(status=status):
+                checks, _writer = self.run_health(fake_run, probe=probe)
+                check = {item["name"]: item for item in checks}["YouTube QUIC с роутера"]
+                self.assertEqual(check["status"], expected)
+                self.assertIn("www.youtube.com", check["detail"])
+        self.assertEqual(answers["command"][2:], ["www.youtube.com", "--timeout", "2", "--tries", "2", "--label", "health"])
+        self.assertIn("с самого роутера", self.module.quic_live_check(lambda *_: {"output": "EVENT|QUIC|h|www.youtube.com|1.2.3.4|ok|5"}, probe)["detail"])
+
+    def test_dns_check_compares_with_doh(self):
+        build_healthy_tree(self.tmp, self.module)
+        # The router's resolver fails or lies while DoH answers: DNS is the culprit.
+        checks = self.by_name(healthy_run(), resolve=(False, "private/unexpected DNS answer: 10.0.0.1"))
+        self.assertEqual(checks["DNS discord.com"]["status"], "error")
+        self.assertIn("подмена или блокировка DNS", checks["DNS discord.com"]["detail"])
+        # Different addresses are only a note: CDNs answer by location.
+        checks = self.by_name(healthy_run(), doh=lambda host, name, ip: ["162.159.128.233"])
+        self.assertEqual(checks["DNS discord.com"]["status"], "ok")
+        self.assertIn("не совпадают с DoH", checks["DNS discord.com"]["detail"])
+
+        def unreachable(host, name, ip):
+            raise OSError("timed out")
+
+        checks = self.by_name(healthy_run(), doh=unreachable)
+        self.assertEqual(checks["DNS discord.com"]["status"], "ok")
+        self.assertIn("DoH недоступен", checks["DNS discord.com"]["detail"])
+
+    def test_sni_block_is_told_from_ip_block(self):
+        build_healthy_tree(self.tmp, self.module)
+        calls = []
+
+        def curl(answers):
+            def answer(command):
+                calls.append(command)
+                swapped = "--connect-to" in command
+                ok = answers[swapped]
+                return {"ok": ok, "code": 0 if ok else 28, "output": "__XKSNI__200" if ok else "timeout"}
+            return answer
+
+        checks = self.by_name(healthy_run(curl=curl({False: False, True: True})))
+        self.assertEqual(checks["SNI/IP discord.com (с роутера)"]["status"], "error")
+        self.assertIn("блокировка по SNI", checks["SNI/IP discord.com (с роутера)"]["detail"])
+        self.assertIn(["--connect-to", "ya.ru:443:discord.com:443"], [c[i:i + 2] for c in calls for i in range(len(c))])
+        checks = self.by_name(healthy_run(curl=curl({False: False, True: False})))
+        self.assertIn("блокировка по IP", checks["SNI/IP discord.com (с роутера)"]["detail"])
+        # Services routed through the VPN are not probed from the router.
+        build_healthy_tree(self.tmp, self.module, HEALTHY_CONF.replace("YouTube=direct", "YouTube=vless"))
+        checks = self.by_name(healthy_run())
+        self.assertNotIn("SNI/IP www.youtube.com (с роутера)", checks)
+
+    def test_rival_bypass_tools_on_the_router(self):
+        build_healthy_tree(self.tmp, self.module)
+        for pid, comm, cmdline in (
+            ("202", "nfqws2", b"/opt/usr/bin/nfqws2\0--qnum=300\0"),
+            ("300", "nfqws2", b"/opt/usr/bin/nfqws2\0--dry-run\0"),
+            ("301", "nfqws2", b"/opt/usr/bin/nfqws2\0--intercept=0\0"),
+            ("400", "byedpi", b"byedpi\0"),
+            ("401", "winws", b"winws\0"),
+        ):
+            write_file(self.tmp, f"/proc/{pid}/comm", comm + "\n")
+            (self.tmp / "proc" / pid / "cmdline").write_bytes(cmdline)
+        write_file(self.tmp, self.module.NFQWS_PIDFILE_LOGICAL, "202\n")
+        checks = self.by_name(healthy_run())
+        self.assertEqual(checks["Другие DPI bypass"]["status"], "warn")
+        self.assertEqual(checks["Другие DPI bypass"]["detail"], "byedpi")
+        write_file(self.tmp, "/proc/500/comm", "nfqws2\n")
+        (self.tmp / "proc" / "500" / "cmdline").write_bytes(b"/tmp/nfqws2\0--qnum=200\0")
+        checks = self.by_name(healthy_run())
+        self.assertEqual(checks["Другие DPI bypass"]["detail"], "byedpi, ещё один nfqws2 (не наш)")
 
     def test_empty_tree_reports_errors_and_warnings(self):
-        def failing_run(command, timeout):
-            name = Path(command[0]).name
-            if name == "pidof" and command[1] == "tpws":
-                return {"ok": True, "code": 0, "output": "77"}
+        def failing_run(command, timeout, extra_env=None):
             return {"ok": False, "code": 1, "output": ""}
 
+        write_file(self.tmp, "/proc/77/comm", "tpws\n")
         lock = write_file(self.tmp, self.module.PROJECT_LOCK_LOGICAL, "")
         checks, _writer = self.run_health(failing_run, resolve=(False, "DNS timeout (4s)"), disk=OSError("no disk"))
         by_name = {check["name"]: check for check in checks}
@@ -665,6 +1012,7 @@ class RunHealthTests(DiagnosticsUnitBase):
             "Discord hostlist": "warn",
             "YouTube hostlist": "warn",
             "Xray routing": "error",
+            "Xray outbounds": "ok",
             "YouTube route": "error",
             "Discord TCP route": "error",
             "Discord Voice route": "error",
@@ -672,6 +1020,7 @@ class RunHealthTests(DiagnosticsUnitBase):
             "Xray config test": "error",
             "NFQUEUE": "error",
             "IPv4 WAN route": "error",
+            "IPv6 и nfqws2": "ok",
             "DNS discord.com": "error",
             "DNS www.youtube.com": "error",
             "Свободное место /opt": "error",
@@ -683,7 +1032,7 @@ class RunHealthTests(DiagnosticsUnitBase):
         self.assertEqual({name: check["status"] for name, check in by_name.items()}, expected)
         self.assertEqual(by_name["Xray"]["detail"], "процесс не найден")
         self.assertEqual(by_name["IPv4 WAN route"]["detail"], "default route отсутствует")
-        self.assertEqual(by_name["Другие DPI bypass"]["detail"], "tpws")
+        self.assertEqual(by_name["Другие DPI bypass"]["detail"], "zapret (tpws)")
         self.assertIn(str(lock), by_name["Project lock"]["detail"])
         self.assertEqual(by_name["Свободное место /opt"]["detail"], "no disk")
 
@@ -692,7 +1041,10 @@ class RunHealthTests(DiagnosticsUnitBase):
         write_file(self.tmp, self.module.NFQWS_CONFIG_LOGICAL, "# Active routes: Discord=zapret, YouTube=zapret.\n")
         write_file(self.tmp, self.module.DISCORD_LIST_LOGICAL, "")
         (self.tmp / self.module.YOUTUBE_LIST_LOGICAL.lstrip("/")).unlink()
-        write_file(self.tmp, self.module.XRAY_ROUTING_LOGICAL, json.dumps({"routing": {"rules": [{"outboundTag": "youtube-direct"}]}}))
+        write_file(
+            self.tmp, self.module.XRAY_CONFIG_DIR_LOGICAL + "/05_routing.json",
+            json.dumps({"routing": {"rules": engine_rules({"youtube-direct"})}}),
+        )
         checks, _writer = self.run_health(healthy_run({"xray": "1 2", "nfqws2": "3"}))
         by_name = {check["name"]: check for check in checks}
         self.assertEqual(by_name["Xray"]["status"], "error")
@@ -700,7 +1052,7 @@ class RunHealthTests(DiagnosticsUnitBase):
         self.assertEqual(by_name["Discord hostlist"]["status"], "error")
         self.assertEqual(by_name["YouTube hostlist"]["status"], "error")
         self.assertEqual(by_name["Xray routing"]["status"], "error")
-        self.assertEqual(by_name["Xray routing"]["detail"], "missing: discord-direct")
+        self.assertEqual(by_name["Xray routing"]["detail"], "05_routing.json: missing: discord-direct")
         # YouTube nfqws hostlist flag is absent from the config, so zapret is inconsistent.
         self.assertEqual(by_name["YouTube route"]["status"], "error")
         self.assertEqual(by_name["Discord TCP route"]["status"], "error")
@@ -711,23 +1063,23 @@ class RunHealthTests(DiagnosticsUnitBase):
         build_healthy_tree(self.tmp, self.module)
         write_file(
             self.tmp,
-            "/opt/etc/xray/configs/04_outbounds.json",
+            "/opt/etc/xray/configs/03_outbounds.json",
             json.dumps({"outbounds": [{"tag": "a", "protocol": "vless", "proxySettings": {"tag": "b"}}]}),
         )
         checks, _writer = self.run_health(healthy_run())
         by_name = {check["name"]: check for check in checks}
         self.assertEqual(by_name["Xray 26.10+ совместимость"]["status"], "error")
-        self.assertIn("04_outbounds.json: proxySettings", by_name["Xray 26.10+ совместимость"]["detail"])
+        self.assertIn("03_outbounds.json: proxySettings", by_name["Xray 26.10+ совместимость"]["detail"])
 
     def test_vless_routes_need_no_direct_tags(self):
         build_healthy_tree(self.tmp, self.module)
         write_file(self.tmp, self.module.NFQWS_CONFIG_LOGICAL, "# Active routes: Discord=vless, YouTube=vless.\n")
         write_file(self.tmp, self.module.DISCORD_LIST_LOGICAL, "")
-        write_file(self.tmp, self.module.XRAY_ROUTING_LOGICAL, json.dumps({"routing": {}}))
+        write_file(self.tmp, self.module.XRAY_CONFIG_DIR_LOGICAL + "/05_routing.json", json.dumps({"routing": {}}))
         checks, _writer = self.run_health(healthy_run())
         by_name = {check["name"]: check for check in checks}
         self.assertEqual(by_name["Xray routing"]["status"], "ok")
-        self.assertEqual(by_name["Xray routing"]["detail"], "service-direct rules согласованы")
+        self.assertEqual(by_name["Xray routing"]["detail"], "05_routing.json: service-direct rules согласованы")
         self.assertEqual(by_name["YouTube route"]["status"], "ok")
         self.assertEqual(by_name["Discord TCP route"]["status"], "ok")
         self.assertEqual(by_name["Discord Voice route"]["status"], "ok")
@@ -740,7 +1092,7 @@ class RunHealthTests(DiagnosticsUnitBase):
             "# Active routes: Discord=vless, YouTube=vless, Telegram=zapret.\n",
         )
         write_file(self.tmp, self.module.DISCORD_LIST_LOGICAL, "")
-        write_file(self.tmp, self.module.XRAY_ROUTING_LOGICAL, json.dumps({"routing": {}}))
+        write_file(self.tmp, self.module.XRAY_CONFIG_DIR_LOGICAL + "/05_routing.json", json.dumps({"routing": {}}))
         checks, _writer = self.run_health(healthy_run())
         by_name = {check["name"]: check for check in checks}
         self.assertEqual(by_name["Xray routing"]["status"], "ok")
@@ -750,7 +1102,7 @@ class RunHealthTests(DiagnosticsUnitBase):
 
     def test_invalid_routing_json_is_reported(self):
         build_healthy_tree(self.tmp, self.module)
-        write_file(self.tmp, self.module.XRAY_ROUTING_LOGICAL, "{not json")
+        write_file(self.tmp, self.module.XRAY_CONFIG_DIR_LOGICAL + "/05_routing.json", "{not json")
         checks, _writer = self.run_health(healthy_run())
         by_name = {check["name"]: check for check in checks}
         self.assertEqual(by_name["Xray routing"]["status"], "error")
@@ -761,7 +1113,7 @@ class RunHealthTests(DiagnosticsUnitBase):
         build_healthy_tree(self.tmp, self.module)
         base = healthy_run()
 
-        def fake_run(command, timeout):
+        def fake_run(command, timeout, extra_env=None):
             if Path(command[0]).name == "xkeen":
                 return {"ok": False, "code": 1, "output": "x" * 600 + "END"}
             return base(command, timeout)
@@ -857,12 +1209,13 @@ class MainTests(DiagnosticsUnitBase):
         with mock.patch.object(self.module, "TEST_ROOT", str(self.tmp)), \
                 mock.patch.object(self.module, "run", side_effect=healthy_run()), \
                 mock.patch.object(self.module, "resolve_public", return_value=(True, "1.1.1.1")), \
+                mock.patch.object(self.module, "doh_resolve", return_value=["1.1.1.1"]), \
                 mock.patch.object(self.module.shutil, "disk_usage", return_value=disk):
             self.assertEqual(self.module.main(["--kind", "health", "--job-id", self.JOB_ID]), 0)
         state = self.state()
         self.assertEqual(state["status"], "completed")
-        self.assertEqual(len(state["results"]), 20)
-        self.assertEqual(state["summary"], {"ok": 20, "warn": 0, "error": 0, "unsupported": 0, "likely_blocked": 0})
+        self.assertEqual(len(state["results"]), 28)
+        self.assertEqual(state["summary"], {"ok": 28, "warn": 0, "error": 0, "unsupported": 0, "likely_blocked": 0})
         if os.name != "nt":
             self.assertEqual(self.state_path.stat().st_mode & 0o777, 0o600)
 

@@ -22,6 +22,17 @@ def load_module():
     return module
 
 
+def engine_rules(tags):
+    """Xray rules as patch_xray writes them for Discord TCP+Voice and YouTube direct."""
+    rules = []
+    if "discord-direct" in tags:
+        rules.append({"outboundTag": "discord-direct", "domain": ["domain:discord.com"]})
+        rules.append({"outboundTag": "discord-direct", "network": "udp", "port": "3478-3481,5349,19294-19344,50000-50100"})
+    if "youtube-direct" in tags:
+        rules.append({"outboundTag": "youtube-direct", "domain": ["domain:youtube.com"]})
+    return rules
+
+
 class RouterDiagnosticsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -39,14 +50,14 @@ class RouterDiagnosticsTests(unittest.TestCase):
 
     def test_route_consistency_detects_leftover_zapret_in_direct_mode(self):
         text = "# Active routes: Discord=direct, YouTube=zapret.\n--hostlist=/opt/etc/nfqws2/lists/youtube.list"
-        tags = {"discord-direct", "youtube-direct"}
+        tags = engine_rules({"discord-direct", "youtube-direct"})
         checks = self.module.route_consistency(text, tags, "discord.com\n")
         by_name = {item["name"]: item["status"] for item in checks}
         self.assertEqual(by_name["Discord TCP route"], "error")
         self.assertEqual(by_name["Discord Voice route"], "ok")
         self.assertEqual(by_name["YouTube route"], "ok")
         self.assertTrue(all(item["status"] == "ok" for item in self.module.route_consistency(text, tags, "")))
-        checks = self.module.route_consistency(text, {"discord-direct"}, "")
+        checks = self.module.route_consistency(text, engine_rules({"discord-direct"}), "")
         self.assertEqual(checks[0]["status"], "error")
 
     def test_route_consistency_checks_discord_voice_separately(self):
@@ -54,17 +65,38 @@ class RouterDiagnosticsTests(unittest.TestCase):
             "# Active routes: DiscordTCP=vless, DiscordVoice=zapret, YouTube=vless.\n"
             "NFQWS_ARGS_UDP=\"--filter-udp=443 --filter-l7=stun,discord\""
         )
+        # Discord TCP via VPN: only the Voice UDP rule points to discord-direct.
+        voice_only = engine_rules({"discord-direct"})[1:]
         by_name = {
             item["name"]: item["status"]
-            for item in self.module.route_consistency(text, {"discord-direct"}, "")
+            for item in self.module.route_consistency(text, voice_only, "")
         }
         self.assertEqual(by_name["Discord TCP route"], "ok")
         self.assertEqual(by_name["Discord Voice route"], "ok")
         by_name = {
             item["name"]: item["status"]
-            for item in self.module.route_consistency(text, set(), "")
+            for item in self.module.route_consistency(text, [], "")
         }
         self.assertEqual(by_name["Discord Voice route"], "error")
+
+    def test_discord_tcp_domain_rule_does_not_route_voice(self):
+        # D5: like the engine's --status, Voice needs its own udp rule without domains.
+        text = (
+            "# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=vless.\n"
+            "NFQWS_ARGS_UDP=\"--filter-udp=19294-19344,50000-50100 --filter-l7=stun,discord\""
+        )
+        tcp_only = engine_rules({"discord-direct"})[:1]
+        by_name = {item["name"]: item for item in self.module.route_consistency(text, tcp_only, "discord.com\n")}
+        self.assertEqual(by_name["Discord TCP route"]["status"], "ok")
+        self.assertEqual(by_name["Discord Voice route"]["status"], "error")
+        self.assertEqual(by_name["Discord Voice route"]["detail"], "route=zapret, nfqws=on, Xray=vless")
+        narrow = [tcp_only[0], {"outboundTag": "discord-direct", "network": "udp", "port": "19294-19344"}]
+        by_name = {item["name"]: item for item in self.module.route_consistency(text, narrow, "discord.com\n")}
+        self.assertEqual(by_name["Discord Voice route"]["status"], "error")
+        self.assertIn("без портов 50000-50100", by_name["Discord Voice route"]["detail"])
+        full = engine_rules({"discord-direct"})
+        by_name = {item["name"]: item for item in self.module.route_consistency(text, full, "discord.com\n")}
+        self.assertEqual(by_name["Discord Voice route"]["status"], "ok")
 
     def test_dpi_suite_is_provider_diverse_and_bounded(self):
         self.assertEqual(len(self.module.DPI_TARGETS), 12)

@@ -46,12 +46,20 @@ function startServer() {
   });
 }
 
-async function setResponse(apiPath, body) {
+async function setMock(change) {
   const response = await fetch(`${BASE}/__mock/set`, {
     method: "POST",
-    body: JSON.stringify({ path: apiPath, body }),
+    body: JSON.stringify(change),
   });
   assert.equal(response.status, 200);
+}
+
+async function setResponse(apiPath, body) {
+  await setMock({ path: apiPath, body });
+}
+
+async function stats() {
+  return (await fetch(`${BASE}/__mock/stats`)).json();
 }
 
 async function openPanel(browser, errors) {
@@ -186,6 +194,93 @@ async function main() {
     assert.equal(await page.$eval("#startTuner", (button) => button.disabled), true);
     const modes = await page.$$eval(".mode", (buttons) => buttons.map((button) => button.disabled));
     assert.ok(modes.every(Boolean), `mode buttons must stay disabled: ${modes}`);
+    await page.close();
+    await setResponse("/api/tuner/status", { ok: true, status: "idle", active: false });
+
+    // B8/D8: a dead job's state (here voice_watch with active=false) never locks the page.
+    await setResponse("/api/tuner/status", { ok: true, status: "voice_watch", active: false, service: "discord-voice" });
+    page = await openPanel(browser, errors);
+    await page.waitForFunction(() => document.getElementById("tunerStatus").textContent.includes("голосовым"));
+    assert.equal(await page.$eval("#startTuner", (button) => button.disabled), false);
+    assert.equal(await page.$eval("#cancelTuner", (button) => button.disabled), true);
+    assert.ok((await page.$$eval(".mode", (buttons) => buttons.map((button) => button.disabled))).every((value) => !value));
+    await page.close();
+
+    // Tuner polling never overlaps: the next request waits for the previous answer.
+    await setResponse("/api/tuner/status", { ok: true, status: "running", active: true, service: "youtube" });
+    await setMock({ path: "/api/tuner/status", delay: 2.5 });
+    await setMock({ reset_stats: true });
+    page = await openPanel(browser, errors);
+    await page.waitForTimeout(7000);
+    const tunerStats = (await stats())["GET /api/tuner/status"];
+    assert.ok(tunerStats.count >= 2, `tuner polling stopped: ${JSON.stringify(tunerStats)}`);
+    assert.equal(tunerStats.max_in_flight, 1, `overlapping tuner polls: ${JSON.stringify(tunerStats)}`);
+    await page.close();
+    await setMock({ path: "/api/tuner/status", delay: 0 });
+    await setResponse("/api/tuner/status", { ok: true, status: "idle", active: false });
+
+    // D3: every successful nfqws2 change ends with the post-apply check (and fresh
+    // route badges); a failed change does not run it.
+    await setResponse("/api/checks/config", {
+      ok: true,
+      all_ok: false,
+      checks: [
+        { name: "Xray", ok: true, status: "ok", detail: "процесс запущен" },
+        { name: "nfqws2: порты профилей в очереди", ok: false, status: "error", detail: "профиль 2 (youtube.list): UDP 443 нет в UDP_PORTS" },
+        { name: "NFQUEUE: переходы", ok: true, status: "warn", detail: "POSTROUTING → nfqws_post: 2 раз(а)" },
+      ],
+    });
+    await setResponse("/api/tuner/status", {
+      ok: true, status: "found", active: false, service: "youtube", result_available: true,
+      found: { candidate_id: "aaaaaaaaaaaa", family: "fixture", source_name: "general.bat", args: ["--filter-tcp=443"] },
+    });
+    page = await openPanel(browser, errors);
+    const versionId = "20261020T100000Z-aaaaaaaaaaaa-applied-1";
+    const operations = [
+      ["applyImport", "/api/import/apply", () => {
+        selectedReport = { service: "youtube" };
+        validatedDescriptor = { service: "youtube", candidate_id: "aaaaaaaaaaaa" };
+        return applyImport();
+      }],
+      ["clearImport", "/api/import/clear/youtube", () => clearImport("youtube")],
+      ["rollbackImport", "/api/import/rollback", () => rollbackImport()],
+      ["applyVersion", `/api/profiles/apply/youtube/${versionId}`, (id) => applyVersion("youtube", id)],
+      ["applyTunerResult", "/api/tuner/apply", () => applyTunerResult()],
+    ];
+    for (const [name, apiPath, operation] of operations) {
+      for (const fails of [false, true]) {
+        await setMock(fails
+          ? { method: "POST", path: apiPath, status: 500, body: { ok: false, error: "engine failed" } }
+          : { method: "POST", path: apiPath, status: 200, body: { ok: true, output: "mock" } });
+        await page.evaluate(() => { const root = document.getElementById("postApplyStatus"); root.textContent = "—"; root.className = "hint"; });
+        const before = await stats();
+        await page.evaluate(operation, versionId);
+        const after = await stats();
+        const checksCalls = (after["GET /api/checks/config"] || { count: 0 }).count - (before["GET /api/checks/config"] || { count: 0 }).count;
+        const statusCalls = after["GET /api/status"].count - before["GET /api/status"].count;
+        assert.equal((after[`POST ${apiPath}`] || { count: 0 }).count - (before[`POST ${apiPath}`] || { count: 0 }).count, 1, name);
+        assert.ok(statusCalls >= 1, `${name}: route badges not refreshed`);
+        const text = await page.textContent("#postApplyStatus");
+        if (fails) {
+          assert.equal(checksCalls, 0, `${name}: post-checks after an error`);
+          assert.equal(text, "—", name);
+        } else {
+          assert.equal(checksCalls, 1, `${name}: no post-checks`);
+          assert.match(text, /^Проверка не пройдена:\n• nfqws2: порты профилей в очереди — профиль 2 \(youtube\.list\): UDP 443 нет в UDP_PORTS\nВнимание:\n• NFQUEUE: переходы/, name);
+          assert.equal(await page.$eval("#postApplyStatus", (root) => root.className), "bad");
+        }
+      }
+    }
+    // A check sent with the result is shown without another request.
+    await setMock({
+      method: "POST", path: "/api/import/rollback", status: 200,
+      body: { ok: true, output: "mock", health: { ok: true, all_ok: true, checks: [{ name: "Xray", ok: true, status: "ok", detail: "x" }] } },
+    });
+    const before = await stats();
+    await page.evaluate(() => rollbackImport());
+    const after = await stats();
+    assert.equal(after["GET /api/checks/config"].count, before["GET /api/checks/config"].count);
+    assert.equal(await page.textContent("#postApplyStatus"), "Конфиги и службы: OK");
     await page.close();
     await setResponse("/api/tuner/status", { ok: true, status: "idle", active: false });
 

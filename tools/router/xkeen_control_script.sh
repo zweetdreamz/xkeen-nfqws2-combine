@@ -40,6 +40,8 @@ ENGINE = PROJECT_DIR / "apply-discord-nfqws2.sh"
 SERVICE_SWITCH = PROJECT_DIR / "set-service-route.sh"
 AUTOTUNER = PROJECT_DIR / "tools" / "router" / "zapret_autotune_job.py"
 DIAGNOSTICS = PROJECT_DIR / "tools" / "router" / "xkeen_diagnostics.py"
+# Real QUIC Initial sender (autotune part); optional until it is installed.
+QUIC_PROBE = PROJECT_DIR / "tools" / "router" / "quic_probe.py"
 DISCORD_CACHE_HELPER = PROJECT_DIR / "tools" / "windows" / "reset-discord-cache.ps1"
 BROWSER_DIAGNOSTICS = PROJECT_DIR / "tools" / "router" / "browser-diagnostics.js"
 XKEEN = shutil.which("xkeen") or "/opt/sbin/xkeen"
@@ -47,7 +49,8 @@ IMPORTED_PROFILE_DIR = Path("/opt/etc/nfqws2/imported-profiles")
 PROFILE_VERSION_DIR = Path("/opt/etc/nfqws2/profile-versions")
 NFQWS_CONFIG = Path("/opt/etc/nfqws2/nfqws2.conf")
 DISCORD_LIST = Path("/opt/etc/nfqws2/lists/user.list")
-XRAY_ROUTING = Path("/opt/etc/xray/configs/05_routing.json")
+# Xray uses the last *.json file of the confdir that has a routing object.
+XRAY_CONFIG_DIR = Path("/opt/etc/xray/configs")
 IMPORT_ROLLBACK_POINTER = Path(
     "/opt/etc/keenetic-discord-nfqws2/latest-nfqws-import.ptr"
 )
@@ -56,6 +59,9 @@ TUNER_STATE = TUNER_JOB_DIR / "state.json"
 TUNER_RESULT = TUNER_JOB_DIR / "result-report.json"
 TUNER_VERDICT = TUNER_JOB_DIR / "verdict.txt"
 TUNER_PID = TUNER_JOB_DIR / "panel-launch.pid"
+# States the autotune job ends in. Any other recorded state with no live job
+# process means the job died; the page relies on "active" only.
+TERMINAL_TUNER_STATES = frozenset({"idle", "found", "none", "cancelled", "error"})
 DIAGNOSTIC_JOB_DIR = Path("/opt/tmp/xkeen-diagnostics")
 DIAGNOSTIC_STATE = DIAGNOSTIC_JOB_DIR / "state.json"
 DIAGNOSTIC_PID = DIAGNOSTIC_JOB_DIR / "panel-launch.pid"
@@ -68,6 +74,11 @@ ROUTE_APPLY_LOG = ROUTE_JOB_DIR / "apply.log"
 # Held while any background job (route, tuner, diagnostics) is being started,
 # from its "nothing else is running" checks until its PID file is written.
 JOB_START_LOCK = threading.Lock()
+# Serializes the one-time conversion of a dead route job into "failed".
+ROUTE_STATE_LOCK = threading.Lock()
+# xkeen_diagnostics.py holds the checks shared with the router health job.
+DIAGNOSTICS_MODULE_LOCK = threading.Lock()
+DIAGNOSTICS_MODULES = {}
 ROUTE_HISTORY_DIR = Path("/opt/etc/xkeen-web/history")
 SNAPSHOT_DIR = Path("/opt/etc/keenetic-discord-nfqws2/snapshots")
 FLOWSEAL_UPDATE_STATE = Path("/opt/etc/xkeen-web/flowseal-update.json")
@@ -92,6 +103,7 @@ ROUTE_VALUES = {"direct", "zapret", "vless"}
 # "zapret" is still parsed from old headers but can no longer be selected.
 TELEGRAM_ROUTE_VALUES = ROUTE_VALUES | {"ws", "unmanaged"}
 TELEGRAM_WS_PIDFILE = Path("/opt/var/run/kdn-telegram-ws.pid")
+TELEGRAM_WS_PORT = 18443
 STATUS_ROUTE_KEYS = {
     "discord-tcp": "discord_tcp_route",
     "discord-voice": "discord_voice_route",
@@ -245,7 +257,7 @@ pre{min-height:120px;max-height:340px;overflow:auto;margin:0;padding:14px 16px;b
 .good{color:var(--green)}.bad{color:var(--red)}
 .diagnostic-item.bad,.check-item.bad{color:var(--text)}
 .card>.profile-head:last-child{margin-bottom:0}.card>.profile-head:last-child .hint{margin-bottom:0}
-#postApplyStatus.good,#postApplyStatus.bad{margin:0 0 4px;font-size:14px;font-weight:600}
+#postApplyStatus{white-space:pre-line}#postApplyStatus.good,#postApplyStatus.bad{margin:0 0 4px;font-size:14px;font-weight:600}
 .toolbar{display:flex;flex-wrap:wrap;gap:10px}
 .check-item,.diagnostic-item{position:relative;padding-left:18px;overflow:hidden}
 .check-item::before,.diagnostic-item::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--red)}
@@ -364,8 +376,7 @@ const logEl=document.getElementById("log"),dot=document.getElementById("dot"),st
 const controlHeaders={"X-XKeen-Control":"1","Content-Type":"application/json"};
 const label={direct:"DIRECT",zapret:"ZAPRET",vless:"VPN",vpn:"VPN",ws:"WS",unmanaged:"ВЫКЛ",unknown:"НЕИЗВЕСТНО"};
 const serviceLabel={youtube:"YouTube",discord:"Discord",telegram:"Telegram",rollback:"Откат","discord-tcp":"Discord TCP","discord-voice":"Discord Voice"};
-const activeTunerStates=new Set(["preparing","running","voice_window","voice_watch","awaiting_voice","cancelling"]);
-let selectedReport=null,validatedDescriptor=null,tunerPoll=null,routeWatch=null,diagnosticWatch=null;
+let selectedReport=null,validatedDescriptor=null,tunerPoll=null,tunerRequest=null,tunerWasActive=false,routeWatch=null,diagnosticWatch=null;
 function stamp(){return new Date().toLocaleTimeString("ru-RU",{hour12:false})}
 function log(text,replace=false){const line="["+stamp()+"] "+text;logEl.textContent=replace?line:(logEl.textContent?logEl.textContent+"\n"+line:line);logEl.scrollTop=logEl.scrollHeight}
 let tunerRunning=false,diagnosticRunning=false;
@@ -387,9 +398,12 @@ function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
 function watchRouteJob(jobId,name){if(routeWatch)return routeWatch;routeWatch=(async()=>{busy(true);let lastStage="",connectionLost=false;const deadline=Date.now()+16*60*1000;try{while(Date.now()<deadline){let d;try{d=await api("/api/route/status");if(connectionLost){log("связь с панелью восстановлена");connectionLost=false}}catch(e){if(!connectionLost){log("перезапуск сети прервал связь; продолжаю ждать результат");connectionLost=true}await delay(2000);continue}if(jobId&&d.job_id&&d.job_id!==jobId)throw new Error("состояние задания изменилось");setRouteProgress(d);if(d.stage!==lastStage){lastStage=d.stage;log((name||serviceLabel[d.service]||"Маршрут")+": "+(d.stage_label||d.status))}if(d.active){await delay(1500);continue}if(d.status==="completed"){log(resultText((name||serviceLabel[d.service]||"маршрут")+(d.operation==="rollback"?" — откат выполнен":" — маршрут переключён"),d.output));await runPostChecks(d.operation==="switch"?d.service:"all",false);return d}throw new Error(d.output||d.error||"переключение завершилось с ошибкой")}throw new Error("превышено время ожидания; задание продолжает работать на роутере")}finally{routeWatch=null;busy(false);await refresh();await refreshProfiles();await refreshHistory();await refreshVersions()}})();return routeWatch}
 async function routeAction(service,mode){const name=serviceLabel[service]||service;if(!confirm(name+": "+(mode==="unmanaged"?"убрать правила проекта":"переключить в "+label[mode])+"?\n\nЭто перезапустит Xkeen и nfqws2."))return;busy(true);log(name+" → "+label[mode],true);try{const d=await api("/api/route/"+service+"/"+mode,{method:"POST",headers:controlHeaders,body:"{}"});log("задание принято; можно закрыть страницу — оно продолжится на роутере");await watchRouteJob(d.job_id,name)}catch(e){log("ошибка: "+e);busy(false);await refresh();await refreshProfiles()}}
 async function resumeRouteJob(){try{const d=await api("/api/route/status");setRouteProgress(d);if(d.active){log("найдена выполняющаяся операция с маршрутами");await watchRouteJob(d.job_id,serviceLabel[d.service]||"Маршрут")}}catch(e){log("статус переключения: "+e)}}
-async function rollbackHistory(jobId){if(!confirm("Вернуть состояние до выбранной операции?\n\nСначала будет создан rescue snapshot текущего состояния."))return;busy(true);log("откат операции "+jobId,true);try{const d=await api("/api/history/rollback/"+jobId,{method:"POST",headers:controlHeaders,body:"{}"});await watchRouteJob(d.job_id,"Откат")}catch(e){log("ошибка отката: "+e);busy(false);await refreshHistory()}}
-async function refreshHistory(){const root=document.getElementById("history");try{const d=await api("/api/history");root.textContent="";if(!d.items.length){root.innerHTML='<div class="empty">История пуста.</div>';return}d.items.forEach(item=>{const box=document.createElement("article");box.className="history-item";const head=document.createElement("div");head.className="history-head";const title=document.createElement("b");title.textContent=(item.operation==="rollback"?"Откат":"Переключение")+" · "+fmtDate(item.created_utc);const state=document.createElement("span");state.className=item.status==="completed"?"good":"bad";state.textContent=item.status||"unknown";head.append(title,state);const routes=document.createElement("div");routes.className="history-routes";routes.textContent=routesText(item.before_routes)+" → "+routesText(item.after_routes||item.requested_routes);box.append(head,routes);if(item.snapshot){const snap=document.createElement("div");snap.className="history-routes mono";snap.textContent=item.snapshot.split("/").pop();box.append(snap)}if(item.rollback_available){const b=document.createElement("button");b.className="rollback";b.textContent="Вернуть состояние до операции";b.addEventListener("click",()=>rollbackHistory(item.job_id));box.append(b)}root.append(box)})}catch(e){root.textContent="Ошибка истории: "+e}}
-async function runPostChecks(){const root=document.getElementById("postApplyStatus");root.textContent="Проверяю службы и конфиги…";try{const config=await api("/api/checks/config");const failed=config.checks.filter(item=>item.ok!==true);root.textContent=failed.length?"Проверка не пройдена: "+failed.map(item=>item.name+" — "+item.detail).join("; "):"Конфиги и службы: OK";root.className=failed.length?"bad":"good"}catch(e){root.textContent="Ошибка проверки: "+e;root.className="bad"}}
+async function rollbackHistory(jobId,interrupted){if(!confirm((interrupted?"Операция прервана, роутер может быть в промежуточном состоянии.\n\n":"")+"Вернуть состояние до выбранной операции?\n\nСначала будет создан rescue snapshot текущего состояния."))return;busy(true);log("откат операции "+jobId,true);try{const d=await api("/api/history/rollback/"+jobId,{method:"POST",headers:controlHeaders,body:"{}"});await watchRouteJob(d.job_id,"Откат")}catch(e){log("ошибка отката: "+e);busy(false);await refreshHistory()}}
+async function refreshHistory(){const root=document.getElementById("history");try{const d=await api("/api/history");root.textContent="";if(!d.items.length){root.innerHTML='<div class="empty">История пуста.</div>';return}d.items.forEach(item=>{const box=document.createElement("article");box.className="history-item";const head=document.createElement("div");head.className="history-head";const title=document.createElement("b");title.textContent=(item.operation==="rollback"?"Откат":"Переключение")+" · "+fmtDate(item.created_utc);const state=document.createElement("span");state.className=item.status==="completed"?"good":"bad";state.textContent=item.status||"unknown";head.append(title,state);const routes=document.createElement("div");routes.className="history-routes";routes.textContent=routesText(item.before_routes)+" → "+routesText(item.after_routes||item.requested_routes);box.append(head,routes);if(item.snapshot){const snap=document.createElement("div");snap.className="history-routes mono";snap.textContent=item.snapshot.split("/").pop();box.append(snap)}if(item.rollback_available){const b=document.createElement("button");b.className="rollback";b.textContent="Вернуть состояние до операции";b.addEventListener("click",()=>rollbackHistory(item.job_id,item.status==="failed"));box.append(b)}root.append(box)})}catch(e){root.textContent="Ошибка истории: "+e}}
+function renderPostChecks(config){const root=document.getElementById("postApplyStatus"),checks=config.checks||[],failed=checks.filter(item=>item.ok!==true),warned=checks.filter(item=>item.ok===true&&item.status==="warn"),line=item=>"• "+item.name+" — "+item.detail;root.textContent=(failed.length?"Проверка не пройдена:\n"+failed.map(line).join("\n"):"Конфиги и службы: OK")+(warned.length?"\nВнимание:\n"+warned.map(line).join("\n"):"");root.className=failed.length?"bad":"good"}
+async function runPostChecks(){const root=document.getElementById("postApplyStatus");root.textContent="Проверяю службы и конфиги…";try{renderPostChecks(await api("/api/checks/config"))}catch(e){root.textContent="Ошибка проверки: "+e;root.className="bad"}}
+// After a successful change only: the backend sends its check with the result.
+async function postChecksAfter(d){if(d&&d.health){renderPostChecks(d.health);return}await runPostChecks()}
 function diagnosticControls(active){diagnosticRunning=active;document.querySelectorAll(".diag-start").forEach(b=>b.disabled=active);document.getElementById("cancelDiagnostic").disabled=!active}
 function diagnosticToken(check){const token=document.createElement("span"),status=check.status||"error";token.className="protocol "+(status==="ok"?"ok":["unsupported","timeout","likely_blocked"].includes(status)?"warn":"bad");const suffix=check.http_code&&check.http_code!=="000"?" "+check.http_code:"";token.textContent=(check.protocol||"Ping")+": "+status.toUpperCase()+suffix+(check.uploaded!==undefined?" · ↑"+check.uploaded+" ↓"+check.downloaded+" B":"");token.title=check.detail||"";return token}
 function renderDiagnostic(d){const active=!!d.active,status=d.status||"idle",progress=Math.max(0,Math.min(100,Number(d.progress||0))),progressBox=document.getElementById("diagnosticProgress");diagnosticControls(active);progressBox.classList.toggle("visible",active||["completed","error","cancelled"].includes(status));document.getElementById("diagnosticStatus").textContent=({idle:"Задание не запускалось",running:"Выполняется…",completed:"Готово",error:"Ошибка",cancelled:"Остановлено",cancelling:"Останавливается…"})[status]||status;document.getElementById("diagnosticPercent").textContent=progress+"%";document.getElementById("diagnosticBar").style.width=progress+"%";const sum=d.summary||{},summary=document.getElementById("diagnosticSummary");summary.textContent=d.error?d.error:(status==="completed"?"OK: "+(sum.ok||0)+" · предупреждений: "+((sum.warn||0)+(sum.unsupported||0)+(sum.likely_blocked||0))+" · ошибок: "+(sum.error||0):(active?"Результаты появляются по мере выполнения.":"Пока нет результатов."));const root=document.getElementById("diagnosticResults");root.textContent="";const results=d.results||[];if(!results.length){root.innerHTML='<div class="empty">Результатов пока нет.</div>';return}results.forEach(item=>{const box=document.createElement("article"),head=document.createElement("div"),title=document.createElement("b"),state=document.createElement("span"),detail=document.createElement("div"),protocols=document.createElement("div");head.className="diagnostic-head";detail.className="diagnostic-detail";protocols.className="protocols";const checks=item.checks||(item.kind==="ping"?[item.ping||{}]:[]);const statuses=checks.map(x=>x.status);let level=statuses.includes("error")||statuses.includes("fail")||item.error?"bad":statuses.includes("likely_blocked")||statuses.includes("unsupported")||statuses.includes("timeout")||item.status==="warn"?"warn":"ok";if(d.kind==="health")level=item.status==="ok"?"ok":item.status==="warn"?"warn":"bad";box.className="diagnostic-item "+level;title.textContent=item.name||([item.provider,item.id].filter(Boolean).join(" · "))||"Проверка";state.className=level==="ok"?"good":level==="warn"?"":"bad";state.textContent=level==="ok"?"OK":level==="warn"?"ВНИМАНИЕ":"ОШИБКА";head.append(title,state);detail.textContent=item.detail||item.target||item.host||item.error||"";box.append(head,detail);if(item.dns){const dns=document.createElement("span");dns.className="protocol "+(item.dns.status==="ok"?"ok":"bad");dns.textContent="DNS: "+item.dns.status.toUpperCase();dns.title=item.dns.detail||"";protocols.append(dns)}checks.forEach(check=>protocols.append(diagnosticToken(check)));if(protocols.childNodes.length)box.append(protocols);root.append(box)})}
@@ -398,11 +412,11 @@ async function watchDiagnostic(jobId){const deadline=Date.now()+12*60*1000;while
 async function startDiagnostic(kind){if(kind!=="health"){await runBrowserDiagnostic(kind);return}if(browserDiagnosticRun||diagnosticWatch)return;diagnosticControls(true);log("проверка роутера",true);try{const d=await api("/api/diagnostics/start/health",{method:"POST",headers:controlHeaders,body:"{}"});renderDiagnostic(d);diagnosticWatch=watchDiagnostic(d.job_id);await diagnosticWatch;log("проверка роутера завершена")}catch(e){log("ошибка диагностики: "+e)}finally{diagnosticWatch=null;await refreshDiagnostic()}}
 async function cancelDiagnostic(){if(browserDiagnosticRun){browserDiagnosticRun.controller.abort();return}try{renderDiagnostic(await api("/api/diagnostics/cancel",{method:"POST",headers:controlHeaders,body:"{}"}))}catch(e){log("ошибка остановки диагностики: "+e)}}
 async function validateReport(){const file=document.getElementById("reportFile").files[0];if(!file){log("выберите JSON-отчёт");return}try{selectedReport=JSON.parse(await file.text());const d=await api("/api/import/validate",{method:"POST",headers:controlHeaders,body:JSON.stringify(selectedReport)});validatedDescriptor=d.profile;document.getElementById("candidateService").textContent=serviceLabel[d.profile.service];document.getElementById("candidateId").textContent=d.profile.candidate_id;document.getElementById("candidateSource").textContent=d.profile.source_name;document.getElementById("candidateFamily").textContent=d.profile.family;document.getElementById("candidateArgs").textContent=d.profile.args.join("\n");document.getElementById("candidate").classList.add("visible");log("отчёт проверен: "+d.profile.service+" / "+d.profile.candidate_id,true)}catch(e){selectedReport=null;validatedDescriptor=null;document.getElementById("candidate").classList.remove("visible");log("отчёт отклонён: "+e,true)}}
-async function applyImport(){if(!selectedReport||!validatedDescriptor)return;if(!confirm("Применить "+serviceLabel[validatedDescriptor.service]+" / "+validatedDescriptor.candidate_id+"?\n\nБудет перезапущен только nfqws2. Xkeen останется запущен без перезапуска."))return;busy(true);log("применение профиля "+validatedDescriptor.candidate_id,true);try{const d=await api("/api/import/apply",{method:"POST",headers:controlHeaders,body:JSON.stringify(selectedReport)});log(resultText(serviceLabel[validatedDescriptor.service]+": профиль "+validatedDescriptor.candidate_id+" применён",d.output))}catch(e){log("ошибка применения: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}}
-async function clearImport(service){if(!confirm("Вернуть встроенный профиль для "+serviceLabel[service]+"?\n\nБудет перезапущен только nfqws2."))return;busy(true);log("встроенный профиль: "+service,true);try{const d=await api("/api/import/clear/"+service,{method:"POST",headers:controlHeaders,body:"{}"});log(resultText(serviceLabel[service]+": встроенный профиль восстановлен",d.output))}catch(e){log("ошибка: "+e)}finally{busy(false);await refreshProfiles();await refreshVersions()}}
-async function rollbackImport(){if(!confirm("Откатить последнее применение/удаление профиля?\n\nБудет перезапущен только nfqws2."))return;busy(true);log("откат профиля nfqws2",true);try{const d=await api("/api/import/rollback",{method:"POST",headers:controlHeaders,body:"{}"});log(resultText("профиль nfqws2 откатан",d.output))}catch(e){log("ошибка отката: "+e)}finally{busy(false);await refreshProfiles();await refreshVersions()}}
+async function applyImport(){if(!selectedReport||!validatedDescriptor)return;if(!confirm("Применить "+serviceLabel[validatedDescriptor.service]+" / "+validatedDescriptor.candidate_id+"?\n\nБудет перезапущен только nfqws2. Xkeen останется запущен без перезапуска."))return;busy(true);log("применение профиля "+validatedDescriptor.candidate_id,true);let done=null;try{const d=await api("/api/import/apply",{method:"POST",headers:controlHeaders,body:JSON.stringify(selectedReport)});log(resultText(serviceLabel[validatedDescriptor.service]+": профиль "+validatedDescriptor.candidate_id+" применён",d.output));done=d}catch(e){log("ошибка применения: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}if(done)await postChecksAfter(done)}
+async function clearImport(service){if(!confirm("Вернуть встроенный профиль для "+serviceLabel[service]+"?\n\nБудет перезапущен только nfqws2."))return;busy(true);log("встроенный профиль: "+service,true);let done=null;try{const d=await api("/api/import/clear/"+service,{method:"POST",headers:controlHeaders,body:"{}"});log(resultText(serviceLabel[service]+": встроенный профиль восстановлен",d.output));done=d}catch(e){log("ошибка: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}if(done)await postChecksAfter(done)}
+async function rollbackImport(){if(!confirm("Откатить последнее применение/удаление профиля?\n\nБудет перезапущен только nfqws2."))return;busy(true);log("откат профиля nfqws2",true);let done=null;try{const d=await api("/api/import/rollback",{method:"POST",headers:controlHeaders,body:"{}"});log(resultText("профиль nfqws2 откатан",d.output));done=d}catch(e){log("ошибка отката: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}if(done)await postChecksAfter(done)}
 async function refreshVersions(){const root=document.getElementById("profileVersions");try{const d=await api("/api/profile-versions");root.textContent="";if(!d.versions.length){root.innerHTML='<div class="empty">Сохранённых версий пока нет. Текущий профиль попадёт сюда при следующем импорте или замене.</div>';return}d.versions.forEach(v=>{const box=document.createElement("article");box.className="version-item";const head=document.createElement("div");head.className="version-head";const title=document.createElement("b");title.textContent=serviceLabel[v.service]+" · "+fmtDate(v.created_utc);const state=document.createElement("span");state.className=v.active?"good":"muted";state.textContent=v.active?"АКТИВЕН":v.reason;head.append(title,state);const meta=document.createElement("div");meta.className="version-meta";meta.textContent=v.family+" · "+v.candidate_id+(v.commit?" · "+v.commit.slice(0,12):"");box.append(head,meta);if(!v.active){const b=document.createElement("button");b.className="apply";b.textContent="Применить эту версию";b.addEventListener("click",()=>applyVersion(v.service,v.id));box.append(b)}root.append(box)})}catch(e){root.textContent="Ошибка версий: "+e}}
-async function applyVersion(service,id){if(!confirm("Применить версию "+serviceLabel[service]+" от выбранной даты?\n\nБудет создан focused snapshot и перезапущен только nfqws2."))return;busy(true);log("применение версии "+id,true);try{const d=await api("/api/profiles/apply/"+service+"/"+id,{method:"POST",headers:controlHeaders,body:"{}"});log(resultText(serviceLabel[service]+": версия профиля применена",d.output))}catch(e){log("ошибка версии: "+e)}finally{busy(false);await refreshProfiles();await refreshVersions()}}
+async function applyVersion(service,id){if(!confirm("Применить версию "+serviceLabel[service]+" от выбранной даты?\n\nБудет создан focused snapshot и перезапущен только nfqws2."))return;busy(true);log("применение версии "+id,true);let done=null;try{const d=await api("/api/profiles/apply/"+service+"/"+id,{method:"POST",headers:controlHeaders,body:"{}"});log(resultText(serviceLabel[service]+": версия профиля применена",d.output));done=d}catch(e){log("ошибка версии: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}if(done)await postChecksAfter(done)}
 function renderUpdate(d){const root=document.getElementById("updateInfo");root.textContent="";const title=document.createElement("b");title.className=d.status==="error"?"bad":"good";title.textContent=d.status==="up_to_date"?"Актуально":d.status==="downloaded"?"Новые стратегии скачаны":d.status==="error"?"Не удалось обновить":"Нажмите «Проверить обновление»";root.append(title);const detail=document.createElement("div");detail.className="version-meta";detail.textContent=d.error||((d.downloaded_commit?"Версия "+d.downloaded_commit.slice(0,12)+" · файлов: "+d.source_count:"")+(d.checked_utc?" · проверено "+fmtDate(d.checked_utc):""));root.append(detail)}
 async function refreshUpdates(){try{renderUpdate(await api("/api/updates"))}catch(e){document.getElementById("updateInfo").textContent="Ошибка: "+e}}
 async function checkUpdates(){const button=document.getElementById("checkUpdates");button.disabled=true;button.textContent="Проверяю и скачиваю…";try{const d=await api("/api/updates/check",{method:"POST",headers:controlHeaders,body:"{}"});renderUpdate(d);log(d.status==="up_to_date"?"Flowseal: актуально":"Flowseal: скачаны новые стратегии ("+d.source_count+" файлов)");await refreshTunerSources()}catch(e){renderUpdate({status:"error",error:String(e)});log("ошибка обновления Flowseal: "+e)}finally{button.disabled=false;button.textContent="Проверить обновление"}}
@@ -418,7 +432,8 @@ function tunerStateLabel(state){return ({idle:"Задание не запуск�
 const voiceTrafficText={connected:"голос подключился и держится",attempts:"Discord пытается подключиться, но соединение не держится",established:"голос уже подключён — новых попыток нет",idle:"голосового трафика нет — зайдите в голосовой канал",unavailable:"диагностика недоступна"};
 function voiceSummary(d){const parts=[];if(d.voice_traffic_baseline)parts.push("Проверка по трафику. Текущий профиль: "+(voiceTrafficText[d.voice_traffic_baseline]||d.voice_traffic_baseline)+".");if(d.voice_traffic_baseline==="established"||d.voice_traffic_baseline==="connected")parts.push("Голос уже работает с текущим профилем: подбор не нужен, либо выйдите из канала и зайдите снова.");const t=d.last_voice_traffic;if(t&&t.candidate>0)parts.push("Кандидат "+t.candidate+": "+(voiceTrafficText[t.state]||t.state)+".");if(d.voice_auto_mode==="auto")parts.push("Автопроверка: без обхода сервер не отвечает, кандидаты оцениваются пакетом с роутера.");else if(d.voice_auto_mode==="manual")parts.push("Автопроверка невозможна: сохранённый голосовой сервер отвечает даже без обхода (провайдер не блокирует пробный пакет), поэтому пакетом с роутера рабочую стратегию не отличить — каждый кандидат проверяется вручную.");if(d.last_voice_auto)parts.push("Кандидат "+d.last_voice_auto.candidate+": "+(d.last_voice_auto.result==="pass"?"сервер ответил":"нет ответа")+".");if(d.voice_unconfirmed)parts.push("Звук не подтверждён: перед применением проверьте голос вручную.");const active=(d.voice_calibration||{}).active;if(d.status==="none"&&d.voice_auto_mode==="auto"&&!(active&&active.valid>0))parts.push("Сохранённый голосовой сервер не ответил ни с одной стратегией, в том числе с текущей: адрес мог устареть. Повторите подбор без автопроверки.");parts.push(d.voice_auto_mode==="auto"?"Найденный профиль подтверждается звуком в конце.":"Voice: требуется подтверждение звука; UDP-пакеты сами по себе не доказывают качество голоса.");return parts.join(" ")}
 function renderTuner(d){
-  const state=d.status||"idle",active=!!d.active||activeTunerStates.has(state);tunerControls(active);
+  // Only the backend knows whether the job process lives; a stale state is reported as "error".
+  const state=d.status||"idle",active=!!d.active;tunerControls(active);
   document.getElementById("tunerStatus").textContent=tunerStateLabel(state)+(d.error?": "+d.error:"");
   document.getElementById("tunerCommit").textContent=[d.source_file||"",d.commit?d.commit.slice(0,12):""].filter(Boolean).join(" · ");
   document.getElementById("tunerProgress").textContent=d.candidate_count?("кандидат "+(d.current_candidate||0)+" из "+d.candidate_count):"—";
@@ -428,9 +443,12 @@ function renderTuner(d){
   document.getElementById("voiceVerdict").classList.toggle("visible",state==="awaiting_voice");
   const found=d.found;document.getElementById("tunerFound").classList.toggle("visible",state==="found"&&!!found);
   if(found){document.getElementById("tunerFoundId").textContent=found.candidate_id;document.getElementById("tunerFoundFamily").textContent=found.family;document.getElementById("tunerFoundSource").textContent=found.source_name;document.getElementById("tunerFoundArgs").textContent=(found.args||[]).join("\n")}
-  if(active&&!tunerPoll)tunerPoll=setInterval(refreshTuner,1800);if(!active&&tunerPoll){clearInterval(tunerPoll);tunerPoll=null;refreshVoiceEndpoint()}
+  if(active)scheduleTunerPoll();else if(tunerPoll){clearTimeout(tunerPoll);tunerPoll=null}
+  if(tunerWasActive&&!active)refreshVoiceEndpoint();tunerWasActive=active;
 }
-async function refreshTuner(){try{renderTuner(await api("/api/tuner/status"))}catch(e){document.getElementById("tunerStatus").textContent="Ошибка статуса: "+e}}
+// One status request at a time: the next poll is scheduled only after an answer.
+function scheduleTunerPoll(){if(!tunerPoll)tunerPoll=setTimeout(()=>{tunerPoll=null;refreshTuner()},1800)}
+function refreshTuner(){if(tunerRequest)return tunerRequest;tunerRequest=(async()=>{try{renderTuner(await api("/api/tuner/status"))}catch(e){document.getElementById("tunerStatus").textContent="Ошибка статуса: "+e;if(tunerRunning)scheduleTunerPoll()}finally{tunerRequest=null}})();return tunerRequest}
 async function startTuner(){
   const service=document.getElementById("tunerService").value,max=Number(document.getElementById("tunerMax").value),mix=document.getElementById("tunerMix").value,clientIp=document.getElementById("tunerClientIp").value.trim(),sourceFile=document.getElementById("tunerSource").value,voiceCheck=service==="discord-voice"?document.getElementById("tunerVoiceCheck").value:"manual",voiceAuto=voiceCheck==="probe",voiceTraffic=voiceCheck==="traffic";
   if(service==="discord-voice"&&!clientIp){log("для Discord Voice укажите LAN IPv4 компьютера");return}
@@ -441,7 +459,7 @@ async function startTuner(){
 }
 async function cancelTuner(){if(!confirm("Остановить подбор? Временный процесс будет завершён, штатный nfqws2 восстановлен."))return;try{renderTuner(await api("/api/tuner/cancel",{method:"POST",headers:controlHeaders,body:"{}"}))}catch(e){log("ошибка остановки: "+e)}}
 async function voiceVerdict(works){try{renderTuner(await api("/api/tuner/verdict",{method:"POST",headers:controlHeaders,body:JSON.stringify({works:works})}))}catch(e){log("ошибка ответа Voice: "+e)}}
-async function applyTunerResult(){if(!confirm("Применить найденный профиль постоянно?\n\nБудет перезапущен только nfqws2; перед изменением создаётся focused snapshot."))return;busy(true);try{const d=await api("/api/tuner/apply",{method:"POST",headers:controlHeaders,body:"{}"});log(resultText("найденный профиль применён",d.output),true)}catch(e){log("ошибка применения: "+e,true)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions();await refreshTuner()}}
+async function applyTunerResult(){if(!confirm("Применить найденный профиль постоянно?\n\nБудет перезапущен только nfqws2; перед изменением создаётся focused snapshot."))return;busy(true);let done=null;try{const d=await api("/api/tuner/apply",{method:"POST",headers:controlHeaders,body:"{}"});log(resultText("найденный профиль применён",d.output),true);done=d}catch(e){log("ошибка применения: "+e,true)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions();await refreshTuner()}if(done)await postChecksAfter(done)}
 document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tab-page").forEach(x=>x.classList.toggle("active",x.id===b.dataset.tab))}));
 document.querySelectorAll("[data-action]").forEach(b=>b.addEventListener("click",()=>xkeenAction(b.dataset.action)));document.querySelectorAll(".service").forEach(box=>box.querySelectorAll(".mode").forEach(b=>b.addEventListener("click",()=>routeAction(box.dataset.service,b.dataset.mode))));
 document.getElementById("validate").addEventListener("click",validateReport);document.getElementById("applyImport").addEventListener("click",applyImport);document.getElementById("rollbackImport").addEventListener("click",rollbackImport);document.getElementById("clear").addEventListener("click",()=>log("журнал очищен",true));
@@ -538,7 +556,8 @@ def bounded_text(value, field, maximum, *, allow_empty=True):
     return value
 
 
-def voice_ports_allowed(value):
+def voice_ports_allowed(value, high=65535):
+    """Discord Voice UDP ports the engine accepts; high is the recorded upper port."""
     for item in value.split(","):
         parts = item.split("-", 1)
         if not all(part.isdigit() for part in parts):
@@ -552,11 +571,31 @@ def voice_ports_allowed(value):
             or (3478 <= left <= right <= 3481)
             or (left == right == 5349)
             or (19294 <= left <= right <= 19344)
-            or (50000 <= left <= right <= 65535)
+            or (50000 <= left <= right <= high)
         )
         if not allowed:
             return False
     return bool(value)
+
+
+def recorded_voice_high():
+    """Upper Discord Voice UDP port, as the engine's recorded_udp_settings reads it.
+
+    The "# Discord UDP: strategy=X, range=Y." line of nfqws2.conf decides:
+    65535 for range=wide, 50100 otherwise. Configs without the line are
+    inferred from UDP_PORTS; a missing config means the default narrow range.
+    """
+    try:
+        text = NFQWS_CONFIG.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 50100, "narrow"
+    match = re.search(r"^# Discord UDP: strategy=[a-z]+, range=(narrow|wide)\.$", text, re.MULTILINE)
+    if match:
+        recorded = match.group(1)
+    else:
+        ports = re.findall(r"^UDP_PORTS=\"?([0-9:,-]*)", text, re.MULTILINE)
+        recorded = "wide" if ports and re.search(r"50000[:-]65535", ports[-1]) else "narrow"
+    return (65535 if recorded == "wide" else 50100), recorded
 
 
 def validate_candidate(candidate, report):
@@ -639,10 +678,16 @@ def validate_candidate(candidate, report):
     else:
         udp = values("--filter-udp=")
         lua = values("--lua-desync=")
+        high, recorded = recorded_voice_high()
+        if len(udp) == 1 and voice_ports_allowed(udp[0]) and not voice_ports_allowed(udp[0], high):
+            raise ValueError(
+                f"Discord Voice порты {udp[0]} выходят за записанный диапазон range={recorded} "
+                f"(до {high}): движок такой профиль не примет"
+            )
         if (
             "--new" in args
             or len(udp) != 1
-            or not voice_ports_allowed(udp[0])
+            or not voice_ports_allowed(udp[0], high)
             or values("--filter-tcp=")
             or values("--hostlist=")
             or set(values("--filter-l7=")) != {"stun,discord"}
@@ -1092,12 +1137,34 @@ def download_flowseal_update():
     return payload
 
 
+def diagnostics_module():
+    """xkeen_diagnostics.py, loaded once per path: the checks shared with the router health job."""
+    key = str(DIAGNOSTICS)
+    with DIAGNOSTICS_MODULE_LOCK:
+        module = DIAGNOSTICS_MODULES.get(key)
+        if module is None:
+            spec = importlib.util.spec_from_file_location("xkeen_diagnostics_shared", DIAGNOSTICS)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"не удалось загрузить {DIAGNOSTICS}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            DIAGNOSTICS_MODULES[key] = module
+        return module
+
+
 def config_health():
     routes = current_routes_fast()
     checks = []
 
-    def add(name, passed, detail):
-        checks.append({"name": name, "ok": bool(passed), "detail": detail})
+    def add(name, passed, detail, status=None):
+        level = status or ("ok" if passed else "error")
+        checks.append({"name": name, "ok": level != "error", "status": level, "detail": detail})
+
+    def add_check(check):
+        add(check["name"], check["status"] != "error", check["detail"], check["status"])
+
+    def result():
+        return {"ok": True, "routes": routes, "checks": checks, "all_ok": all(item["ok"] for item in checks)}
 
     xray_running = bool(run_command(["pidof", "xray"], timeout=5)["ok"])
     nfqws_running = bool(run_command(["pidof", "nfqws2"], timeout=5)["ok"])
@@ -1109,46 +1176,32 @@ def config_health():
         nfqws_text = ""
         add("nfqws2 config", False, str(exc))
     try:
-        routing = safe_json_file(XRAY_ROUTING, comments=True).get("routing")
-        rules = routing.get("rules", []) if isinstance(routing, dict) else None
+        diagnostics = diagnostics_module()
+    except Exception as exc:  # a broken or missing module must not hide the other checks
+        add("Модуль проверок", False, f"{DIAGNOSTICS}: {type(exc).__name__}: {exc}"[:500])
+        return result()
+
+    xray_files = diagnostics.read_xray_files(XRAY_CONFIG_DIR)
+    active_routing = diagnostics.find_xray_routing_file(XRAY_CONFIG_DIR, xray_files)
+    routing = {}
+    rules = []
+    if active_routing is None:
+        add("Xray routing", False, f"нет файла с объектом routing в {XRAY_CONFIG_DIR}")
+    else:
+        routing_path, routing = active_routing
+        rules = routing.get("rules", [])
         if not isinstance(rules, list):
-            raise ValueError(f"routing.rules не является списком: {XRAY_ROUTING}")
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        rules = []
-        add("Xray routing", False, str(exc))
+            add("Xray routing", False, f"routing.rules не является списком: {routing_path}")
+            rules = []
 
-    def outbound_present(tag):
-        return any(isinstance(rule, dict) and rule.get("outboundTag") == tag for rule in rules)
-
-    youtube = routes["youtube"]
-    youtube_hostlist = "--hostlist=/opt/etc/nfqws2/lists/youtube.list" in nfqws_text
-    add(
-        "YouTube route",
-        youtube in {"direct", "zapret", "vless"}
-        and (youtube == "vless" or outbound_present("youtube-direct"))
-        and (youtube_hostlist == (youtube == "zapret")),
-        f"route={youtube}, nfqws={'on' if youtube_hostlist else 'off'}",
-    )
     try:
-        discord_list_active = bool(
-            DISCORD_LIST.read_text(encoding="utf-8", errors="replace").strip()
-        )
+        discord_list = DISCORD_LIST.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        discord_list_active = False
-    # Every Voice profile (built-in or imported) selects --filter-l7=stun,discord.
-    discord_voice_active = "--filter-l7=stun,discord" in nfqws_text
-    for name, service, active in (
-        ("Discord TCP route", "discord-tcp", discord_list_active),
-        ("Discord Voice route", "discord-voice", discord_voice_active),
-    ):
-        route = routes[service]
-        add(
-            name,
-            route in ROUTE_VALUES
-            and (route == "vless" or outbound_present("discord-direct"))
-            and (active == (route == "zapret")),
-            f"route={route}, nfqws={'on' if active else 'off'}",
-        )
+        discord_list = ""
+    # YouTube, Discord TCP and Voice: the predicates of the engine's --status.
+    for check in diagnostics.route_consistency(nfqws_text, rules, discord_list, telegram=False):
+        add_check(check)
+
     telegram = routes["telegram"]
     telegram_profile = "--hostlist=/opt/etc/nfqws2/lists/kdn-telegram.list" in nfqws_text
     telegram_rules = [
@@ -1165,14 +1218,14 @@ def config_health():
     elif telegram == "ws":
         # Four rules: domains, sniffed TLS/HTTP and UDP direct; MTProto to the relay.
         outbounds = sorted(str(rule.get("outboundTag")) for rule in telegram_rules)
-        relay_running = telegram_ws_running()
+        relay_running, relay_detail = telegram_ws_status()
         telegram_ok = (
             outbounds == ["telegram-direct"] * 3 + ["telegram-ws"]
             and telegram_profile
             and "--ipset=/opt/etc/nfqws2/lists/kdn-telegram-ip.list" not in nfqws_text
             and relay_running
         )
-        add("Telegram WS relay", relay_running, "работает" if relay_running else "не запущен")
+        add("Telegram WS relay", relay_running, relay_detail)
     else:
         expected_outbound = "telegram-direct" if telegram == "direct" else None
         telegram_ok = (
@@ -1187,15 +1240,32 @@ def config_health():
             and not telegram_profile
         )
     add("Telegram route", telegram_ok, detail)
-    return {"ok": True, "routes": routes, "checks": checks, "all_ok": all(item["ok"] for item in checks)}
+    add_check(diagnostics.outbound_checks(rules, routing, diagnostics.xray_outbounds(xray_files), TELEGRAM_WS_PORT))
+
+    if nfqws_text:
+        # nfqws2.conf invariants: the engine's --check-config (or a fallback) and YouTube QUIC.
+        for check in diagnostics.config_invariant_checks(nfqws_text, run_command, ENGINE):
+            add_check(check)
+        values = diagnostics.parse_shell_values(nfqws_text)
+        firewall = run_command(["iptables-save", "-c", "-t", "mangle"], timeout=15)
+        if not firewall["ok"]:
+            firewall = run_command(["iptables-save", "-t", "mangle"], timeout=15)
+        if firewall["ok"]:
+            for check in diagnostics.nfqueue_live_checks(firewall.get("output", ""), values, counters=False):
+                add_check(check)
+        else:
+            add("NFQUEUE", False, (firewall.get("output") or "iptables-save не выполнен")[-500:])
+        if routes["youtube"] == "zapret":
+            add_check(diagnostics.quic_live_check(run_command, QUIC_PROBE, sys.executable))
+    return result()
 
 
-def telegram_ws_running():
+def telegram_ws_status():
+    """(running, detail) of the Telegram WS relay: its own pidfile process and a TCP connect."""
     try:
-        pid = int(TELEGRAM_WS_PIDFILE.read_text(encoding="ascii").strip())
-    except (OSError, ValueError):
-        return False
-    return pid > 1 and process_alive(pid)
+        return diagnostics_module().telegram_relay_status(TELEGRAM_WS_PIDFILE, TELEGRAM_WS_PORT)
+    except Exception as exc:  # the module is optional for this single check
+        return False, f"проверка недоступна: {type(exc).__name__}: {exc}"[:500]
 
 
 def process_alive(pid):
@@ -1284,33 +1354,54 @@ def route_status():
         payload.update(status="error", error=f"state: {exc}")
     active = route_active()
     payload["active"] = active
-    if payload.get("status") in {"queued", "running"} and not active:
-        payload.update(
-            result_ok=False,
-            status="failed",
-            error=payload.get("error") or "процесс переключения завершился неожиданно",
-        )
-        job_id = payload.get("job_id")
-        if isinstance(job_id, str):
-            update_history(
-                job_id,
-                result_ok=False,
-                status="failed",
-                error=payload["error"],
-                finished_utc=utc_now(),
-            )
+    apply_log = ""
     try:
         info = ROUTE_APPLY_LOG.lstat()
         if stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode):
-            lines = ROUTE_APPLY_LOG.read_text(
-                encoding="utf-8",
-                errors="replace",
-            ).splitlines()
-            payload["log_tail"] = [line[:1000] for line in lines[-120:]]
+            apply_log = ROUTE_APPLY_LOG.read_text(encoding="utf-8", errors="replace")
+            payload["log_tail"] = [line[:1000] for line in apply_log.splitlines()[-120:]]
     except OSError:
         pass
+    # A job being started holds JOB_START_LOCK until its PID file exists.
+    if payload.get("status") in {"queued", "running"} and not active and not JOB_START_LOCK.locked():
+        payload.update(mark_dead_route_job(payload, apply_log))
     payload["ok"] = True
     return payload
+
+
+def mark_dead_route_job(payload, apply_log):
+    """Record once that the route worker died, keeping its pre-apply snapshot.
+
+    The engine prints "Snapshot created:" before it changes anything, so a
+    worker killed later (reboot, OOM) still leaves a usable snapshot in
+    apply.log. The failed state is written to ROUTE_STATE and the history
+    exactly once; later polls see "failed" and change nothing.
+    """
+    with ROUTE_STATE_LOCK:
+        try:
+            current = safe_json_file(ROUTE_STATE)
+        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+            current = payload
+        if current.get("job_id") != payload.get("job_id") or current.get("status") not in {"queued", "running"}:
+            return {key: current[key] for key in ("status", "error", "snapshot", "finished_utc", "result_ok") if key in current}
+        changes = {
+            "result_ok": False,
+            "active": False,
+            "status": "failed",
+            "stage": "failed",
+            "stage_label": "Процесс прерван",
+            "error": payload.get("error") or "процесс переключения завершился неожиданно",
+            "snapshot": payload.get("snapshot") or parse_snapshot_from_output(apply_log),
+            "finished_utc": utc_now(),
+        }
+        job_id = payload.get("job_id")
+        if isinstance(job_id, str):
+            update_route_state(job_id, **changes)
+            history = {key: value for key, value in changes.items() if key not in {"active", "stage", "stage_label"}}
+            if apply_log:
+                history["output_tail"] = apply_log[-12000:]
+            update_history(job_id, **history)
+        return changes
 
 
 def clear_previous_route_job():
@@ -1461,8 +1552,10 @@ def start_history_rollback(history_id):
     with job_start_guard():
         ensure_route_job_available()
         source = read_history_item(history_id)
-        if source.get("status") != "completed":
-            raise ValueError("откат доступен только для завершённой операции")
+        # A failed operation may be half-applied (worker killed after the
+        # snapshot); its pre-apply snapshot is still a valid restore point.
+        if source.get("status") not in {"completed", "failed"}:
+            raise ValueError("откат доступен только для завершённой или прерванной операции")
         snapshot_value = source.get("snapshot", "")
         snapshot = Path(snapshot_value) if isinstance(snapshot_value, str) else Path("")
         if not snapshot_value or not safe_snapshot(snapshot):
@@ -1700,13 +1793,8 @@ def tuner_status():
         payload.update(status="error", error=f"state: {exc}")
     active = tuner_active()
     payload["active"] = active
-    if payload.get("status") in {
-        "preparing",
-        "running",
-        "voice_window",
-        "awaiting_voice",
-        "cancelling",
-    } and not active:
+    # Inverted on purpose: a new job state can never leave the page locked.
+    if payload.get("status") not in TERMINAL_TUNER_STATES and not active:
         payload.update(
             status="error",
             error=payload.get("error") or "процесс подбора завершился неожиданно",
@@ -2103,6 +2191,16 @@ def apply_profile(profile):
                 pass
 
 
+def with_post_checks(payload):
+    """Attach the post-apply check to a successful nfqws2 change (not to errors)."""
+    if payload.get("ok"):
+        try:
+            payload["health"] = config_health()
+        except Exception as exc:  # the change itself succeeded; report the check failure
+            payload["health_error"] = f"{type(exc).__name__}: {exc}"[:500]
+    return payload
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "XKeenControl/6.4"
     # Socket timeout: a client that sends a short body cannot hold a thread.
@@ -2219,9 +2317,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_text(200, BROWSER_DIAGNOSTICS.read_text(encoding="utf-8"), "application/javascript; charset=utf-8")
             return
         if self.path == "/api/diagnostics/targets":
-            spec = importlib.util.spec_from_file_location("diagnostic_targets", DIAGNOSTICS)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+            module = diagnostics_module()
             self.send_json(200, {
                 "ok": True,
                 "standard": [{"name": name, "url": url} for name, url in module.STANDARD_TARGETS if url.startswith("https://")],
@@ -2362,7 +2458,7 @@ class Handler(BaseHTTPRequestHandler):
                 if state.get("status") != "found" or not state.get("result_available"):
                     raise ValueError("нет найденного результата для применения")
                 profile = validate_report(safe_json_file(TUNER_RESULT))
-                payload = apply_profile(profile)
+                payload = with_post_checks(apply_profile(profile))
                 self.send_json(200 if payload["ok"] else 500, payload)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"ok": False, "error": str(exc)})
@@ -2433,7 +2529,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 _path, profile = profile_version_path(parts[3], parts[4])
-                payload = apply_profile(profile)
+                payload = with_post_checks(apply_profile(profile))
                 self.send_json(200 if payload["ok"] else 500, payload)
             except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"ok": False, "error": str(exc)})
@@ -2457,7 +2553,7 @@ class Handler(BaseHTTPRequestHandler):
             if diagnostic_active():
                 self.send_json(409, {"ok": False, "error": "профиль нельзя применять во время диагностики"})
                 return
-            payload = apply_profile(profile)
+            payload = with_post_checks(apply_profile(profile))
             self.send_json(200 if payload["ok"] else 500, payload)
             return
 
@@ -2481,6 +2577,7 @@ class Handler(BaseHTTPRequestHandler):
                 ],
                 timeout=300,
             )
+            payload = with_post_checks(payload)
             self.send_json(200 if payload["ok"] else 500, payload)
             return
 
@@ -2498,6 +2595,7 @@ class Handler(BaseHTTPRequestHandler):
                 ["/bin/sh", str(ENGINE), "--rollback-import", "--yes-router"],
                 timeout=300,
             )
+            payload = with_post_checks(payload)
             self.send_json(200 if payload["ok"] else 500, payload)
             return
 
