@@ -281,6 +281,41 @@ class PanelImportTests(unittest.TestCase):
                     self.assertEqual(cache.read_bytes(), saved)
                     self.assertEqual(self.panel["cached_flowseal_update"]()["status"], "error")
 
+    def test_home_service_configs_show_live_profiles_and_hide_vless_details(self):
+        import_source = ROOT / "tools" / "router" / "xkeen_diagnostics.py"
+        spec = importlib.util.spec_from_file_location("panel_profile_diagnostics", import_source)
+        diagnostics = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = diagnostics
+        spec.loader.exec_module(diagnostics)
+        config = '''# Active routes: DiscordTCP=zapret, DiscordVoice=zapret, YouTube=zapret, Telegram=vless.
+NFQWS_ARGS_CUSTOM="--filter-tcp=443 --hostlist=/opt/etc/nfqws2/lists/youtube.list --lua-desync=fake --new --filter-udp=443 --hostlist=/opt/etc/nfqws2/lists/youtube.list --lua-desync=fake"
+NFQWS_ARGS_UDP="--filter-udp=19294-19344 --filter-l7=stun,discord --lua-desync=fake"
+NFQWS_ARGS_QUIC="--filter-udp=443 --filter-l7=quic --lua-desync=fake"
+NFQWS_ARGS_IPSET=""
+NFQWS_ARGS="--filter-tcp=443 --hostlist=/opt/etc/nfqws2/lists/user.list --lua-desync=fake"
+NFQWS_EXTRA_ARGS="--hostlist=/opt/etc/nfqws2/lists/user.list"
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nfqws2.conf"
+            path.write_text(config, encoding="utf-8")
+            with mock.patch.dict(self.panel, {"NFQWS_CONFIG": path, "diagnostics_module": lambda: diagnostics}):
+                result = self.panel["current_service_configs"]()["services"]
+        self.assertEqual(len(result["youtube"]["profiles"]), 2)
+        self.assertTrue(any("user.list" in " ".join(p["args"]) for p in result["discord-tcp"]["profiles"]))
+        self.assertEqual(len(result["discord-voice"]["profiles"]), 1)
+        self.assertEqual(result["telegram"]["profiles"], [])
+        self.assertIn("VLESS", result["telegram"]["note"])
+
+    def test_home_configuration_is_server_rendered_when_javascript_does_not_run(self):
+        services = {service: {"route": "vless", "profiles": [], "note": "Через VPN"}
+                    for service in ("discord-tcp", "discord-voice", "youtube", "telegram")}
+        with mock.patch.dict(self.panel, {"current_service_configs": lambda: {"services": services}}):
+            page = self.panel["initial_service_configs_html"]()
+        self.assertIn('id="service-configs"', page)
+        self.assertEqual(page.count('<details class="service-config"'), 4)
+        self.assertNotIn("__SERVICE_CONFIG_", page)
+        self.assertIn("Через VPN", page)
+
 
 if __name__ == "__main__":
     unittest.main()

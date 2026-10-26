@@ -1601,11 +1601,11 @@ class RunRemoteTests(unittest.TestCase):
         self.args.udp_range = "narrow"
         (_found, _output), _process, _popen, stdout = self.run_remote([
             "EVENT|FATAL|project-busy\n",
-            "EVENT|RAW_BASELINE|ip-block|0|3\n",
+            "EVENT|RAW_BASELINE|tcp-unreachable|0|3\n",
             "EVENT|UDP_RANGE|wide\n",
         ])
         self.assertIn("Роутер занят", stdout)
-        self.assertIn("блокировка по IP", stdout)
+        self.assertIn("перебор продолжается", stdout)
         self.assertIn("--udp-range wide", stdout)
         self.args.udp_range = "wide"
         (_found, _output), _process, _popen, stdout = self.run_remote(["EVENT|UDP_RANGE|wide\n"])

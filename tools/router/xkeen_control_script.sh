@@ -10,6 +10,7 @@ mkdir -p "$APP_DIR"
 cat > "$APP_DIR/app.py" <<'PYEOF'
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import contextlib
+import html as html_module
 import hashlib
 import importlib.util
 import ipaddress
@@ -201,6 +202,11 @@ button:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .service:has(.mode.active[data-mode=direct]) .current{background:color-mix(in srgb,var(--direct) 14%,transparent);color:var(--direct)}
 .service:has(.mode.active[data-mode=zapret]) .current{background:color-mix(in srgb,var(--zapret) 14%,transparent);color:var(--zapret)}
 .service:has(.mode.active[data-mode=vpn]) .current{background:color-mix(in srgb,var(--vpn) 14%,transparent);color:var(--vpn)}
+.service-config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.service-config{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--surface-2)}
+.service-config summary{cursor:pointer;color:var(--accent);font-size:14px;font-weight:650}
+.service-config-body{margin-top:12px}.service-config-label{color:var(--muted);font-size:12px;margin:12px 0 6px}
+.service-config pre{min-height:0;max-height:280px}
 .modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(4,minmax(0,1fr))}
 .mode{--mode:var(--accent);padding:9px 8px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted);box-shadow:none}
 .mode[data-mode=direct]{--mode:var(--direct)}.mode[data-mode=zapret]{--mode:var(--zapret)}.mode[data-mode=vpn]{--mode:var(--vpn)}.mode[data-mode=unmanaged]{--mode:var(--muted)}.mode[data-mode=ws]{--mode:#229ed9}
@@ -279,7 +285,7 @@ pre{min-height:120px;max-height:340px;overflow:auto;margin:0;padding:14px 16px;b
 footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
 @media(max-width:760px){.services{grid-template-columns:minmax(0,1fr)}.service .modes{max-width:460px}}
 @media(max-width:480px){.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:760px){header{align-items:flex-start;flex-direction:column;padding-top:20px}.services,.profiles,.tuner-grid,.updates-grid,.diagnostic-grid,.legend,.meta{grid-template-columns:1fr}.card{padding:18px}.profile-head{flex-wrap:wrap}}
+@media(max-width:760px){header{align-items:flex-start;flex-direction:column;padding-top:20px}.services,.service-config-grid,.profiles,.tuner-grid,.updates-grid,.diagnostic-grid,.legend,.meta{grid-template-columns:1fr}.card{padding:18px}.profile-head{flex-wrap:wrap}}
 @media(max-width:480px){.page{width:calc(100% - 24px)}.xkeen-actions,.upload{grid-template-columns:1fr}.tabs{display:grid;grid-template-columns:1fr 1fr}.tabs .tab{justify-content:center;padding:8px 10px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style>
@@ -312,6 +318,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
     <article class="service" data-service="youtube"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">Y</span><div><h3>YouTube</h3><div class="service-scope">Сайт, видео, QUIC</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
     <article class="service" data-service="telegram"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">T</span><div><h3>Telegram</h3><div class="service-scope">Сайт, CDN и MTProto · звонки только через VPN</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="vpn">VPN</button><button class="mode" data-mode="ws" title="MTProto через WebSocket-ретранслятор на роутере (как Telegram Web)">WS</button><button class="mode" data-mode="unmanaged" title="Убрать правила проекта; Telegram идёт по вашим правилам XKeen">Выкл</button></div></article>
   </div><div class="legend"><div><b>Direct</b>Напрямую через WAN, без nfqws2.</div><div><b>Zapret</b>Через WAN с обработкой nfqws2.</div><div><b>VPN</b>Через существующий VLESS outbound Xray.</div></div><div class="warning">Смена маршрута выполняет полный транзакционный apply и перезапускает службы, включая Xkeen.</div><div id="routeProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="routeStage">Подготовка</b><span id="routePercent">0%</span></div><div class="bar"><span id="routeBar"></span></div></div></section>
+  __SERVICE_CONFIG_SECTION__
   <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-check"/></svg><h2>Проверка после применения</h2></div><div id="postApplyStatus" class="hint">После переключения здесь появится краткий статус служб и конфигов.</div></div><button id="openDiagnostics" class="clear">Открыть диагностику</button></div></section>
   <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-history"/></svg><h2>История и откат</h2></div><div class="hint">Для каждой смены сохраняются режимы, результат и pre-apply snapshot.</div></div><button id="refreshHistory" class="clear">Обновить</button></div><div id="history" class="history-list"><div class="empty">История пуста.</div></div></section>
 </div>
@@ -886,6 +893,97 @@ def current_routes_fast():
     except OSError:
         return unknown
     return parse_active_routes(text) or unknown
+
+
+def current_service_configs():
+    """Read the effective nfqws2 profiles without exposing Xray credentials."""
+    info = NFQWS_CONFIG.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > 512 * 1024:
+        raise ValueError("необычный файл nfqws2.conf")
+    config = NFQWS_CONFIG.read_text(encoding="utf-8", errors="replace")
+    routes = parse_active_routes(config) or {service: "unknown" for service in ROUTE_SERVICES}
+    diagnostics = diagnostics_module()
+    profiles = diagnostics.compose_profiles(diagnostics.parse_shell_values(config))
+    result = {service: {"route": routes.get(service, "unknown"), "profiles": [], "note": ""}
+              for service in ROUTE_SERVICES}
+
+    def profile_label(profile):
+        tcp = diagnostics.option_values(profile, "filter-tcp")
+        udp = diagnostics.option_values(profile, "filter-udp")
+        l7 = diagnostics.option_values(profile, "filter-l7")
+        protocol = "TCP" if tcp else "UDP" if udp else "Профиль"
+        return protocol + (" · " + ", ".join(l7) if l7 else "")
+
+    for profile in profiles:
+        hostlists = diagnostics.option_values(profile, "hostlist")
+        l7 = ",".join(diagnostics.option_values(profile, "filter-l7")).lower().split(",")
+        udp = diagnostics.option_values(profile, "filter-udp")
+        service = None
+        if "/opt/etc/nfqws2/lists/youtube.list" in hostlists:
+            service = "youtube"
+        elif "/opt/etc/nfqws2/lists/kdn-telegram.list" in hostlists:
+            service = "telegram"
+        elif "/opt/etc/nfqws2/lists/user.list" in hostlists:
+            service = "discord-tcp"
+        elif udp and ("discord" in l7 or "stun" in l7):
+            service = "discord-voice"
+        if service and routes.get(service) in ({"ws"} if service == "telegram" else {"zapret"}):
+            result[service]["profiles"].append({"label": profile_label(profile), "args": profile})
+
+    for service, entry in result.items():
+        if entry["profiles"]:
+            continue
+        route = entry["route"]
+        if route == "vless":
+            entry["note"] = "Через Xray/VLESS; профиль nfqws2 не используется. Параметры VPN здесь не раскрываются."
+        elif route == "direct":
+            entry["note"] = "Напрямую через WAN; профиль nfqws2 не используется."
+        elif route == "unmanaged":
+            entry["note"] = "Правила проекта отключены; маршрут определяется остальной конфигурацией XKeen."
+        elif route in {"zapret", "ws"}:
+            entry["note"] = "Активный профиль nfqws2 не найден — проверьте конфигурацию в диагностике."
+        else:
+            entry["note"] = "Не удалось определить маршрут."
+    return {"ok": True, "services": result}
+
+
+def initial_service_configs_html():
+    """Render a standalone read-only section without browser JavaScript."""
+    try:
+        services = current_service_configs()["services"]
+        error = ""
+    except (OSError, ValueError, RuntimeError) as exc:
+        services = {}
+        error = f"Не удалось прочитать конфигурацию: {exc}"
+    cards = []
+    names = {"discord-tcp": "Discord TCP", "discord-voice": "Discord Voice",
+             "youtube": "YouTube", "telegram": "Telegram"}
+    for service, name in names.items():
+        entry = services.get(service)
+        body = []
+        if entry:
+            body.append('<div class="service-config-label">Маршрут: ' +
+                        html_module.escape(entry["route"].upper()) + "</div>")
+            if entry["profiles"]:
+                for profile in entry["profiles"]:
+                    body.append('<div class="service-config-label">' +
+                                html_module.escape(profile["label"]) + "</div>")
+                    body.append("<pre>" + html_module.escape("\n".join(profile["args"])) + "</pre>")
+            else:
+                body.append('<div class="hint">' + html_module.escape(entry["note"]) + "</div>")
+        else:
+            body.append('<div class="hint">' + html_module.escape(error) + "</div>")
+        disclosure = ('<details class="service-config"' + (' open' if service == "discord-tcp" else '') +
+                      '><summary>' + html_module.escape(name) + '</summary>' +
+                      '<div class="service-config-body">' + "".join(body) + '</div></details>')
+        cards.append(disclosure)
+    section = ('<section class="card" id="service-configs">'
+               '<div class="profile-head"><div><h2>Конфигурации сервисов</h2>'
+               '<div class="hint">Параметры прочитаны с роутера при открытии страницы. '
+               'После смены маршрута обновите страницу.</div></div>'
+               '<a class="download" href="/#service-configs">Обновить страницу</a></div>'
+               '<div class="service-config-grid">' + "".join(cards) + '</div></section>')
+    return HTML.replace("__SERVICE_CONFIG_SECTION__", section, 1)
 
 
 def safe_snapshot(path):
@@ -2308,7 +2406,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.allowed_client():
             return
         if self.path == "/":
-            self.send_text(200, HTML, "text/html; charset=utf-8")
+            self.send_text(200, initial_service_configs_html(), "text/html; charset=utf-8")
             return
         if self.path == "/tools/reset-discord-cache.ps1":
             self.send_download(DISCORD_CACHE_HELPER, "reset-discord-cache.ps1", "text/plain; charset=utf-8")
@@ -2331,6 +2429,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = run_command(["/bin/sh", str(ENGINE), "--status"], timeout=40)
             payload.update(parse_status(payload.get("output", "")))
             self.send_json(200 if payload["ok"] else 500, payload)
+            return
+        if self.path == "/api/service-configs":
+            try:
+                self.send_json(200, current_service_configs())
+            except (OSError, ValueError, RuntimeError) as exc:
+                self.send_json(500, {"ok": False, "error": str(exc)})
             return
         if self.path == "/api/imported":
             self.send_json(

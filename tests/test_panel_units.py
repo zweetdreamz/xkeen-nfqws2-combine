@@ -2559,7 +2559,10 @@ class HttpLayerTests(unittest.TestCase):
         self.assertEqual(response.getheader("X-Frame-Options"), "DENY")
         self.assertEqual(int(response.getheader("Content-Length")), len(data))
         self.assertTrue(data.startswith(b"<!doctype html>"))
-        self.assertEqual(data.decode("utf-8"), self.ns["HTML"])
+        page = data.decode("utf-8")
+        self.assertIn('id="service-configs"', page)
+        self.assertEqual(page.count('<details class="service-config"'), 4)
+        self.assertNotIn("__SERVICE_CONFIG_", page)
 
     def test_unknown_get_is_404(self):
         response, data = self.request("GET", "/api/nope")

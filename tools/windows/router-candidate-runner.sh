@@ -772,11 +772,8 @@ if [ "$SERVICE" != discord-voice ]; then
     emit "NONE"
     exit 0
   elif [ "$suite_connected" -eq 0 ]; then
-    # No address accepted a TCP connection: an IP block that no nfqws2
-    # strategy can fix.
-    emit "RAW_BASELINE|ip-block|$successes|$total"
-    emit "NONE"
-    exit 0
+    # No raw TCP connection succeeded. This is inconclusive: try candidates.
+    emit "RAW_BASELINE|tcp-unreachable|$successes|$total"
   else
     emit "RAW_BASELINE|fail|$successes|$total"
   fi

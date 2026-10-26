@@ -918,28 +918,28 @@ quic_output="$(KD_QUIC_FAIL=none run_runner "$FIXTURE/one-runner.sh")"
 printf '%s\n' "$quic_output" | grep -Fqx 'EVENT|QUIC_GATE|on|raw-reply'
 
 # Raw no-bypass baseline: everything opens without nfqws2 (no discrimination),
-# or no address accepts TCP (an IP block: no candidate is started).
+# or no address accepts raw TCP (candidates are still tried).
 reset_runtime_logs
 raw_output="$(KD_TUNER_RAW=pass run_runner "$FIXTURE/one-runner.sh")"
 printf '%s\n' "$raw_output" | grep -Fqx 'EVENT|RAW_BASELINE|pass|4|4'
 printf '%s\n' "$raw_output" | grep -Fq 'EVENT|FOUND|1|'
 reset_runtime_logs
 raw_output="$(KD_TUNER_RAW=ipblock run_runner "$FIXTURE/one-runner.sh")"
-printf '%s\n' "$raw_output" | grep -Fqx 'EVENT|RAW_BASELINE|ip-block|0|4'
-printf '%s\n' "$raw_output" | grep -Fqx 'EVENT|NONE'
-[ ! -s "$ROOT/nfqws-candidates.log" ]
+printf '%s\n' "$raw_output" | grep -Fqx 'EVENT|RAW_BASELINE|tcp-unreachable|0|4'
+printf '%s\n' "$raw_output" | grep -Fq 'EVENT|FOUND|1|'
+[ -s "$ROOT/nfqws-candidates.log" ]
 printf '%s\n' "$raw_output" | grep -Fq 'EVENT|PROBE_DETAIL|0|raw|1|web|000|1.0|0|7|connect-error|'
-assert_restored_cleanly "raw ip-block"
+assert_restored_cleanly "raw tcp-unreachable"
 rm -f "$report"
 KD_TUNER_RAW=ipblock run_job 9999999999999999
 python3 - "$state" "$report" <<'PY'
 import json, sys
 state = json.load(open(sys.argv[1], encoding="utf-8"))
 report = json.load(open(sys.argv[2], encoding="utf-8"))
-assert state["status"] == "none", state
-assert state["raw_baseline"] == "ip-block", state
-assert report["verification"]["raw_baseline"] == "ip-block", report
-assert "TCP" in open(sys.argv[1].replace("state.json", "events.log"), encoding="utf-8").read()
+assert state["status"] == "found", state
+assert state["raw_baseline"] == "tcp-unreachable", state
+assert report["verification"]["raw_baseline"] == "tcp-unreachable", report
+assert "перебор стратегий продолжается" in open(sys.argv[1].replace("state.json", "events.log"), encoding="utf-8").read()
 PY
 KD_TUNER_RAW=pass run_job 9999999999999998
 python3 - "$state" "$report" <<'PY'
