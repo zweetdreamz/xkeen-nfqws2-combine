@@ -362,6 +362,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
     <div class="meta"><div><b>ID</b><span id="tunerFoundId"></span></div><div><b>Семейство</b><span id="tunerFoundFamily"></span></div><div><b>Источник</b><span id="tunerFoundSource"></span></div></div>
     <pre id="tunerFoundArgs" class="args"></pre>
     <div class="tuner-actions"><button id="applyTunerResult" class="apply">Применить найденный профиль</button></div>
+    <div role="status" aria-live="polite"><progress id="tunerApplyProgress" hidden aria-label="Применение профиля"></progress><p id="tunerApplyStatus" class="hint" aria-busy="false"></p></div>
     <div class="warning">Это отдельное подтверждённое действие: создаётся focused snapshot и перезапускается только nfqws2.</div>
   </section>
 </div>
@@ -466,7 +467,25 @@ async function startTuner(){
 }
 async function cancelTuner(){if(!confirm("Остановить подбор? Временный процесс будет завершён, штатный nfqws2 восстановлен."))return;try{renderTuner(await api("/api/tuner/cancel",{method:"POST",headers:controlHeaders,body:"{}"}))}catch(e){log("ошибка остановки: "+e)}}
 async function voiceVerdict(works){try{renderTuner(await api("/api/tuner/verdict",{method:"POST",headers:controlHeaders,body:JSON.stringify({works:works})}))}catch(e){log("ошибка ответа Voice: "+e)}}
-async function applyTunerResult(){if(!confirm("Применить найденный профиль постоянно?\n\nБудет перезапущен только nfqws2; перед изменением создаётся focused snapshot."))return;busy(true);let done=null;try{const d=await api("/api/tuner/apply",{method:"POST",headers:controlHeaders,body:"{}"});log(resultText("найденный профиль применён",d.output),true);done=d}catch(e){log("ошибка применения: "+e,true)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions();await refreshTuner()}if(done)await postChecksAfter(done)}
+async function applyTunerResult(){
+  const button=document.getElementById("applyTunerResult"),status=document.getElementById("tunerApplyStatus"),progress=document.getElementById("tunerApplyProgress");
+  if(button.disabled||!confirm("Применить найденный профиль постоянно?\n\nБудет перезапущен только nfqws2; перед изменением создаётся focused snapshot."))return;
+  const expected=document.getElementById("tunerFoundId").textContent.trim();
+  busy(true);button.textContent="Применяется…";progress.hidden=false;status.textContent="Применяю профиль "+expected+"…";status.setAttribute("aria-busy","true");let done=null;
+  try{
+    const d=await api("/api/tuner/apply",{method:"POST",headers:controlHeaders,body:"{}"});
+    done=d;log(resultText("найденный профиль применён",d.output),true);
+    status.textContent="Применён профиль "+expected;button.textContent="Применён";
+    try{
+      const installed=await api("/api/imported");
+      if(!(installed.profiles||[]).some(p=>p.installed&&p.candidate_id===expected)){
+        status.textContent="Применение завершилось, но установленный ID не совпал. Проверьте журнал.";button.textContent="Проверить применение";
+      }
+    }catch(e){status.textContent="Применение завершилось; подтвердить установленный ID не удалось: "+e;button.textContent="Применение завершено"}
+  }catch(e){status.textContent="Ошибка применения: "+e;button.textContent="Повторить применение";log("ошибка применения: "+e,true)}
+  finally{progress.hidden=true;status.setAttribute("aria-busy","false");busy(false);await refresh();await refreshProfiles();await refreshVersions();await refreshTuner()}
+  if(done)await postChecksAfter(done)
+}
 document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tab-page").forEach(x=>x.classList.toggle("active",x.id===b.dataset.tab))}));
 document.querySelectorAll("[data-action]").forEach(b=>b.addEventListener("click",()=>xkeenAction(b.dataset.action)));document.querySelectorAll(".service").forEach(box=>box.querySelectorAll(".mode").forEach(b=>b.addEventListener("click",()=>routeAction(box.dataset.service,b.dataset.mode))));
 document.getElementById("validate").addEventListener("click",validateReport);document.getElementById("applyImport").addEventListener("click",applyImport);document.getElementById("rollbackImport").addEventListener("click",rollbackImport);document.getElementById("clear").addEventListener("click",()=>log("журнал очищен",true));
