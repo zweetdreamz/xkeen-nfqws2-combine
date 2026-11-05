@@ -1,5 +1,7 @@
 # Files that tools/dev/deploy.sh ships to the router: paths relative to the
 # project root, one per line, * allowed. Every line must match a file.
+LICENSE
+THIRD_PARTY_NOTICES.md
 apply-discord-nfqws2.sh
 set-service-route.sh
 set-zapret-mode.sh

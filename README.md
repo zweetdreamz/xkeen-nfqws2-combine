@@ -3,6 +3,23 @@
 Панель управления Discord, YouTube, Telegram, VPN-нодами и DNS на Keenetic.
 Версия движка: `SCRIPT_VERSION=3.2.0`.
 
+## Интерфейс
+
+Скриншоты с демонстрационными данными. Приватные адреса и параметры скрыты.
+
+![Маршруты сервисов и DNS](docs/images/control.png)
+
+<details>
+<summary>VPN-ноды, расписание и уведомления</summary>
+
+![Управление VPN-нодами](docs/images/vpn-nodes.png)
+
+![Автоматическая проверка по расписанию](docs/images/schedule.png)
+
+![Настройка уведомлений ntfy](docs/images/notifications.png)
+
+</details>
+
 ## Требования
 
 - Keenetic с Entware, Python 3.12+ и nfqws2.
@@ -169,3 +186,8 @@ Offline-прогон требует заранее подготовленног�
 ```sh
 sh tools/dev/checkpoint.sh save before-change
 ```
+
+## Лицензия
+
+Собственный код: [MIT](LICENSE). Поставляется «как есть» (AS IS), без гарантий.
+Условия сторонних компонентов: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
