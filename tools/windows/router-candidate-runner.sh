@@ -32,6 +32,7 @@ PROJECT_ROOT="$(root_path /opt/root/keenetic-discord-nfqws2)"
 VOICE_DIAGNOSTIC="$PROJECT_ROOT/scripts/diagnose-discord-voice.sh"
 VOICE_PROBE="$PROJECT_ROOT/tools/router/discord_voice_probe.py"
 QUIC_PROBE="$PROJECT_ROOT/tools/router/quic_probe.py"
+WS_PROBE="$PROJECT_ROOT/tools/router/discord_ws_probe.py"
 PROJECT_DISCORD_UDP_BLOB="$PROJECT_ROOT/config/blobs/ACTIVE_DISCORD_UDP.bin"
 INSTALLED_DISCORD_UDP_BLOB="$(root_path /opt/etc/nfqws2/blobs/discord_udp.bin)"
 LOCK_DIR="$(root_path /opt/tmp/keenetic-discord-nfqws2.lock)"
@@ -50,7 +51,9 @@ QUIC_TARGETS="$TMP_ROOT/quic-targets"
 RUNNER_DISCORD_UDP_BLOB="$TMP_ROOT/discord_udp.bin"
 VERDICT_FILE="${TUNER_VERDICT_FILE:-}"
 VERDICT_TIMEOUT="${TUNER_VERDICT_TIMEOUT:-300}"
-# nfqws2-keenetic 1.3.1 writes its pidfile after "start" has returned.
+# nfqws2-keenetic 1.3.2 waits up to 5 s for the pidfile inside "start" and
+# returns 1 without it, skipping the firewall rules; this wait lets a late
+# daemon appear, and the rules are checked after it.
 RESTORE_WAIT="${KD_TUNER_RESTORE_WAIT:-15}"
 # Pages smaller than this are checked for a volume freeze with an upload.
 VOLUME_SMALL=24576
@@ -95,6 +98,9 @@ release_project_lock() {
 
 # The same mkdir lock as apply-discord-nfqws2.sh and zapret_autotune_job.py.
 # The router job already holds it and passes its PID in KD_TUNER_LOCK_HELD.
+# A lock without a valid pid may be one that is being taken this very moment
+# (mkdir and the pid write are two steps): it is waited out for
+# KD_LOCK_PID_WAIT seconds (default 2) before it counts as stale.
 acquire_project_lock() {
   if [ -n "${KD_TUNER_LOCK_HELD:-}" ]; then
     held_pid="$(sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null)"
@@ -102,16 +108,51 @@ acquire_project_lock() {
     return
   fi
   mkdir -p "$(root_path /opt/tmp)"
-  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  lock_wait="${KD_LOCK_PID_WAIT:-2}"
+  case "$lock_wait" in
+    ''|*[!0-9]*) lock_wait=2 ;;
+  esac
+  lock_waited=0
+  lock_attempts=0
+  while :; do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      printf '%s\n' "$$" > "$LOCK_DIR/pid"
+      LOCK_OWNED=1
+      return 0
+    fi
+
     lock_pid="$(sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null)"
     case "$lock_pid" in
-      ''|*[!0-9]*) ;;
-      *) if kill -0 "$lock_pid" 2>/dev/null; then return 1; fi ;;
+      ''|*[!0-9]*)
+        if [ -d "$LOCK_DIR" ]; then
+          [ "$lock_waited" -lt "$lock_wait" ] || break
+          lock_waited=$((lock_waited + 1))
+          sleep 1
+        else
+          lock_attempts=$((lock_attempts + 1))
+          [ "$lock_attempts" -lt 20 ] || return 1
+        fi
+        ;;
+      *)
+        if kill -0 "$lock_pid" 2>/dev/null; then return 1; fi
+        break
+        ;;
     esac
-    rm -f "$LOCK_DIR/pid"
-    rmdir "$LOCK_DIR" 2>/dev/null || return 1
-    mkdir "$LOCK_DIR" 2>/dev/null || return 1
-  fi
+  done
+
+  rm -f "$LOCK_DIR/pid"
+  # The pid.tmp-N that kdn/common/lock.py leaves for the moment of its own step belongs to
+  # a dead process here; one of a live process keeps the directory (it is not stale).
+  for lock_leftover in "$LOCK_DIR"/pid.tmp-*; do
+    [ -e "$lock_leftover" ] || continue
+    lock_writer="${lock_leftover##*-}"
+    case "$lock_writer" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    kill -0 "$lock_writer" 2>/dev/null || rm -f "$lock_leftover"
+  done
+  rmdir "$LOCK_DIR" 2>/dev/null || return 1
+  mkdir "$LOCK_DIR" 2>/dev/null || return 1
   printf '%s\n' "$$" > "$LOCK_DIR/pid"
   LOCK_OWNED=1
 }
@@ -147,13 +188,20 @@ restore_service() {
     firewall_stop >/dev/null 2>&1 || true
     rm -f "$NFQWS_PIDFILE"
     if [ "$WAS_RUNNING" -eq 1 ]; then
-      # "start" returns before the daemon has written its pidfile; wait for
-      # it instead of judging is_running at once (false RESTORE_ERROR).
+      # The 1.3.2 "start" waits 5 s for the pidfile and, when it is late,
+      # returns 1 before firewall_iptables: the daemon then runs with no
+      # NFQUEUE rules. Wait for the daemon, then check the rules and install
+      # them again when they are missing.
       "$NFQWS_INIT" start >/dev/null 2>&1 || true
-      if wait_service_running; then
-        emit "RESTORED|running"
-      else
+      if ! wait_service_running; then
         emit "RESTORE_ERROR|nfqws2-start-failed"
+      else
+        firewall_present || { firewall_iptables; firewall_ip6tables; } >/dev/null 2>&1
+        if firewall_present; then
+          emit "RESTORED|running"
+        else
+          emit "RESTORE_ERROR|nfqws2-firewall-missing"
+        fi
       fi
     else
       emit "RESTORED|stopped"
@@ -161,6 +209,11 @@ restore_service() {
   fi
   cleanup_tmp
   release_project_lock
+}
+
+PYTHONPATH="$PROJECT_ROOT/tools/router" python3 -m kdn.common.xkeen --require >/dev/null || {
+  emit "FATAL|unsupported-xkeen"
+  exit 2
 }
 
 trap restore_service 0
@@ -271,9 +324,32 @@ if [ "$SERVICE" = discord-voice ]; then
   esac
 fi
 
+validate_candidate_args() {
+  # Same token/function bounds as tuner/panel/FORMAT1. Data only: never eval.
+  printf '%s\n' "$1" | awk '
+    BEGIN {ok=1; count=0}
+    {for(i=1;i<=NF;i++) {
+      t=$i; count++
+      if(t=="--new") continue
+      if(length(t)>600 || t !~ /^--[a-z0-9-]+=[A-Za-z0-9_@\/.,:+<>=!-]+$/) {ok=0; continue}
+      n=t; sub(/^--/,"",n); sub(/=.*/,"",n)
+      if(n !~ /^(filter-tcp|filter-udp|filter-l7|hostlist|out-range|payload|lua-desync)$/) ok=0
+      if(n=="lua-desync") {
+        v=t; sub(/^--lua-desync=/,"",v); size=split(v,p,":")
+        if(p[1] !~ /^(fake|multisplit|multidisorder|multidisorder_legacy|fakedsplit|hostfakesplit)$/) ok=0
+        for(j=2;j<=size;j++) if(p[j] ~ /^ip_id=/ && p[j] !~ /^ip_id=(zero|seq|rnd)$/) ok=0
+      }
+    }}
+    END {exit !(ok && count>=1 && count<=40)}'
+}
+
 start_candidate() {
   encoded_args="$1"
   candidate_args="$(printf '%s' "$encoded_args" | base64 -d)"
+  validate_candidate_args "$candidate_args" || {
+    emit "START_FAILED|unsafe-candidate-args"
+    return 1
+  }
   rm -f "$CANDIDATE_LOG"
 
   # candidate_args is generated from an allowlisted token model. Shell control
@@ -340,10 +416,25 @@ firewall_present() {
     iptables -w -t mangle -S "$IPT_POST" 2>/dev/null | grep -q -- '-j NFQUEUE'
 }
 
+# The 1.3.2 firewall_iptables returns 1 when any rule fails, and Keenetic can
+# fail one while it rebuilds its firewall. Retry as the package's netfilter
+# hook does (5 x 1 s) before giving up.
+install_temporary_firewall() {
+  firewall_attempt=1
+  while ! firewall_iptables >/dev/null 2>&1; do
+    if [ "$firewall_attempt" -ge 5 ]; then
+      emit "FATAL|cannot-install-temporary-firewall"
+      exit 1
+    fi
+    firewall_attempt=$((firewall_attempt + 1))
+    sleep "${KD_FIREWALL_RETRY_DELAY:-1}"
+  done
+}
+
 ensure_firewall() {
   firewall_present && return 0
   emit "FIREWALL_REASSERT|$1|missing"
-  firewall_iptables >/dev/null 2>&1 || true
+  install_temporary_firewall
   if firewall_present; then
     emit "FIREWALL_REASSERT|$1|restored"
     return 0
@@ -512,12 +603,35 @@ image|https://cdn.discordapp.com/embed/avatars/0.png"
     if http_probe "$target_url" "$target_role"; then
       successes=$((successes + 1))
     else
-      [ "$target_role" = transport ] || required_failed=1
+      required_failed=1
     fi
     [ "$probe_connected" -eq 0 ] || suite_connected=$((suite_connected + 1))
     [ "$probe_rc" -ne 6 ] || suite_dns_failed=$((suite_dns_failed + 1))
   done
   IFS="$old_ifs"
+
+  if [ "$SERVICE" = discord-tcp ]; then
+    [ -f "$WS_PROBE" ] && command -v python3 >/dev/null 2>&1 || {
+      emit "FATAL|discord-ws-probe-unavailable"
+      exit 1
+    }
+    total=$((total + 1))
+    ws_line="$(python3 "$WS_PROBE" --timeout "$HTTP_TIMEOUT" --label "$probe_phase-$candidate_number" </dev/null 2>/dev/null)"
+    ws_rc=$?
+    case "$ws_line" in
+      EVENT\|WS\|ok\|*)
+        [ "$ws_rc" -eq 0 ] || { emit "FATAL|discord-ws-probe-invalid"; exit 1; }
+        successes=$((successes + 1))
+        suite_connected=$((suite_connected + 1)) ;;
+      EVENT\|WS\|fail\|*)
+        [ "$ws_rc" -eq 1 ] || { emit "FATAL|discord-ws-probe-invalid"; exit 1; }
+        required_failed=1 ;;
+      *)
+        emit "FATAL|discord-ws-probe-unavailable"
+        exit 1 ;;
+    esac
+    emit "WS_RESULT|$candidate_number|$probe_phase|$probe_round|${ws_line#EVENT|WS|}"
+  fi
 
   emit "HTTP_RESULT|$candidate_number|$successes|$total"
   if [ "$successes" -ge "$MIN_HTTP_SUCCESS" ] && [ "$required_failed" -eq 0 ]; then
@@ -714,16 +828,33 @@ emit "SESSION|$SERVICE|runtime-only"
 
 if [ "$SERVICE" != discord-voice ]; then
   emit "BASELINE|started"
-  test_http_candidate 0 baseline 1 || true
   # 64 KB of random data for the upload volume check.
   head -c 65536 /dev/urandom > "$VOLUME_FILE" 2>/dev/null ||
     dd if=/dev/urandom of="$VOLUME_FILE" bs=1024 count=64 2>/dev/null || true
-fi
-if [ "$SERVICE" = youtube ]; then
-  if [ -f "$QUIC_PROBE" ] && command -v python3 >/dev/null 2>&1; then
-    quic_baseline active
-  else
-    : > "$QUIC_TARGETS"
+  baseline_pass=0
+  test_http_candidate 0 baseline 1 && baseline_pass=1
+  if [ "$SERVICE" = youtube ]; then
+    if [ -f "$QUIC_PROBE" ] && command -v python3 >/dev/null 2>&1; then
+      quic_baseline active
+      quic_active_count="$(awk '$3 == 1 {n++} END {print n+0}' "$QUIC_TARGETS")"
+      emit "QUIC_BASELINE|active|$quic_active_count|2"
+    else
+      : > "$QUIC_TARGETS"
+      emit "QUIC_BASELINE|unavailable|0|2"
+    fi
+  fi
+  if [ "${KD_TUNER_BASELINE_ONLY:-0}" = 1 ]; then
+    # Check the live profile twice, without stopping nfqws2 or touching firewall.
+    confirm_pass=0
+    test_http_candidate 0 confirm 2 && confirm_pass=1
+    if [ "$baseline_pass" -eq 1 ] && [ "$confirm_pass" -eq 1 ]; then
+      emit "BASELINE_ONLY|pass"
+    elif [ "$baseline_pass" -eq 0 ] && [ "$confirm_pass" -eq 0 ]; then
+      emit "BASELINE_ONLY|fail"
+    else
+      emit "BASELINE_ONLY|unstable"
+    fi
+    exit 0
   fi
 fi
 
@@ -783,10 +914,7 @@ if [ "$SERVICE" = youtube ]; then
   quic_gate
 fi
 
-firewall_iptables >/dev/null 2>&1 || {
-  emit "FATAL|cannot-install-temporary-firewall"
-  exit 1
-}
+install_temporary_firewall
 
 found=0
 # Candidates are read on fd 3: stdin stays connected to the Windows tuner,

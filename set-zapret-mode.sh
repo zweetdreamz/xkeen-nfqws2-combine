@@ -1,115 +1,14 @@
 #!/bin/sh
 set -eu
-
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-ENGINE="$SCRIPT_DIR/apply-discord-nfqws2.sh"
-
-usage() {
-  cat <<'EOF'
-Usage:
-  sh set-zapret-mode.sh discord --yes-router
-  sh set-zapret-mode.sh youtube --yes-router
-  sh set-zapret-mode.sh both --yes-router
-  sh set-zapret-mode.sh vless --yes-router
-
-Presets (Discord means both Discord TCP and Discord Voice):
-  discord  Discord through zapret, YouTube through VLESS
-  youtube  Discord through VLESS, YouTube through zapret
-  both     Discord and YouTube through zapret
-  vless    Discord and YouTube through VLESS
-
-Use set-service-route.sh to route Discord TCP and Discord Voice separately.
-
-Additional apply options are passed to apply-discord-nfqws2.sh. The current
-Discord UDP settings (--wide-udp, --udp-strategy) are kept unless overridden.
-Every switch creates latest-preapply and uses automatic rollback on failure.
-A standalone deployment (no XKeen) stays standalone and accepts only "both";
-pass --integrated to switch it to XKeen.
-EOF
-}
-
-[ "$#" -gt 0 ] || {
-  usage >&2
-  exit 2
-}
-
-preset="$1"
-shift
-case "$preset" in
-  discord|discord-zapret)
-    discord_route="zapret"
-    youtube_route="vless"
-    ;;
-  youtube|youtube-zapret)
-    discord_route="vless"
-    youtube_route="zapret"
-    ;;
-  both|all-zapret)
-    discord_route="zapret"
-    youtube_route="zapret"
-    ;;
-  vless|all-vless)
-    discord_route="vless"
-    youtube_route="vless"
-    ;;
-  -h|--help|help)
-    usage
-    exit 0
-    ;;
-  *)
-    echo "ERROR: unknown routing preset: $preset" >&2
-    usage >&2
-    exit 2
-    ;;
-esac
-
-# Keep the current Discord UDP settings (if a managed state exists) unless the
-# caller overrides them: the engine applies options in order, so "$@" wins.
-status_output="$(sh "$ENGINE" --status 2>/dev/null || true)"
-current_udp_range="$(printf '%s\n' "$status_output" | awk -F= '$1 == "udp_range" { print $2; exit }')"
-current_udp_strategy="$(printf '%s\n' "$status_output" | awk -F= '$1 == "udp_strategy" { print $2; exit }')"
-case "$current_udp_range" in
-  wide) set -- --wide-udp "$@" ;;
-  narrow) set -- --narrow-udp "$@" ;;
-esac
-case "$current_udp_strategy" in
-  flowseal|legacy) set -- --udp-strategy "$current_udp_strategy" "$@" ;;
-esac
-
-# A standalone deployment stays standalone (A5): only the preset without
-# VLESS fits it, and "--core X" is dropped (the engine refuses it there).
-# --integrated switches the deployment to XKeen explicitly.
-current_deployment="$(printf '%s\n' "$status_output" | awk -F= '$1 == "deployment_mode" { print $2; exit }')"
-deployment_choice=""
-for arg in "$@"; do
-  case "$arg" in
-    --integrated|--standalone-zapret|--without-xkeen|--no-xkeen) deployment_choice=explicit ;;
-  esac
-done
-if [ -z "$deployment_choice" ] && [ "$current_deployment" = "standalone-zapret" ]; then
-  if [ "$discord_route" = vless ] || [ "$youtube_route" = vless ]; then
-    echo "ERROR: this router uses the standalone Zapret deployment without XKeen; preset $preset needs XKeen (VLESS)." >&2
-    echo "       Pass --integrated to switch the deployment to XKeen." >&2
-    exit 2
-  fi
-  next_args=""
-  skip_next=0
-  for arg in "$@"; do
-    if [ "$skip_next" -eq 1 ]; then
-      skip_next=0
-      continue
-    fi
-    case "$arg" in
-      --core) skip_next=1; continue ;;
-      --core=*) continue ;;
-    esac
-    next_args="$next_args $(printf '%s' "$arg" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/")"
-  done
-  eval "set -- --standalone-zapret $next_args"
+if [ "${KDN_ENGINE:-}" = legacy ] && [ "${KD_ALLOW_TEST_ROOT:-0}" = 1 ]; then
+  case "${KD_TEST_ROOT:-}" in /|//|'') echo 'ERROR: unsafe legacy oracle root.' >&2; exit 2 ;; esac
+  oracle="$SCRIPT_DIR/tests/fixtures/engine/legacy-set-mode-phase6.sh.txt"
+  [ -f "$oracle" ] || { echo 'ERROR: isolated preset oracle is missing.' >&2; exit 1; }
+  # shellcheck source=/dev/null
+  . "$oracle"
+  exit $?
 fi
-
-exec sh "$ENGINE" \
-  --apply \
-  --discord-route "$discord_route" \
-  --youtube-route "$youtube_route" \
-  "$@"
+PYTHONPATH="$SCRIPT_DIR/tools/router${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+exec python3 "$SCRIPT_DIR/tools/router/route_switch.py" preset "$@"

@@ -29,7 +29,6 @@ import time
 REQUEST_TYPE = 0x0001
 RESPONSE_TYPE = 0x0002
 BODY_LENGTH = 70  # SSRC (4) + address (64) + port (2)
-PACKET_LENGTH = 4 + BODY_LENGTH
 
 
 def discovery_request(ssrc: int) -> bytes:

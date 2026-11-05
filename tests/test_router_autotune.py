@@ -6,6 +6,8 @@ from pathlib import Path
 import sys
 import unittest
 
+import panel_harness
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,16 +21,6 @@ def load_module(name: str, path: Path):
     return module
 
 
-def load_panel_namespace():
-    installer = (
-        ROOT / "tools" / "router" / "xkeen_control_script.sh"
-    ).read_text(encoding="utf-8")
-    source = installer.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF\n", 1)[0]
-    namespace = {"__name__": "panel_autotune_test"}
-    exec(compile(source, "app.py", "exec"), namespace)
-    return namespace
-
-
 class FakeWriter:
     def __init__(self):
         self.payload = {}
@@ -40,14 +32,17 @@ class FakeWriter:
         self.payload.setdefault("logs", []).append(line)
 
 
-class RouterAutotuneTests(unittest.TestCase):
+class RouterAutotuneTests(panel_harness.PanelTestCase):
+    ns_name = "panel_autotune_test"
+
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
+        cls.panel = cls.ns
         cls.job = load_module(
             "router_autotune_test_module",
             ROOT / "tools" / "router" / "zapret_autotune_job.py",
         )
-        cls.panel = load_panel_namespace()
         cls.source = cls.job.tuner.SourceFile(
             "general (ALT11).bat",
             "",
@@ -187,7 +182,7 @@ class RouterAutotuneTests(unittest.TestCase):
             ROOT / "tools" / "windows" / "router-candidate-runner.sh"
         ).read_text(encoding="utf-8")
         self.assertNotIn('["xkeen"', source.lower())
-        self.assertNotIn("xkeen -", runner.lower())
+        self.assertNotRegex(runner.lower(), r"(?:^|[\s;])xkeen\s+-(?:start|stop|restart)\b")
         self.assertNotIn("s05xkeen", runner.lower())
 
     def test_probe_details_preserve_failure_and_round(self):

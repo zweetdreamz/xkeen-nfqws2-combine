@@ -5,11 +5,12 @@
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-p no:cacheprovider"
+pythonpath = ["tools/router"]
 
 [tool.coverage.run]
 branch = true
-source = ["tools", "tests/.generated"]
-omit = ["tests/test_*.py", "tests/panel_loader.py"]
+source = ["tools"]
+omit = ["tests/test_*.py", "tests/panel_*.py"]
 
 [tool.coverage.report]
 show_missing = true

@@ -1,0 +1,23 @@
+name_client	xray
+name_profile	xkeen
+mode_proxy	Hybrid
+network_redirect	tcp
+network_tproxy	udp
+networks	tcp udp
+port_redirect	61219
+port_tproxy	61219
+port_donor	80,443,596:599,1400,5222,50000:50030
+port_exclude	
+policy_mark	0xffffaaa
+custom_mark	
+dscp_exclude	62
+dscp_proxy	63
+table_mark	0x111
+table_id	111
+file_dns	false
+proxy_dns	on
+proxy_router	off
+iptables_supported	true
+ip6tables_supported	true
+ipv4_proxy	127.0.0.1
+ipv6_proxy	::1

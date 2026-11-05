@@ -405,6 +405,153 @@ def translate_tls_profile(profile: Profile, service: str) -> Candidate | None:
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class TranslationResult:
+    """V2 translation result, including an explicit reason for rejected input."""
+
+    candidate: Candidate | None
+    reasons: tuple[str, ...] = ()
+
+
+def translate_tls_v2(profile: Profile, service: str) -> TranslationResult:
+    """Preserve fake order and crafted-packet IP IDs, or reject explicitly.
+
+    This is a TLS-profile translation, not an execution of the source BAT.
+    Legacy descriptors keep their identities; newly built candidates use v2.
+    """
+    def reject(reason: str) -> TranslationResult:
+        return TranslationResult(None, (reason,))
+
+    if service not in {"youtube", "discord-tcp"}:
+        return reject("unsupported-service")
+    if len(profile.options) > 200 or any(len(name) > 100 or len(value or "") > 512
+                                         for name, value in profile.options):
+        return reject("source-budget-exceeded")
+    ip_id = profile.last("ip-id")
+    if ip_id and ip_id != "zero":
+        return reject("unsupported-ip-id")
+    modifier = profile.last("dpi-desync-hostfakesplit-mod")
+    for part in filter(None, modifier.split(",")):
+        if part.startswith("altorder="):
+            if part != "altorder=0":
+                return reject("unsupported-altorder")
+        elif not re.fullmatch(r"host=[A-Za-z0-9.-]+", part):
+            return reject("unsupported-hostfakesplit-mod")
+
+    # The upstream parser updates the last blob's modifier and also uses it
+    # as the default for subsequently appended blobs. Duplicates matter.
+    entries: list[tuple[str, str]] = []
+    current_mod = ""
+    for name, value in profile.options:
+        if name == "dpi-desync-fake-tls":
+            entries.append((value or "", current_mod))
+        elif name == "dpi-desync-fake-tls-mod":
+            current_mod = value or ""
+            if entries:
+                entries[-1] = (entries[-1][0], current_mod)
+    if not entries:
+        # zapret1 keeps compatibility randomization for the implicit default
+        # fake unless a mod was explicitly set. Explicit "!" is CUSTOM_FAKE
+        # and does not receive that implicit modification.
+        entries.append(("", current_mod or "rnd,rndsni,dupsid"))
+    if len(entries) > 8:
+        return reject("fake-budget-exceeded")
+    fakes: list[str] = []
+    fooling, notes = fooling_params(profile)
+    if any(note.startswith("ignored fooling:") for note in notes):
+        return reject("unsupported-fooling")
+    if any("invalid" in note for note in notes):
+        return reject("invalid-fooling")
+    position = profile.last("dpi-desync-split-pos")
+    if position and safe_marker(position, "") != position:
+        return reject("invalid-split-position")
+    for name in ("dpi-desync-split-seqovl-pattern", "dpi-desync-fakedsplit-pattern"):
+        value = profile.last(name)
+        if value and not (re.fullmatch(r"0x(?:[0-9a-fA-F]{2}){1,240}", value)
+                          or basename_from_bat(value) == "tls_clienthello_www_google_com.bin"):
+            return reject("unsupported-pattern-asset")
+    repeats = profile.last("dpi-desync-repeats")
+    if repeats and (not re.fullmatch(r"[0-9]+", repeats) or not 1 <= int(repeats) <= 100):
+        return reject("invalid-repeats")
+    seq_increment = next((int(part.split("=", 1)[1]) for part in fooling if part.startswith("tcp_seq=")), 0)
+    seq_offset: int | None = 0
+    for value, mod in entries:
+        if not value or value == "!":
+            blob = "fake_default_tls"
+        elif re.fullmatch(r"0x(?:[0-9a-fA-F]{2}){1,240}", value):
+            blob = value
+        elif basename_from_bat(value) == "tls_clienthello_www_google_com.bin":
+            blob = "tls_clienthello"
+        else:
+            return reject("unsupported-fake-asset")
+        if mod and any(not (part in {"rnd", "rndsni", "dupsid", "padencap", "none"}
+                       or re.fullmatch(r"sni=[A-Za-z0-9.-]+", part))
+               for part in mod.split(",")):
+            return reject("invalid-tls-mod")
+        if "none" in mod.split(",") and mod != "none":
+            return reject("unsupported-mixed-none-mod")
+        if blob.startswith("0x") and mod not in {"", "none"}:
+            return reject("unsupported-hex-tls-mod")
+        params = [f"blob={blob}"]
+        if repeats:
+            params.append(f"repeats={repeats}")
+        if mod and mod != "none":
+            params.append(f"tls_mod={mod}")
+        if seq_increment and seq_offset is None:
+            return reject("unsupported-multi-fake-sequence-length")
+        params.extend(f"tcp_seq={seq_increment + seq_offset}"
+                      if part.startswith("tcp_seq=") and seq_increment else part for part in fooling)
+        fakes.append(lua_function("fake", params))
+        # zapret1 advances sequence once per blob (not per repeat) only when
+        # badseq is nonzero. A previous length-changing TLS mod needs packet
+        # context, so never guess the following fake's sequence offset.
+        if seq_increment:
+            if blob.startswith("0x"):
+                size = (len(blob) - 2) // 2
+            elif mod in {"", "none", "rnd"}:
+                size = 680 if blob == "fake_default_tls" else 681
+            else:
+                size = None
+            seq_offset = seq_offset + size if size is not None else None
+
+    try:
+        legacy = translate_tls_profile(profile, service)
+    except ValueError:
+        return reject("invalid-generated-arguments")
+    if legacy is None:
+        return reject("unsupported-chain")
+    if any("substitut" in note or "invalid" in note for note in legacy.notes):
+        return reject("unsupported-pattern-asset")
+    args: list[str] = []
+    for arg in legacy.args:
+        if arg.startswith("--lua-desync=fake:"):
+            args.extend(fakes)
+        elif arg.startswith("--lua-desync="):
+            parts = arg.removeprefix("--lua-desync=").split(":")
+            mode = parts[0]
+            # nfqws1 splits at byte 2 when split-pos is absent. The frozen
+            # legacy translator used midsld; correct only newly built v2 args.
+            if mode in {"multisplit", "multidisorder", "fakedsplit"} and not position:
+                parts = ["pos=2" if part.startswith("pos=") else part for part in parts]
+            if mode in {"fakedsplit", "hostfakesplit"} and repeats:
+                parts.append(f"repeats={repeats}")
+            if mode == "multidisorder":
+                # Preserve nfqws1 ordering separately for each replay piece.
+                parts[0] = "multidisorder_legacy"
+            args.append("--lua-desync=" + ":".join(parts))
+        else:
+            args.append(arg)
+    if ip_id:
+        args = [arg + ":ip_id=zero" if arg.startswith("--lua-desync=") else arg for arg in args]
+    if len(legacy.family) > 240 or len(args) > 40 or any(len(arg) > 600 for arg in args):
+        return reject("argument-budget-exceeded")
+    return TranslationResult(make_candidate(
+        service=service, source=profile.source, family=legacy.family,
+        args=tuple(args), rank=legacy.rank,
+        notes=tuple(note for note in legacy.notes if "collapsed" not in note),
+    ))
+
+
 def translate_voice_profile(profile: Profile) -> Candidate | None:
     chain = [
         part.strip().lower()
@@ -571,11 +718,22 @@ def make_candidate(
 
 
 def validate_args(args: Sequence[str]) -> None:
+    if not 1 <= len(args) <= 40:
+        raise ValueError("invalid generated argument count")
     for token in args:
         if token == "--new":
             continue
-        if not SAFE_TOKEN_RE.fullmatch(token):
+        if len(token) > 600 or not SAFE_TOKEN_RE.fullmatch(token):
             raise ValueError(f"unsafe generated nfqws2 token: {token!r}")
+        name, value = token[2:].split("=", 1)
+        if name not in {"filter-tcp", "filter-udp", "filter-l7", "hostlist", "out-range", "payload", "lua-desync"}:
+            raise ValueError("unsupported generated option")
+        if name == "lua-desync":
+            if value.split(":", 1)[0] not in {"fake", "multisplit", "multidisorder", "multidisorder_legacy", "fakedsplit", "hostfakesplit"}:
+                raise ValueError("unsupported generated Lua strategy")
+            if any(part.startswith("ip_id=") and part not in {"ip_id=zero", "ip_id=seq", "ip_id=rnd"}
+                   for part in value.split(":")[1:]):
+                raise ValueError("unsupported IP ID policy")
 
 
 def known_candidate(
@@ -654,6 +812,7 @@ def split_components(candidate: Candidate) -> tuple[list[str], str | None, str |
             (
                 "--lua-desync=multisplit:",
                 "--lua-desync=multidisorder:",
+                "--lua-desync=multidisorder_legacy:",
                 "--lua-desync=fakedsplit:",
                 "--lua-desync=hostfakesplit:",
             )
@@ -661,6 +820,10 @@ def split_components(candidate: Candidate) -> tuple[list[str], str | None, str |
             split = token
         elif not token.startswith("--lua-desync="):
             base.append(token)
+    if sum(token.startswith("--lua-desync=fake:") for token in candidate.args[:tcp_end]) > 1:
+        # This helper models one fake only. Never silently truncate a v2 chain
+        # when creating bounded component mixes; exact and sweep keep all fakes.
+        return base, None, None
     return base, fake, split
 
 
@@ -793,7 +956,7 @@ def mutate_tls_recipe(
                 "lua",
                 "pos",
                 position,
-                {"multisplit", "multidisorder", "fakedsplit"},
+                {"multisplit", "multidisorder", "multidisorder_legacy", "fakedsplit"},
             )
         )
     if seqovl is not None:
@@ -1122,6 +1285,7 @@ def build_candidates(
     include_builtin: bool = True,
     youtube_quic: Sequence[str] | None = None,
     voice_range: str = "narrow",
+    translation_rejections: list[dict] | None = None,
 ) -> list[Candidate]:
     """Translate, sweep and mix candidates for ``service``.
 
@@ -1149,7 +1313,13 @@ def build_candidates(
         for profile in profiles:
             roles = profile_roles(profile)
             if service in {"youtube", "discord-tcp"} and service in roles:
-                candidate = translate_tls_profile(profile, service)
+                translated = translate_tls_v2(profile, service)
+                candidate = translated.candidate
+                if candidate is None and translation_rejections is not None:
+                    translation_rejections.append({
+                        "source": source.name, "profile": profile.number,
+                        "service": service, "reasons": list(translated.reasons),
+                    })
                 if candidate:
                     if service == "youtube":
                         candidate = make_candidate(
@@ -1396,6 +1566,7 @@ def load_local_sources(directory: Path) -> tuple[list[SourceFile], str]:
 def candidate_data(candidates: Sequence[Candidate]) -> str:
     lines: list[str] = []
     for number, candidate in enumerate(candidates, 1):
+        validate_args(candidate.args)
         encoded = base64.b64encode(
             candidate.command_line().encode("utf-8")
         ).decode("ascii")
@@ -1655,7 +1826,9 @@ def verification_report(service: str, output: Sequence[str], found_number: int |
             line.startswith(f"EVENT|QUIC_RESULT|{found_number}|pass|") for line in quic_results
         )
     return {
-        "method": "manual-duplex-voice" if service == "discord-voice" else "router-http-content-two-rounds",
+        "method": ("manual-duplex-voice" if service == "discord-voice" else
+                   "router-http-websocket-two-rounds" if service == "discord-tcp" else
+                   "router-http-content-two-rounds"),
         "voice_audio_automatic": False,
         "quic_verified": quic_verified,
         "video_playback_verified": False,
@@ -1668,6 +1841,10 @@ def verification_report(service: str, output: Sequence[str], found_number: int |
         "quic_gate_reason": gate[1] if gate and len(gate) > 1 else None,
         "quic_probes": [result for line in output if (result := parse_quic_event(line)) is not None],
         "quic_results": quic_results,
+        "ws_results": [line for line in output if line.startswith("EVENT|WS_RESULT|")],
+        "ws_verified": (service == "discord-tcp" and found_number is not None and
+                        any(line.startswith(f"EVENT|WS_RESULT|{found_number}|confirm|2|ok|")
+                            for line in output)),
         "volume_checks": [line for line in output if line.startswith("EVENT|PROBE_VOLUME|")],
     }
 
@@ -1815,6 +1992,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"ERROR: не удалось получить стратегии: {error}", file=sys.stderr)
         return 1
 
+    translation_rejections: list[dict] = []
     candidates = select_candidates(
         build_candidates(
             args.service,
@@ -1822,10 +2000,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.mix_level,
             include_builtin=not args.source_file,
             voice_range=args.udp_range,
+            translation_rejections=translation_rejections,
         ),
         args.max_candidates,
         args.search_seed,
     )
+    for rejected in translation_rejections:
+        print(f"Пропущен {rejected['source']} / профиль {rejected['profile']}: "
+              + ", ".join(rejected["reasons"]))
     if not candidates:
         print(
             f"ERROR: в {args.source_file} нет профиля для {args.service}.",

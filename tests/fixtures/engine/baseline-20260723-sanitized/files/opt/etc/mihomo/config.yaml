@@ -1,0 +1,3 @@
+tproxy-port: 1181
+redir-port: 1182
+# Руководство по конфигурации Mihomo - https://wiki.metacubex.one/ru/config/

@@ -1,0 +1,770 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f5bd5'/%3E%3Cpath d='M9 22h9a3.5 3.5 0 0 0 0-7h-4a3.5 3.5 0 0 1 0-7h9' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>XKeen Control</title>
+<style>
+:root{color-scheme:light dark;
+--bg:#f4f5f7;--surface:#fff;--surface-2:#f7f8fa;--sunken:#eef0f4;--line:#e3e6ec;--line-strong:#cfd4dd;
+--text:#141a26;--muted:#5f6879;--faint:#8a93a3;
+--accent:#4f5bd5;--accent-strong:#3f49b8;--accent-soft:#eceefd;--on-accent:#fff;
+--green:#0f8a5f;--green-soft:#e6f5ee;--red:#d1343f;--red-soft:#fdecee;--amber:#a85b00;--amber-soft:#fff4e0;
+--direct:#1f6fd1;--zapret:#0f8a5f;--vpn:#7a4fd6;
+--shadow:0 1px 2px rgba(16,24,40,.05),0 4px 16px rgba(16,24,40,.05);--ring:0 0 0 3px rgba(79,91,213,.28);
+--radius:16px;--radius-sm:10px;--mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace}
+@media(prefers-color-scheme:dark){:root{
+--bg:#0e1116;--surface:#161a21;--surface-2:#1b2029;--sunken:#11151b;--line:#272d38;--line-strong:#363d4a;
+--text:#e7eaf0;--muted:#a0a8b7;--faint:#757e8e;
+--accent:#8e97ff;--accent-strong:#a9b0ff;--accent-soft:#232848;--on-accent:#0e1116;
+--green:#3fcf8e;--green-soft:#15291f;--red:#ff6b74;--red-soft:#2e1619;--amber:#f4b740;--amber-soft:#2b2210;
+--direct:#5aa4ff;--zapret:#3fcf8e;--vpn:#b294ff;
+--shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.25);--ring:0 0 0 3px rgba(142,151,255,.35)}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.i{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.page{width:min(1080px,calc(100% - 32px));margin:0 auto;padding:0 0 48px}
+header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:28px 0 18px}
+.brand{display:flex;align-items:center;gap:14px;min-width:0}
+.logo{display:grid;place-items:center;width:46px;height:46px;flex:none;border-radius:13px;background:linear-gradient(135deg,#5b67e8,#3f49b8);color:#fff;box-shadow:0 6px 18px rgba(79,91,213,.35)}
+.logo .i{width:24px;height:24px;stroke-width:2.2}
+h1{margin:0;font-size:clamp(22px,4vw,28px);line-height:1.15;letter-spacing:-.02em;font-weight:720}
+.subtitle,.hint,.muted{color:var(--muted)}.subtitle{font-size:14px}
+.status{display:inline-flex;align-items:center;gap:9px;padding:7px 14px 7px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);box-shadow:var(--shadow);font-size:14px;font-weight:600;white-space:nowrap}
+.dot{position:relative;width:9px;height:9px;border-radius:50%;background:var(--amber);color:var(--amber)}
+.dot.ok{background:var(--green);color:var(--green)}.dot.bad{background:var(--red);color:var(--red)}
+.dot.ok::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid currentColor;opacity:0;animation:pulse 2.4s ease-out infinite}
+@keyframes pulse{0%{transform:scale(.6);opacity:.55}100%{transform:scale(1.5);opacity:0}}
+.tabs{position:sticky;top:0;z-index:5;display:flex;gap:4px;margin:0 -4px;padding:6px 4px;overflow-x:auto;scrollbar-width:none;background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:saturate(1.4) blur(10px);-webkit-backdrop-filter:saturate(1.4) blur(10px)}
+.tabs::-webkit-scrollbar{display:none}
+.tabs .tab{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border:1px solid transparent;border-radius:11px;background:transparent;color:var(--muted);font-weight:600;white-space:nowrap;box-shadow:none}
+.tabs .tab:hover{background:var(--surface);color:var(--text);border-color:var(--line);transform:none}
+.tabs .tab.active{background:var(--surface);color:var(--accent);border-color:var(--line);box-shadow:var(--shadow)}
+.tab-page{display:none}.tab-page.active{display:block;animation:fade .18s ease-out}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.card{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow);padding:22px;margin-top:16px}
+.card h2{margin:0 0 4px;font-size:18px;line-height:1.3;letter-spacing:-.01em;font-weight:680}
+.hint{margin:0 0 16px;font-size:14px}
+button{appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:10px 16px;background:var(--surface);color:var(--text);font:inherit;font-size:14px;font-weight:600;line-height:1.3;cursor:pointer;transition:background .15s,border-color .15s,color .15s,box-shadow .15s,transform .15s}
+button:hover{background:var(--surface-2);border-color:var(--faint)}
+button:active{transform:translateY(1px)}
+button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{outline:none;box-shadow:var(--ring);border-color:var(--accent)}
+button:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.apply{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}.apply:hover{background:var(--accent-strong);border-color:var(--accent-strong)}
+.cancel,.stop{color:var(--red)}.cancel:hover,.stop:hover{background:var(--red-soft);border-color:var(--red)}
+.rollback,.restart{color:var(--amber)}.rollback:hover,.restart:hover{background:var(--amber-soft);border-color:var(--amber)}
+.start{color:var(--green)}.start:hover{background:var(--green-soft);border-color:var(--green)}
+.clear{padding:7px 12px;font-size:13px;border-color:var(--line);color:var(--muted)}.clear:hover{color:var(--text)}
+.xkeen-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.xkeen-actions button{padding:12px 16px}
+.services{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.service,.profile{border:1px solid var(--line);border-radius:14px;padding:16px;background:var(--surface-2)}
+.service-head,.profile-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px}
+.service h3,.profile h3{margin:0;font-size:16px;font-weight:680}
+.service-title{display:flex;align-items:center;gap:10px}
+.service-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;color:#fff;font-weight:800;font-size:15px}
+.service[data-service^=discord] .service-icon{background:#5865f2}.service[data-service=discord-voice] .service-icon{background:#3ba55d}
+.service-scope{color:var(--muted);font-size:12px;line-height:1.3}.service[data-service=youtube] .service-icon{background:#ff2d2d}.service[data-service=telegram] .service-icon{background:#229ed9}
+.current:empty{display:none}.current{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:var(--sunken);color:var(--muted);font:600 11px/1.6 var(--mono);letter-spacing:.04em}
+.service:has(.mode.active[data-mode=direct]) .current{background:color-mix(in srgb,var(--direct) 14%,transparent);color:var(--direct)}
+.service:has(.mode.active[data-mode=zapret]) .current{background:color-mix(in srgb,var(--zapret) 14%,transparent);color:var(--zapret)}
+.service:has(.mode.active[data-mode=vpn]) .current{background:color-mix(in srgb,var(--vpn) 14%,transparent);color:var(--vpn)}
+.service-config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.service-config{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--surface-2)}
+.service-config summary{cursor:pointer;color:var(--accent);font-size:14px;font-weight:650}
+.service-config-body{margin-top:12px}.service-config-label{color:var(--muted);font-size:12px;margin:12px 0 6px}
+.service-config pre{min-height:0;max-height:280px}
+.automation-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.vpn-node-list{display:grid;gap:10px}.vpn-node-card{padding:14px 16px;border:1px solid var(--line);border-radius:13px;background:var(--surface-2)}.vpn-node-card.active{border-color:color-mix(in srgb,var(--green) 45%,var(--line))}.vpn-node-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.vpn-node-meta,.vpn-node-health{color:var(--muted);font-size:13px;margin-top:6px;overflow-wrap:anywhere}.vpn-node-health.good{color:var(--green)}.vpn-node-health.bad{color:var(--red)}.vpn-node-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.vpn-node-actions button{padding:7px 12px;font-size:13px}
+.vpn-recover[hidden]{display:none}
+.automation-scenario{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--surface-2)}
+.automation-scenario h3{margin:0 0 12px;font-size:16px}.automation-scenario .field{margin-top:10px}
+.modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(4,minmax(0,1fr))}
+.mode{--mode:var(--accent);padding:9px 8px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted);box-shadow:none}
+.mode[data-mode=direct]{--mode:var(--direct)}.mode[data-mode=zapret]{--mode:var(--zapret)}.mode[data-mode=vpn]{--mode:var(--vpn)}.mode[data-mode=unmanaged]{--mode:var(--muted)}.mode[data-mode=ws]{--mode:#229ed9}
+.mode::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--mode);opacity:.55}
+.mode:hover{background:var(--surface);color:var(--text);border-color:transparent}
+.mode.active{background:var(--surface);color:var(--mode);border-color:color-mix(in srgb,var(--mode) 45%,transparent);box-shadow:var(--shadow)}
+.mode.active::before{opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,var(--mode) 22%,transparent)}
+.legend{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px;color:var(--muted);font-size:13px}
+.legend>div{padding:10px 12px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line)}
+.legend b{display:flex;align-items:center;gap:7px;color:var(--text);margin-bottom:2px;font-size:13px}
+.legend b::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--c)}
+.legend>div:nth-child(1){--c:var(--direct)}.legend>div:nth-child(2){--c:var(--zapret)}.legend>div:nth-child(3){--c:var(--vpn)}
+.warning{display:flex;gap:10px;align-items:flex-start;margin-top:14px;padding:11px 14px;border-radius:12px;border:1px solid color-mix(in srgb,var(--amber) 30%,transparent);background:var(--amber-soft);color:var(--text);font-size:13px;line-height:1.5}
+.warning::before{content:"!";display:grid;place-items:center;flex:none;width:18px;height:18px;margin-top:1px;border-radius:50%;background:var(--amber);color:var(--surface);font-weight:800;font-size:12px}
+.upload{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}
+input[type=file]{width:100%;padding:12px;border:1.5px dashed var(--line-strong);border-radius:12px;background:var(--surface-2);color:var(--muted);font:inherit;font-size:14px;cursor:pointer}
+input[type=file]:hover{border-color:var(--accent)}
+input[type=file]::file-selector-button{margin-right:12px;padding:7px 12px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);color:var(--text);font:inherit;font-weight:600;cursor:pointer}
+.candidate{display:none}.candidate.visible{display:block;margin-top:16px}
+.meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px;margin:14px 0;padding:14px 16px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line)}
+.meta div{min-width:0;overflow-wrap:anywhere}.meta b{display:block;color:var(--faint);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.profiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.profile{display:flex;flex-direction:column;padding:14px}
+.profile h3{font-size:15px}.profile .family{flex:1;min-height:40px;margin-top:4px;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.profile button{width:100%;padding:8px;margin-top:10px;font-size:13px;color:var(--red)}
+.tuner-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.field{display:grid;gap:6px;align-content:start}.field-hint{color:var(--faint);font-size:12px}.field .check{display:flex;align-items:center;gap:8px;color:var(--text);font-size:14px;font-weight:600;cursor:pointer}.field .check input{width:18px;height:18px;margin:0;accent-color:var(--accent)}.field label{color:var(--muted);font-size:13px;font-weight:600}
+.field select,.field input,.field textarea{width:100%;padding:10px 12px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font:inherit;font-size:14px}
+.field textarea{min-height:125px;resize:vertical;font-family:var(--mono);font-size:12px}
+.field .auto-toggle{display:inline-flex;align-items:center;gap:10px;width:max-content;max-width:100%;color:var(--text);font-size:15px;cursor:pointer}
+.field .auto-toggle input[type=checkbox]{width:20px;height:20px;min-width:20px;margin:0;padding:0;accent-color:var(--accent)}
+.automation-save-status{margin-top:12px;min-height:22px;color:var(--muted);font-size:14px}
+.automation-save-status.good{color:var(--green)}.automation-save-status.bad{color:var(--red)}
+#automationSaveStatus:empty{display:none}
+.field select:hover,.field input:hover,.field textarea:hover{border-color:var(--faint)}
+.tuner-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+.profile-head .tuner-actions{margin-top:0}
+.verdict{display:none;margin-top:14px;padding:16px;border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:13px;background:var(--amber-soft)}
+.verdict.visible{display:block}.verdict b{display:block;margin-bottom:2px}.verdict-actions{display:flex;gap:10px;margin-top:12px}
+.progress-line{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px 12px;margin:12px 0;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+.found-card{display:none;border-color:color-mix(in srgb,var(--green) 40%,var(--line))}.found-card.visible{display:block}
+.found-card h2{color:var(--green)}
+.console-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.console-head h2{margin:0}
+pre{min-height:120px;max-height:340px;overflow:auto;margin:0;padding:14px 16px;border:1px solid #1f2633;border-radius:12px;background:#0b0e14;color:#c9f4dd;white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.65 var(--mono)}
+.args{min-height:80px;max-height:260px;color:#cdd6ff}
+.route-progress{display:none;margin-top:16px;padding:14px 16px;border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);border-radius:13px;background:var(--accent-soft)}
+.route-progress.visible{display:block}
+.route-progress-head{display:flex;justify-content:space-between;gap:12px;font-size:14px;font-variant-numeric:tabular-nums}
+.bar{height:6px;margin-top:10px;border-radius:99px;background:color-mix(in srgb,var(--accent) 16%,transparent);overflow:hidden}
+.bar span{display:block;height:100%;width:0;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--green));transition:width .35s ease}
+.history-list,.version-list,.check-list,.diagnostic-list{display:grid;gap:10px}
+#history,#profileVersions{max-height:min(60vh,560px);overflow-y:auto;align-content:start;padding-right:6px;scrollbar-gutter:stable}
+.history-item,.version-item,.check-item,.diagnostic-item,.update-box{padding:14px 16px;border:1px solid var(--line);border-radius:13px;background:var(--surface-2)}
+.history-head,.version-head,.check-head,.diagnostic-head,.update-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.history-head>b,.version-head>b,.diagnostic-head>b{font-size:14px;font-weight:650}
+.history-head>span,.version-head>span,.diagnostic-head>span{flex:none;padding:2px 9px;border-radius:999px;background:var(--sunken);color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.history-head>span.good,.version-head>span.good,.diagnostic-head>span.good{background:var(--green-soft);color:var(--green)}
+.history-head>span.bad,.version-head>span.bad,.diagnostic-head>span.bad{background:var(--red-soft);color:var(--red)}
+.diagnostic-item.warn .diagnostic-head>span{background:var(--amber-soft);color:var(--amber)}
+.history-item button,.version-item button{margin-top:10px;padding:6px 12px;font-size:13px}
+.entry-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.entry-actions .trash-button{margin-left:auto;color:var(--red);padding:7px;min-width:34px}.trash-button:hover{background:var(--red-soft);border-color:var(--red)}.trash-button .i{width:16px;height:16px}
+.history-routes,.version-meta,.check-detail,.diagnostic-detail{color:var(--muted);font-size:13px;margin-top:4px;overflow-wrap:anywhere}
+.good{color:var(--green)}.bad{color:var(--red)}
+.diagnostic-item.bad,.check-item.bad{color:var(--text)}
+.card>.profile-head:last-child{margin-bottom:0}.card>.profile-head:last-child .hint{margin-bottom:0}
+#postApplyStatus{white-space:pre-line}#postApplyStatus.good,#postApplyStatus.bad{margin:0 0 4px;font-size:14px;font-weight:600}
+.toolbar{display:flex;flex-wrap:wrap;gap:10px}
+.check-item,.diagnostic-item{position:relative;padding-left:18px;overflow:hidden}
+.check-item::before,.diagnostic-item::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--red)}
+.check-item.ok::before,.diagnostic-item.ok::before{background:var(--green)}.check-item.manual::before,.diagnostic-item.warn::before{background:var(--amber)}
+.updates-grid,.diagnostic-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.mono{font:12px var(--mono);overflow-wrap:anywhere}
+.empty{color:var(--faint);padding:14px;border:1px dashed var(--line);border-radius:12px;text-align:center;font-size:14px}
+.update-box .empty{border:0;padding:0;text-align:left}
+.download{display:inline-flex;align-items:center;gap:8px;text-decoration:none;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:10px 16px;background:var(--surface);color:var(--accent);font-weight:600;font-size:14px;transition:background .15s,border-color .15s}
+.download:hover{background:var(--accent-soft);border-color:var(--accent)}
+.protocols{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.protocol{padding:2px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);font:11px/1.7 var(--mono)}
+.protocol.ok{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,transparent)}
+.protocol.warn{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 40%,transparent)}
+.protocol.bad{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,transparent)}
+.section-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}.section-head h2{margin:0}
+.section-head .i{color:var(--accent)}
+#tunerVerification{margin:12px 0 0}
+footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
+@media(max-width:760px){.services{grid-template-columns:minmax(0,1fr)}.service .modes{max-width:460px}}
+@media(max-width:480px){.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){header{align-items:flex-start;flex-direction:column;padding-top:20px}.services,.service-config-grid,.automation-grid,.profiles,.tuner-grid,.updates-grid,.diagnostic-grid,.legend,.meta{grid-template-columns:1fr}.card{padding:18px}.profile-head{flex-wrap:wrap}}
+@media(max-width:480px){.page{width:calc(100% - 24px)}.xkeen-actions,.upload{grid-template-columns:1fr}.tabs{display:grid;grid-template-columns:1fr 1fr}.tabs .tab{justify-content:center;padding:8px 10px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+.vpn-node-title{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-width:0;overflow-wrap:anywhere}
+.vpn-node-endpoint{font:12px var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:3px 7px;overflow-wrap:anywhere}
+.vpn-node-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}
+.vpn-node-tag{font-size:12px;font-weight:600;padding:3px 8px;border-radius:6px;max-width:100%;overflow-wrap:anywhere;color:var(--accent);background:var(--accent-soft)}
+.vpn-node-tag.protocol{color:var(--vpn);background:color-mix(in srgb,var(--vpn) 12%,var(--surface))}
+.vpn-node-tag.security{color:var(--green);background:var(--green-soft)}
+.vpn-node-tag.flow{color:var(--direct);background:color-mix(in srgb,var(--direct) 12%,var(--surface))}
+.vpn-node-tag.fingerprint{color:var(--amber);background:var(--amber-soft)}
+.vpn-node-tag.sni{color:var(--red);background:var(--red-soft)}
+.dns-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px;padding:4px;background:var(--sunken);border-radius:12px}
+.dns-option{border:0;box-shadow:none;background:transparent;padding:12px 8px}.dns-option.selected{background:var(--surface);color:var(--accent);box-shadow:var(--shadow)}
+.dns-option.selected:disabled{opacity:1;cursor:default}
+
+.notify-header,.notify-heading,.notify-enable,.notify-actions,.notify-primary-actions,.notify-statusline{display:flex;align-items:center;gap:12px}
+.notify-header,.notify-actions,.notify-statusline{justify-content:space-between;flex-wrap:wrap}
+.notify-header{margin-bottom:22px}.notify-heading h2{margin:0}.notify-server{border:1px solid var(--line);border-radius:6px;padding:3px 7px;color:var(--muted);font:12px var(--mono)}
+.notify-enable{font-size:14px;font-weight:600;cursor:pointer}.notify-enable input,.notify-event input{width:18px;height:18px;flex:none;margin:0;padding:0;accent-color:var(--accent)}
+.notify-connection{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:20px}
+.notify-topic-row{display:flex;gap:8px;min-width:0}.notify-topic-row input{min-width:0;font-family:var(--mono);font-size:12px}.notify-topic-row button{flex:none;white-space:nowrap;padding-inline:12px}
+.notify-optional{font-weight:400;color:var(--faint)}.notify-clear{margin-top:3px}
+.notify-event-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:24px 0}
+.notify-event-group{min-width:0;margin:0;border:1px solid var(--line);border-radius:12px;padding:12px 16px 16px;background:var(--surface-2)}
+.notify-event-group legend{padding:0 6px;color:var(--muted);font-size:13px;font-weight:600}
+.notify-event{display:flex;align-items:center;gap:10px;font-size:14px;line-height:1.5;cursor:pointer;padding:5px 0}
+.notify-primary-actions{flex-wrap:wrap;gap:10px}.notify-link{display:inline-flex;align-items:center;text-decoration:none;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:9px 14px;color:var(--text);font-size:14px}
+.notify-link[hidden]{display:none}.notify-link:hover{background:var(--surface-2)}
+.notify-statusline{border-top:1px solid var(--line);padding-top:12px;margin-top:18px;gap:8px}
+.notify-statusline .hint{margin:0;font-size:12px}.notify-statusline button{padding:5px 9px;font-size:12px}
+#notifyMessage:empty{display:none}#notifyMessage:not(:empty){margin-top:12px;font-size:13px}
+@media(max-width:760px){.notify-connection,.notify-event-grid{grid-template-columns:minmax(0,1fr)}.notify-connection{gap:16px}.notify-header{gap:14px}}
+@media(max-width:420px){.notify-topic-row{flex-wrap:wrap}.notify-topic-row input{width:100%}.notify-topic-row button{width:100%}.notify-actions>.notify-link{width:100%;justify-content:center}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h7.5a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7H16"/></symbol>
+<symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+<symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></symbol>
+<symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4"/><path d="M7 9l5-5 5 5"/><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+<symbol id="i-restart" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></symbol>
+<symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.64-6.36"/><path d="M3 4v5h5"/><path d="M12 7.5V12l3 2"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></symbol>
+<symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7.5 9.5l3 2.5-3 2.5"/><path d="M13 15h4"/></symbol>
+<symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+</svg>
+<main class="page">
+<header><div class="brand"><div class="logo"><svg class="i"><use href="#i-route"/></svg></div><div><h1>XKeen Control</h1><div class="subtitle">Маршруты сервисов и профили nfqws2</div></div></div><div class="status" role="status" aria-live="polite"><span id="dot" class="dot"></span><span id="statusText">проверка…</span></div></header>
+<nav class="tabs" aria-label="Разделы"><button class="tab active" data-tab="control"><svg class="i"><use href="#i-route"/></svg>Управление</button><button class="tab" data-tab="vpn-nodes"><svg class="i"><use href="#i-route"/></svg>VPN-ноды</button><button class="tab" data-tab="diagnostics"><svg class="i"><use href="#i-pulse"/></svg>Диагностика</button><button class="tab" data-tab="autotune"><svg class="i"><use href="#i-spark"/></svg>Автоподбор</button><button class="tab" data-tab="automation"><svg class="i"><use href="#i-history"/></svg>Расписание</button><button class="tab" data-tab="notifications"><svg class="i"><use href="#i-history"/></svg>Уведомления</button><button class="tab" data-tab="import"><svg class="i"><use href="#i-upload"/></svg>Импорт профиля</button></nav>
+
+<div id="control" class="tab-page active">
+  <section class="card"><div class="section-head"><svg class="i"><use href="#i-power"/></svg><h2>XKeen</h2></div><p class="hint">Запуск и остановка proxy-клиента.</p><div class="xkeen-actions"><button class="start" data-action="start"><svg class="i"><use href="#i-play"/></svg>Включить</button><button class="stop" data-action="stop"><svg class="i"><use href="#i-stop"/></svg>Выключить</button><button class="restart" data-action="restart"><svg class="i"><use href="#i-restart"/></svg>Перезапустить</button></div></section>
+  <section class="card"><div class="section-head"><svg class="i"><use href="#i-route"/></svg><h2>Маршруты сервисов</h2></div><p class="hint">Меняется только выбранный сервис; режимы остальных сохраняются.</p><div class="services">
+    <article class="service" data-service="discord-tcp"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">D</span><div><h3>Discord TCP</h3><div class="service-scope">Сайт, API, CDN, QUIC</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
+    <article class="service" data-service="discord-voice"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">V</span><div><h3>Discord Voice</h3><div class="service-scope">Голос и STUN по UDP</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
+    <article class="service" data-service="youtube"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">Y</span><div><h3>YouTube</h3><div class="service-scope">Сайт, видео, QUIC</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
+    <article class="service" data-service="telegram"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">T</span><div><h3>Telegram</h3><div class="service-scope">Сайт, CDN и MTProto · звонки только через VPN</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="vpn">VPN</button><button class="mode" data-mode="ws" title="MTProto через WebSocket-ретранслятор на роутере (как Telegram Web)">WS</button><button class="mode" data-mode="unmanaged" title="Убрать правила проекта; Telegram идёт по вашим правилам XKeen">Выкл</button></div></article>
+  </div><div class="legend"><div><b>Direct</b>Напрямую через WAN, без nfqws2.</div><div><b>Zapret</b>Через WAN с обработкой nfqws2.</div><div><b>VPN</b>Через одну общую активную ноду Xray.</div></div><div class="warning">Смена маршрута выполняет полный транзакционный apply и перезапускает службы, включая Xkeen.</div><div id="routeProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="routeStage">Подготовка</b><span id="routePercent">0%</span></div><div class="bar"><span id="routeBar"></span></div></div></section>
+  <section class="card"><div class="profile-head"><h2>DNS домашней сети</h2><button id="refreshDnsMode">Обновить</button></div>
+    <div id="dnsModeStatus" class="hint" role="status">Загрузка…</div>
+    <div class="dns-options"><button class="dns-option" data-dns-mode="vless" disabled>DNS over VLESS</button><button class="dns-option" data-dns-mode="doh" disabled>DoH на роутере</button></div>
+  </section>
+  __SERVICE_CONFIG_SECTION__
+  <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-history"/></svg><h2>История и откат</h2></div><div class="hint">Записи можно убрать в корзину; снимки отката при этом сохраняются.</div></div><button id="refreshHistory" class="clear">Обновить</button></div><div id="history" class="history-list" tabindex="0" aria-label="Прокручиваемая история операций"><div class="empty">История пуста.</div></div></section>
+</div>
+
+<div id="vpn-nodes" class="tab-page">
+  <section class="card"><div class="profile-head"><div><h2>VPN-ноды Xray</h2><p class="hint">Одна активная нода для всех правил с тегом <code>vless-reality</code>: маршруты панели и остальные правила Xray переключаются вместе.</p></div><div class="tuner-actions"><button id="recoverVpnNode" class="rollback vpn-recover" hidden>Восстановить прошлую ноду</button><button id="refreshVpnNodes" class="clear">Обновить</button></div></div>
+    <div id="vpnSummary" class="hint">Загрузка нод…</div><div id="vpnNodesList" class="vpn-node-list"></div>
+    <div id="vpnActionStatus" class="automation-save-status" role="status" aria-live="polite"></div>
+    <div id="vpnProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="vpnStage">Подготовка</b><span id="vpnPercent">0%</span></div><div class="bar"><span id="vpnBar"></span></div></div>
+    <div class="warning">«Проверить» запускает отдельный временный Xray через выбранную ноду и не меняет рабочий VPN. Только кнопка «Сделать активной» после вашего подтверждения перезапустит XKeen/Xray; перед этим создаётся backup и при ошибке выполняется откат. nfqws2 не перезапускается.</div>
+  </section>
+  <section class="card"><h2>Добавить VPN-ноду</h2><p class="hint">Поддерживаются VLESS, Trojan и Hysteria2: ссылка или один JSON outbound Xray. Сложные параметры Hysteria2 (обфускация, port-hopping) вводите через JSON. Секреты сохраняются на роутере с правами 0600 и не возвращаются в список.</p>
+    <div class="field"><label for="vpnNodeName">Имя ноды</label><input id="vpnNodeName" placeholder="Европа — резерв" maxlength="64" autocomplete="off"></div>
+    <div class="field"><label for="vpnNodeSource">VLESS / Trojan / Hysteria2 ссылка или JSON outbound</label><textarea id="vpnNodeSource" rows="6" placeholder="vless://… / trojan://… / hy2://… или { &quot;protocol&quot;: &quot;hysteria&quot;, … }" spellcheck="false" autocomplete="off"></textarea></div>
+    <div class="tuner-actions"><button id="addVpnNode" class="apply">Добавить и проверить</button><button id="checkAllVpnNodes">Проверить все</button></div>
+  </section>
+  <section class="card" id="vpnMonitorCard"><h2>Контроль активной VPN-ноды и IP</h2>
+    <p class="hint">Проверяется работающий Xray и выбранная вами нода. Новый IP требует вашего одобрения. Контроль сообщает результат и сохраняет историю.</p>
+    <div class="diagnostic-grid">
+      <div class="field"><label for="vpnMonitorFamily">Контролируемые адреса</label><select id="vpnMonitorFamily"><option value="both">IPv4 и IPv6</option><option value="ipv4">Только IPv4</option><option value="ipv6">Только IPv6</option></select></div>
+      <div class="field"><label for="vpnMonitorInterval">Интервал, минуты</label><input id="vpnMonitorInterval" type="number" min="1" max="1440" value="5"></div>
+      <div class="field"><label><input id="vpnMonitorEnabled" type="checkbox"> Регулярный контроль выбранной ноды</label></div>
+      <div class="field"><label for="vpnExpected4">Разрешённые IPv4 (через запятую)</label><input id="vpnExpected4" autocomplete="off" placeholder="Утверждаются вручную"></div>
+      <div class="field"><label for="vpnExpected6">Разрешённые IPv6 (через запятую)</label><input id="vpnExpected6" autocomplete="off" placeholder="Утверждаются вручную"></div>
+    </div>
+    <div class="toolbar"><button id="vpnMonitorCheck" class="apply">Проверить текущую ноду</button><button id="vpnMonitorApprove">Одобрить наблюдаемый IP</button><button id="vpnMonitorSave">Сохранить контроль и IP</button><button id="vpnMonitorReload">Обновить форму</button></div>
+    <div id="vpnMonitorSummary" role="status" aria-live="polite" class="hint">Контроль выключен до настройки и одобрения IP.</div>
+    <pre id="vpnMonitorResult">Наблюдений пока нет.</pre><details><summary>История изменений</summary><pre id="vpnMonitorHistory">Событий пока нет.</pre></details>
+    <p class="hint">Ноды и IP не переключаются автоматически. Недоступная family остаётся непроверенной. Монитор не закрепляет адрес у VPN-провайдера и не блокирует трафик.</p>
+  </section>
+  <section id="vpnEditCard" class="card" hidden><h2 id="vpnEditTitle">Редактировать ноду</h2>
+    <p class="hint">Секреты не загружаются в браузер. Пустое поле подключения сохраняет прежние параметры. Сохранение не запускает проверку и не переключает VPN; после изменения параметров нажмите «Проверить».</p>
+    <input id="vpnEditId" type="hidden">
+    <div class="field"><label for="vpnEditName">Имя</label><input id="vpnEditName" maxlength="64" autocomplete="off"></div>
+    <div class="field"><label for="vpnEditSource">Полная новая ссылка или JSON outbound (необязательно)</label><textarea id="vpnEditSource" rows="5" autocomplete="off" spellcheck="false" placeholder="Оставьте пустым, чтобы сохранить параметры"></textarea></div>
+    <p id="vpnEditHint" class="hint"></p><div class="tuner-actions"><button id="vpnEditSave" class="apply">Сохранить</button><button id="vpnEditCancel" class="clear">Отмена</button></div>
+  </section>
+</div>
+
+<div id="diagnostics" class="tab-page">
+  <section class="card"><h2>Проверить маршрут Xray</h2>
+    <p class="hint">Решение работающего Xray по введённому контексту. Домен и фактический IP можно задать вместе. Доступность ресурса проверяется отдельно.</p>
+    <div class="diagnostic-grid">
+      <div class="field"><label for="inspectDomain">Домен</label><input id="inspectDomain" placeholder="example.org" maxlength="253"></div>
+      <div class="field"><label for="inspectIp">IP назначения (необязательно)</label><input id="inspectIp" maxlength="45"></div>
+      <div class="field"><label for="inspectInbound">Inbound</label><input id="inspectInbound" value="redirect" maxlength="128"></div>
+      <div class="field"><label for="inspectNetwork">Транспорт</label><select id="inspectNetwork"><option value="tcp">TCP</option><option value="udp">UDP</option></select></div>
+      <div class="field"><label for="inspectPort">Порт назначения</label><input id="inspectPort" type="number" min="1" max="65535" value="443"></div>
+      <div class="field"><label for="inspectSource">IP клиента (необязательно)</label><input id="inspectSource" maxlength="45"></div>
+      <div class="field"><label for="inspectSourcePort">Порт клиента (0 = неизвестен)</label><input id="inspectSourcePort" type="number" min="0" max="65535" value="0"></div>
+    </div>
+    <div class="toolbar"><button id="inspectRoute" class="apply">Проверить маршрут</button><button id="inspectSetup">Подготовить доступ к диагностике</button></div>
+    <p class="hint">Подготовка создаёт локальные API/SOCKS и перезапускает Xray с той же нодой. Сами проверки службы не меняют.</p>
+    <pre id="inspectRouteResult" role="status" aria-live="polite">Проверок пока нет.</pre>
+  </section>
+  <section class="card"><h2>Ресурсы через Direct / VPN</h2>
+    <p class="hint">Проверки идут с роутера через выбранные пути. Методика TLS/TCP16 основана на dpi-detector; сертификаты HTTPS проверяются.</p>
+    <div class="diagnostic-grid">
+      <div class="field"><label for="inspectResource">Ресурс</label><select id="inspectResource"><option value="youtube">YouTube</option><option value="discord">Discord API</option><option value="telegram">Telegram</option><option value="claude">Claude</option><option value="tcp16">TCP16: ответ 64 КиБ</option></select></div>
+      <div class="field"><label for="inspectPath">Путь</label><select id="inspectPath"><option value="both">Direct и VPN</option><option value="direct">Direct</option><option value="vpn">VPN</option></select></div>
+      <div class="field"><label><input id="inspectExtended" type="checkbox"> TLS1.2 и TLS1.3 (расширенная проверка)</label></div>
+    </div>
+    <button id="inspectResources" class="apply">Проверить ресурс</button>
+    <pre id="inspectResourceResult" role="status" aria-live="polite">Проверок пока нет.</pre>
+    <p class="hint">Direct может обрабатываться текущим nfqws2. HTTP отказ, таймаут или reset сами по себе не доказывают DPI. UDP/QUIC, звук и воспроизведение здесь не проверяются.</p>
+  </section>
+  <section class="card"><div class="section-head"><svg class="i"><use href="#i-pulse"/></svg><h2>Диагностика Flowseal для роутера</h2></div><p class="hint">Адаптация Run Diagnostics и Run Tests: ничего не применяет, не меняет firewall и не перезапускает Xkeen/nfqws2.</p>
+    <div class="toolbar"><button class="diag-start apply" data-diag-kind="health">Проверить роутер</button><button class="diag-start" data-diag-kind="standard">Standard tests</button><button class="diag-start" data-diag-kind="dpi">DPI 16–20 КБ</button><button id="cancelDiagnostic" class="cancel" disabled>Остановить тест</button></div>
+    <div id="diagnosticProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="diagnosticStatus">Задание не запускалось</b><span id="diagnosticPercent">0%</span></div><div class="bar"><span id="diagnosticBar"></span></div></div>
+    <div class="warning">Standard tests и DPI выполняются из этого браузера по текущим маршрутам устройства. Собственный VPN/прокси компьютера тоже влияет на путь. Ping и выбор TLS-версии браузеру недоступны. DPI: HTTPS GET и POST 64 КиБ на 12 узлов, до 768 КиБ отправки. CORS скрывает HTTP-код и объём передачи; таймаут или ошибка могут быть вызваны сервером, перенаправлением или политикой браузера и не доказывают DPI-блокировку. При закрытии страницы тест остановится.</div>
+  </section>
+  <div id="postApplyStatus" hidden role="status" aria-live="polite"></div>
+  <section class="card"><div class="profile-head"><div><h2>Результаты</h2><div id="diagnosticSummary" class="hint">Пока нет результатов.</div></div></div><div id="diagnosticResults" class="diagnostic-list"><div class="empty">Запустите один из тестов выше.</div></div></section>
+  <section class="card"><h2>Кэш Discord на Windows</h2><p class="hint">Роутер не имеет доступа к файлам компьютера. Helper закрывает Discord и переименовывает Cache, Code Cache и GPUCache в резервные каталоги — ничего безвозвратно не удаляется.</p><a class="download" href="/tools/reset-discord-cache.ps1" download><svg class="i"><use href="#i-download"/></svg>Скачать Windows-helper</a></section>
+</div>
+
+<div id="autotune" class="tab-page">
+  <section class="card"><div class="profile-head"><div><h2>Обновления Flowseal</h2><div class="hint">Новые стратегии скачиваются для следующего подбора. Рабочие профили остаются прежними.</div></div><button id="checkUpdates">Проверить обновление</button></div><div id="updateInfo" class="update-box"><div class="empty">Обновления ещё не проверялись.</div></div></section>
+  <section class="card">
+    <div class="section-head"><svg class="i"><use href="#i-spark"/></svg><h2>Автоподбор стратегий</h2></div>
+    <p class="hint">Актуальные general*.bat временно проверяются на роутере. Меняется только проверяемый профиль; остальные TCP/QUIC/UDP-профили сохраняются. Ручной и плановый режимы используют одинаковые пробы: Discord HTTPS + Gateway WebSocket, YouTube HTTPS + транспорт + QUIC. Voice требует подтверждения звука.</p>
+    <div class="tuner-grid">
+      <div class="field"><label for="tunerService">Сервис</label><select id="tunerService"><option value="youtube">YouTube</option><option value="discord-tcp">Discord TCP</option><option value="discord-voice">Discord Voice</option></select></div>
+      <div class="field"><label for="tunerSource">BAT-файл Flowseal</label><select id="tunerSource"><option value="">Все файлы и встроенный профиль</option></select><div id="tunerSourceHint" class="field-hint">Выберите файл, чтобы проверить только его конфиг. Список появится после «Проверить обновление».</div></div>
+      <div class="field"><label for="tunerMix">Глубина перебора</label><select id="tunerMix"><option value="safe">Safe — по одному параметру</option><option value="extended">Extended — плюс сочетания</option><option value="off">Только прямой перевод BAT</option></select></div>
+      <div class="field"><label for="tunerMax">Максимум кандидатов</label><input id="tunerMax" type="number" min="1" max="64" value="32"></div>
+      <div class="field" id="clientIpField" hidden><label for="tunerClientIp">LAN IPv4 компьютера с Discord</label><input id="tunerClientIp" inputmode="decimal" placeholder="192.168.2.60"></div>
+      <div class="field" id="voiceAutoField" hidden><label for="tunerVoiceCheck">Проверка Voice</label><select id="tunerVoiceCheck"><option value="traffic">По трафику Discord — зайти в канал один раз</option><option value="manual">Вручную — переподключаться под каждого кандидата</option><option value="probe" disabled>Пакетом с роутера — нужен сохранённый сервер</option></select><div id="voiceAutoHint" class="field-hint"></div></div>
+    </div>
+    <div class="tuner-actions"><button id="startTuner" class="apply"><svg class="i"><use href="#i-play"/></svg>Начать подбор</button><button id="cancelTuner" class="cancel" disabled>Остановить и восстановить nfqws2</button></div>
+    <div class="warning">Safe отдельно меняет repeats, out-range, TCP pos/seq и QUIC repeats. Extended добавляет ограниченные сочетания и смешивание BAT-компонентов. С выбранным BAT-файлом вариации строятся от его профиля, а сам профиль проверяется первым. Порядок остальных кандидатов каждый раз новый. Подбор временно перезапускает только nfqws2; Xkeen не вызывается. Сервис должен заранее находиться в режиме Zapret.</div>
+  </section>
+  <section class="card">
+    <div class="profile-head"><div><h2>Ход подбора</h2><div id="tunerStatus" class="hint">Задание не запускалось</div></div><span id="tunerCommit" class="current"></span></div>
+    <div class="progress-line"><span id="tunerProgress">—</span><span id="tunerProbe"></span></div>
+    <pre id="tunerLog"></pre>
+    <div id="tunerVerification" class="hint"></div>
+    <div id="voiceVerdict" class="verdict" role="alert"><b>Проверьте Discord Voice</b><div>Переподключитесь к голосовому каналу и подтвердите, появился ли звук в обе стороны.</div><div class="verdict-actions"><button id="voiceYes" class="apply">Да, работает</button><button id="voiceNo" class="cancel">Нет</button></div></div>
+  </section>
+  <section id="tunerFound" class="card found-card">
+    <div class="section-head"><svg class="i good"><use href="#i-check"/></svg><h2>Найден проходной профиль</h2></div>
+    <div class="meta"><div><b>ID</b><span id="tunerFoundId"></span></div><div><b>Семейство</b><span id="tunerFoundFamily"></span></div><div><b>Источник</b><span id="tunerFoundSource"></span></div></div>
+    <pre id="tunerFoundArgs" class="args"></pre>
+    <div class="tuner-actions"><button id="applyTunerResult" class="apply">Применить найденный профиль</button></div>
+    <div role="status" aria-live="polite"><progress id="tunerApplyProgress" hidden aria-label="Применение профиля"></progress><p id="tunerApplyStatus" class="hint" aria-busy="false"></p></div>
+    <div class="warning">Это отдельное подтверждённое действие: создаётся focused snapshot и перезапускается только nfqws2.</div>
+  </section>
+</div>
+
+<div id="notifications" class="tab-page">
+  <section class="card notify-card">
+    <div class="notify-header">
+      <div class="notify-heading"><h2>Уведомления</h2><span class="notify-server">ntfy.sh</span></div>
+      <label class="notify-enable"><input id="notifyEnabled" type="checkbox"><span>Включить уведомления</span></label>
+    </div>
+    <div class="notify-connection">
+      <div class="field"><label for="notifyTopic">Тема</label><div class="notify-topic-row"><input id="notifyTopic" maxlength="128" autocomplete="off"><button id="notifyGenerate" type="button">Новая тема</button></div>
+        <div class="field-hint">Без аккаунта доступ есть у всех, кто знает тему.</div></div>
+      <div class="field"><label for="notifyToken">Токен ntfy <span class="notify-optional">· необязательно</span></label><input id="notifyToken" type="password" maxlength="4096" autocomplete="new-password">
+        <label class="check notify-clear"><input id="notifyClearToken" type="checkbox"><span>Удалить сохранённый токен</span></label></div>
+    </div>
+    <div id="notifyEvents" class="notify-event-grid"></div>
+    <div class="notify-actions"><div class="notify-primary-actions"><button id="notifySave" class="apply">Сохранить</button><button id="notifyTest">Отправить тест</button></div>
+      <a id="notifyLink" class="notify-link" target="_blank" rel="noopener noreferrer" hidden>Открыть канал ↗</a></div>
+    <div id="notifyMessage" role="status" aria-live="polite"></div>
+    <div class="notify-statusline"><div id="notifyDelivery" class="hint"></div><button id="notifyRefresh" class="clear">Обновить</button></div>
+  </section>
+</div>
+<div id="automation" class="tab-page">
+  <section class="card"><div class="section-head"><svg class="i"><use href="#i-history"/></svg><h2>Автоматическая проверка</h2></div>
+    <div class="field"><label class="auto-toggle"><input id="autoEnabled" type="checkbox"><span>Включить расписание</span></label></div>
+    <div class="field"><label for="autoTimes">Время запуска (Москва)</label><input id="autoTimes" placeholder="03:00, 15:00"></div>
+    <div class="automation-grid">
+      <div class="automation-scenario" data-auto-service="youtube"><h3>YouTube</h3><label><input class="auto-service-enabled" type="checkbox"> Проверять по расписанию</label><div class="field"><label>Сценарий перебора</label><select class="auto-mix"><option value="off">Прямой перевод BAT</option><option value="safe">Safe</option><option value="extended">Extended</option></select></div><div class="field"><label>Максимум кандидатов</label><input class="auto-max" type="number" min="1" max="64" value="32"></div><div class="field"><label>BAT-файл</label><select class="auto-source"><option value="">Все файлы и встроенный профиль</option></select></div></div>
+      <div class="automation-scenario" data-auto-service="discord-tcp"><h3>Discord TCP</h3><label><input class="auto-service-enabled" type="checkbox"> Проверять по расписанию</label><div class="field"><label>Сценарий перебора</label><select class="auto-mix"><option value="off">Прямой перевод BAT</option><option value="safe">Safe</option><option value="extended">Extended</option></select></div><div class="field"><label>Максимум кандидатов</label><input class="auto-max" type="number" min="1" max="64" value="32"></div><div class="field"><label>BAT-файл</label><select class="auto-source"><option value="">Все файлы и встроенный профиль</option></select></div></div>
+    </div>
+    <div class="tuner-actions"><button id="saveAutomation" class="apply">Сохранить расписание</button><button id="cancelAutomation" class="cancel" disabled>Остановить текущий запуск</button></div>
+    <div id="automationSaveStatus" class="automation-save-status" role="status" aria-live="polite"></div>
+  </section>
+  <section class="card"><div class="profile-head"><div><h2>Последний запуск</h2><div id="automationSummary" class="hint">Данные загружаются…</div></div><span id="automationNext" class="current"></span></div><pre id="automationEvents">Запусков пока не было.</pre></section>
+</div>
+
+<div id="import" class="tab-page">
+  <section class="card"><div class="section-head"><svg class="i"><use href="#i-upload"/></svg><h2>Отчёт Windows-тюнера</h2></div><p class="hint">Выберите JSON-отчёт с найденным кандидатом. Сначала он проверяется, применение доступно только для сервиса в режиме Zapret.</p><div class="upload"><input id="reportFile" type="file" accept="application/json,.json"><button id="validate">Проверить</button></div>
+    <div id="candidate" class="candidate"><div class="meta"><div><b>Сервис</b><span id="candidateService"></span></div><div><b>ID кандидата</b><span id="candidateId"></span></div><div><b>BAT-источник</b><span id="candidateSource"></span></div><div><b>Семейство</b><span id="candidateFamily"></span></div></div><pre id="candidateArgs" class="args"></pre><p class="warning">Применение создаёт отдельный snapshot, меняет только nfqws2 и перезапускает только nfqws2. Xkeen не останавливается и не перезапускается.</p><button id="applyImport" class="apply">Применить профиль nfqws2</button></div>
+  </section>
+  <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-layers"/></svg><h2>Постоянные профили</h2></div><div class="hint">Они сохраняются при следующих обычных apply.</div></div><button id="rollbackImport" class="rollback">Откатить последнее изменение</button></div><div id="profiles" class="profiles"></div></section>
+  <section class="card"><div class="profile-head"><div><h2>Версии профилей по дате</h2><div class="hint">Старые версии можно убрать в корзину; активная защищена.</div></div><button id="refreshVersions" class="clear">Обновить</button></div><div id="profileVersions" class="version-list" tabindex="0" aria-label="Прокручиваемые версии профилей"><div class="empty">Сохранённых версий пока нет.</div></div></section>
+</div>
+
+<section class="card"><div class="console-head"><div class="section-head"><svg class="i"><use href="#i-terminal"/></svg><h2>Журнал</h2></div><button class="clear" id="clear">Очистить</button></div><pre id="log" aria-live="polite"></pre></section>
+<footer>XKeen + nfqws2 · локальная панель, доступна только из LAN</footer>
+</main>
+<script src="/assets/browser-diagnostics.js"></script>
+<script>
+const logEl=document.getElementById("log"),dot=document.getElementById("dot"),statusText=document.getElementById("statusText");
+const controlHeaders={"X-XKeen-Control":"1","Content-Type":"application/json"};
+const label={direct:"DIRECT",zapret:"ZAPRET",vless:"VPN",vpn:"VPN",ws:"WS",unmanaged:"ВЫКЛ",unknown:"НЕИЗВЕСТНО"};
+const serviceLabel={youtube:"YouTube",discord:"Discord",telegram:"Telegram",rollback:"Откат",vpn:"Общий VPN","discord-tcp":"Discord TCP","discord-voice":"Discord Voice"};
+let selectedReport=null,validatedDescriptor=null,tunerPoll=null,tunerRequest=null,tunerWasActive=false,routeWatch=null,diagnosticWatch=null,operationStarting=false;
+function stamp(){return new Date().toLocaleTimeString("ru-RU",{hour12:false})}
+function log(text,replace=false){const line="["+stamp()+"] "+text;logEl.textContent=replace?line:(logEl.textContent?logEl.textContent+"\n"+line:line);logEl.scrollTop=logEl.scrollHeight}
+let tunerRunning=false,diagnosticRunning=false;
+function busy(value){value=!!value||!!routeWatch||operationStarting;document.querySelectorAll("button:not(.tab)").forEach(b=>b.disabled=value);if(!value){tunerControls(tunerRunning);diagnosticControls(diagnosticRunning);if(dnsModeState)renderDnsMode(dnsModeState);else document.querySelectorAll("[data-dns-mode]").forEach(b=>b.disabled=true)}}
+// Success first, then plain words for known harmless lines, then the raw output.
+function resultText(title,output){const out=output||"",notes=[];if(/no usable IPv6 WAN route/.test(out))notes.push("Предупреждение IPv6 безвредно: у провайдера нет IPv6-маршрута, nfqws2 работает по IPv4.");if(/seccomp: Invalid argument/.test(out))notes.push("Строка seccomp безвредна: ядро Keenetic его не поддерживает, nfqws2 продолжает работу.");return "Готово: "+title+(notes.length?"\n"+notes.join("\n"):"")+(out?"\n\nПолный вывод:\n"+out:"")}
+function modeForUi(value){return value==="vless"?"vpn":value}
+function updateService(service,value){const box=document.querySelector('[data-service="'+service+'"]');box.querySelector(".current").textContent=label[value]||value;box.querySelectorAll(".mode").forEach(b=>b.classList.toggle("active",b.dataset.mode===modeForUi(value)))}
+function fmtDate(value){if(!value)return "—";const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString("ru-RU",{hour12:false})}
+function routeName(value){return label[value]||value||"?"}
+function routesText(routes){if(!routes)return "—";if(routes.discord&&!routes["discord-tcp"])return "Discord "+routeName(routes.discord)+" · YouTube "+routeName(routes.youtube);return "Discord TCP "+routeName(routes["discord-tcp"])+" · Voice "+routeName(routes["discord-voice"])+" · YouTube "+routeName(routes.youtube)+(routes.telegram&&routes.telegram!=="unmanaged"?" · Telegram "+routeName(routes.telegram):"")}
+function setRouteProgress(d){const progress=Math.max(0,Math.min(100,Number(d.progress||0))),vpnJob=String(d.operation||"").startsWith("vpn-");for(const [prefix,show] of [["route",!vpnJob],["vpn",vpnJob]]){const box=document.getElementById(prefix+"Progress");box.classList.toggle("visible",!!d.active&&show);document.getElementById(prefix+"Stage").textContent=d.stage_label||d.status||"Подготовка";document.getElementById(prefix+"Percent").textContent=progress+"%";document.getElementById(prefix+"Bar").style.width=progress+"%"}}
+async function readJson(response){const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.output||data.error||("HTTP "+response.status));return data}
+const pendingReads=new Map();
+function api(path,options={}){
+  const method=(options.method||"GET").toUpperCase();
+  const request=()=>fetch(path,{cache:"no-store",...options}).then(readJson);
+  // In-flight sharing only, never a response cache. A write is a freshness
+  // boundary, including failure/rollback; do not share a pre-write read after it.
+  if(method!=="GET"){
+    pendingReads.clear();
+    return request().finally(()=>pendingReads.clear());
+  }
+  // Custom headers/signals/options retain their own fetch/abort semantics.
+  if(Object.keys(options).length)return request();
+  if(pendingReads.has(path))return pendingReads.get(path);
+  const pending=request().finally(()=>{if(pendingReads.get(path)===pending)pendingReads.delete(path)});
+  pendingReads.set(path,pending);
+  return pending;
+}
+function tabVisible(id){return !document.hidden&&document.getElementById(id).classList.contains("active")}
+const viewReads=new Map();
+function latestView(name){
+  const generation=(viewReads.get(name)||0)+1;
+  viewReads.set(name,generation);
+  return ()=>viewReads.get(name)===generation;
+}
+function refreshActiveTab(){
+  if(document.hidden)return;
+  if(tabVisible("control"))return Promise.all([refresh(),refreshHistory(),refreshDnsMode()]);
+  if(tabVisible("vpn-nodes"))return refreshVpnNodes();
+  if(tabVisible("import"))return Promise.all([refreshProfiles(),refreshVersions()]);
+  if(tabVisible("notifications"))return refreshNotifications();
+  if(tabVisible("automation"))return Promise.all([refreshAutomation(),refreshTunerSources()]);
+  if(tabVisible("autotune"))return Promise.all([refreshUpdates(),refreshTunerSources(),refreshVoiceEndpoint(),refreshTuner()]);
+  if(tabVisible("diagnostics")&&!diagnosticWatch&&!browserDiagnosticRun)return refreshDiagnostic();
+}
+function suspendBackgroundPolls(){
+  if(automationPoll){clearTimeout(automationPoll);automationPoll=null}
+  if(document.hidden&&tunerPoll){clearTimeout(tunerPoll);tunerPoll=null}
+}
+function scheduleAutomationPoll(active){
+  if(!active||!tabVisible("automation")){if(automationPoll){clearTimeout(automationPoll);automationPoll=null}return}
+  if(!automationPoll)automationPoll=setTimeout(()=>{automationPoll=null;if(tabVisible("automation"))refreshAutomation()},3000);
+}
+async function refresh(){const latest=latestView("status");try{const d=await api("/api/status");if(!latest())return;updateService("discord-tcp",d.discord_tcp_route||"unknown");updateService("discord-voice",d.discord_voice_route||"unknown");updateService("youtube",d.youtube_route||"unknown");updateService("telegram",d.telegram_route||"unknown");const running=d.xkeen_runtime==="running";dot.className="dot "+(running?"ok":"bad");statusText.textContent=running?"XKeen работает":"XKeen остановлен"}catch(e){if(!latest())return;dot.className="dot bad";statusText.textContent="ошибка статуса";log("status: "+e)}}
+function vpnMessage(message,tone=""){const box=document.getElementById("vpnActionStatus");box.className="automation-save-status"+(tone?" "+tone:"");box.textContent=message}
+async function refreshVpnNodes(){
+  if(!tabVisible("vpn-nodes"))return;
+  const latest=latestView("vpn-nodes");
+  const summary=document.getElementById("vpnSummary"),root=document.getElementById("vpnNodesList");
+  try{
+    const d=await api("/api/vpn-nodes");
+    if(!latest())return;
+    document.getElementById("recoverVpnNode").hidden=!d.recovery_needed;
+    const activeNode=d.nodes.find(node=>node.active);
+    summary.textContent="Активна: "+(activeNode?activeNode.name:d.active)+" · "+d.nodes.length+" нод"+
+      (d.recovery_needed?" · ВНИМАНИЕ: прежнее переключение прервалось, требуется восстановление":"")+
+      (d.drift?" · Конфиг Xray изменён вне панели":"")+(d.warning?" · "+d.warning:"")+
+      ". Все VPN-правила продолжают использовать тег "+d.canonical_tag+".";
+    root.textContent="";
+    d.nodes.forEach(node=>{
+      const card=document.createElement("article");card.className="vpn-node-card"+(node.active?" active":"");
+      const head=document.createElement("div");head.className="vpn-node-head";
+      const title=document.createElement("b");title.textContent=node.name;
+      const heading=document.createElement("div");heading.className="vpn-node-title";heading.append(title);
+      const endpoint=document.createElement("code");endpoint.className="vpn-node-endpoint";endpoint.textContent=node.endpoint;heading.append(endpoint);
+      const badge=document.createElement("span");badge.className=node.active?"good":"current";badge.textContent=node.active?"АКТИВНА":"РЕЗЕРВ";head.append(heading,badge);
+      const meta=document.createElement("div");meta.className="vpn-node-meta vpn-node-tags";
+      for(const [value,kind,label] of [[node.protocol,"protocol","Протокол"],[node.network,"transport","Транспорт"],[node.security==="none"?null:node.security,"security","Защита"],[node.flow,"flow","Flow"],[node.fingerprint,"fingerprint","TLS fingerprint"],[node.sni,"sni","SNI"]]){
+        if(!value)continue;
+        const tag=document.createElement("span");tag.className="vpn-node-tag "+kind;tag.title=label+": "+value;
+        tag.textContent=["protocol","transport","security"].includes(kind)?value.toUpperCase():value;meta.append(tag);
+      }
+      const health=document.createElement("div");health.className="vpn-node-health"+(node.health?(node.health.ok?" good":" bad"):"");
+      health.textContent=!node.health?"Проверка не запускалась":node.health.ok?"Соединение работает · "+node.health.latency_ms+" мс · HTTP "+node.health.http_code+" · "+fmtDate(node.health.checked_utc):"Не прошла проверку: "+(node.health.detail||"нет ответа")+" · "+fmtDate(node.health.checked_utc);
+      const actions=document.createElement("div");actions.className="vpn-node-actions";
+      const edit=document.createElement("button");edit.textContent="Редактировать";edit.disabled=!!d.recovery_needed;edit.addEventListener("click",()=>editVpnNode(node));actions.append(edit);
+      const check=document.createElement("button");check.textContent="Проверить";check.addEventListener("click",()=>checkVpnNode(node.id));actions.append(check);
+      if(!node.active){
+        const activate=document.createElement("button");activate.className="apply";activate.textContent="Сделать активной";
+        activate.disabled=!!d.drift||!!d.warning||!!d.recovery_needed;activate.addEventListener("click",()=>selectVpnNode(node.id));
+        actions.append(activate,trashButton("Убрать ноду в корзину",()=>deleteVpnNode(node.id)));
+      }else if(d.drift&&!d.recovery_needed){
+        const sync=document.createElement("button");sync.textContent="Принять текущий конфиг";sync.addEventListener("click",syncVpnCurrent);actions.append(sync);
+      }
+      card.append(head,meta,health,actions);root.append(card);
+    });
+    if(routeWatch||operationStarting)busy(true);
+  }catch(e){if(!latest())return;summary.textContent="Ошибка списка VPN-нод: "+e;root.textContent="";log("VPN-ноды: "+e)}
+}
+async function checkVpnNode(id){busy(true);vpnMessage("Проверяю "+id+" через отдельный Xray…");try{const d=await operation("/api/vpn-nodes/check/"+encodeURIComponent(id),"Проверка VPN-ноды "+id);vpnMessage(d.health.ok?"Соединение "+id+" работает.":"Нода "+id+" не прошла проверку: "+d.health.detail,d.health.ok?"good":"bad");await refreshVpnNodes()}catch(e){vpnMessage("Ошибка проверки: "+e,"bad");log("ошибка проверки VPN: "+e)}finally{busy(false)}}
+async function checkAllVpnNodes(){try{const d=await api("/api/vpn-nodes");for(const node of d.nodes)await checkVpnNode(node.id)}catch(e){vpnMessage("Ошибка проверки нод: "+e,"bad")}}
+async function addVpnNode(){const name=document.getElementById("vpnNodeName").value.trim(),source=document.getElementById("vpnNodeSource").value.trim();if(!name||!source){vpnMessage("Укажите имя и ссылку или JSON outbound.","bad");return}busy(true);vpnMessage("Проверяю и добавляю ноду "+name+"…");try{const d=await operation("/api/vpn-nodes/add","Добавление VPN-ноды "+name,JSON.stringify({name,source}));document.getElementById("vpnNodeSource").value="";document.getElementById("vpnNodeName").value="";vpnMessage(d.node.health.ok?"Нода добавлена и соединение работает.":"Нода сохранена, но проверка не прошла: "+d.node.health.detail,d.node.health.ok?"good":"bad");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось добавить ноду: "+e,"bad");log("ошибка добавления VPN: "+e)}finally{busy(false)}}
+function editVpnNode(node){document.getElementById("vpnEditId").value=node.id;document.getElementById("vpnEditName").value=node.name;document.getElementById("vpnEditSource").value="";document.getElementById("vpnEditSource").disabled=!!node.active;document.getElementById("vpnEditHint").textContent=node.active?"Активную ноду можно переименовать. Для изменения подключения сначала выберите резервную ноду.":"Параметры сохраняются только в реестре. Рабочий outbound не изменится.";document.getElementById("vpnEditCard").hidden=false}
+function cancelVpnEdit(){document.getElementById("vpnEditCard").hidden=true;document.getElementById("vpnEditSource").value="";document.getElementById("vpnEditId").value=""}
+async function saveVpnEdit(){const id=document.getElementById("vpnEditId").value,body={name:document.getElementById("vpnEditName").value.trim()},source=document.getElementById("vpnEditSource").value.trim();if(!id||!body.name)return;if(source&&!document.getElementById("vpnEditSource").disabled)body.source=source;busy(true);try{await api("/api/vpn-nodes/update/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:JSON.stringify(body)});cancelVpnEdit();vpnMessage("Нода сохранена. Рабочий VPN не переключался; новые параметры требуют отдельной проверки.","good");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось сохранить ноду: "+e,"bad")}finally{busy(false)}}
+async function selectVpnNode(id){if(!confirm("Сделать VPN-ноду «"+id+"» активной для ВСЕХ правил Xray с тегом vless-reality?\n\nСначала пройдёт проверка соединения и будет создан backup. Затем XKeen/Xray перезапустится; панель не запускает перезапуск nfqws2. При ошибке старый VPN автоматически восстановится."))return;busy(true);vpnMessage("Переключаю общий VPN на "+id+"…");try{const d=await api("/api/vpn-nodes/activate/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:"{}"});await watchRouteJob(d.job_id,"VPN-нода "+id,{post:true,refreshVpn:false});vpnMessage("Общий VPN переключён на "+id+".","good")}catch(e){vpnMessage("Переключение не удалось: "+e,"bad");busy(false)}finally{await refreshVpnNodes()}}
+async function recoverVpnNode(){if(!confirm("Восстановить прежнюю VPN-ноду после прерванного переключения?\n\nПанель вернёт сохранённый outbound и при необходимости перезапустит XKeen/Xray. nfqws2 не перезапускается скриптом."))return;busy(true);vpnMessage("Восстанавливаю прежнюю VPN-ноду…");try{const d=await api("/api/vpn-nodes/recover",{method:"POST",headers:controlHeaders,body:"{}"});await watchRouteJob(d.job_id,"Восстановление VPN",{post:true,refreshVpn:false});vpnMessage("Прежняя VPN-нода восстановлена.","good")}catch(e){vpnMessage("Восстановление не удалось: "+e,"bad");busy(false)}finally{await refreshVpnNodes()}}
+async function deleteVpnNode(id){if(!confirm("Убрать резервную VPN-ноду «"+id+"» в корзину? Активный VPN и маршруты не изменятся."))return;try{await api("/api/vpn-nodes/delete/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:"{}"});vpnMessage("Нода "+id+" убрана в корзину.","good");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось убрать ноду: "+e,"bad")}}
+async function syncVpnCurrent(){if(!confirm("Принять текущий outbound vless-reality из Xray как активную ноду? Это не перезапускает службы, но заменит сохранённый вариант этой ноды."))return;try{await api("/api/vpn-nodes/sync-current",{method:"POST",headers:controlHeaders,body:"{}"});vpnMessage("Текущий outbound сохранён в реестре.","good");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось синхронизировать: "+e,"bad")}}
+async function refreshProfiles(){if(!tabVisible("import"))return;const latest=latestView("profiles");const root=document.getElementById("profiles");try{const d=await api("/api/imported");if(!latest())return;root.textContent="";d.profiles.forEach(p=>{const box=document.createElement("article");box.className="profile";const h=document.createElement("h3");h.textContent=serviceLabel[p.service];const family=document.createElement("div");family.className="family";family.textContent=p.installed?(p.family+" · "+p.candidate_id+" · "+fmtDate(p.installed_utc)):(p.error||"Встроенный профиль");box.append(h,family);if(p.installed){const b=document.createElement("button");b.textContent="Вернуть встроенный";b.addEventListener("click",()=>clearImport(p.service));box.append(b)}root.append(box)});document.getElementById("rollbackImport").disabled=!d.rollback_available||!!routeWatch||operationStarting}catch(e){if(!latest())return;root.textContent="Ошибка: "+e;log("профили: "+e)}}
+async function xkeenAction(action){busy(true);log("xkeen -"+action,true);try{const d=await operation("/api/xkeen/"+action,"xkeen -"+action);log(resultText("xkeen -"+action,d.output))}catch(e){log("ошибка: "+e)}finally{busy(false);await refresh();await refreshProfiles()}}
+function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
+async function operation(path,name,body){
+  if(routeWatch||operationStarting)throw new Error("другая операция уже выполняется на странице");
+  operationStarting=true;busy(true);
+  try{
+    const start=await api(path,{method:"POST",headers:controlHeaders,body:body||"{}"});
+    if(typeof start.job_id!=="string"||!start.job_id)throw new Error("сервер не вернул ID задания");
+    return await watchRouteJob(start.job_id,name,{post:false});
+  }finally{operationStarting=false;busy(false)}
+}
+function watchRouteJob(jobId,name,options={post:true}){
+  if(routeWatch)throw new Error("другая операция уже выполняется на странице");
+  routeWatch=(async()=>{
+    busy(true);let lastStage="",connectionLost=false;const deadline=Date.now()+16*60*1000;
+    try{
+      while(Date.now()<deadline){
+        let d;
+        try{d=await api("/api/route/status");if(connectionLost){log("связь с панелью восстановлена");connectionLost=false}}
+        catch(e){if(!connectionLost){log("перезапуск сети прервал связь; продолжаю ждать результат");connectionLost=true}await delay(2000);continue}
+        if(jobId&&d.job_id&&d.job_id!==jobId)throw new Error("состояние задания изменилось");
+        setRouteProgress(d);
+        if(d.stage!==lastStage){lastStage=d.stage;log((name||serviceLabel[d.service]||"Маршрут")+": "+(d.stage_label||d.status))}
+        if(d.active){await delay(1500);continue}
+        let result;
+        try{result=await api("/api/route/result?job_id="+encodeURIComponent(jobId||d.job_id||""))}
+        catch(e){if(!connectionLost){log("перезапуск сети прервал связь; продолжаю ждать результат");connectionLost=true}await delay(2000);continue}
+        if(jobId&&result.job_id!==jobId)throw new Error("состояние задания изменилось");
+        if(result.active||["queued","running","starting"].includes(result.status)){await delay(1500);continue}
+        if(result.status==="completed"&&result.result_ok===true){
+          const suffix=options.post===false?"":d.operation==="rollback"?" — откат выполнен":d.operation==="vpn-node"?" — общая VPN-нода переключена":d.operation==="vpn-recover"?" — прежняя VPN-нода восстановлена":" — маршрут переключён";
+          log(resultText((name||serviceLabel[d.service]||"маршрут")+suffix,result.output));
+          if(options.post!==false)await runPostChecks();return result;
+        }
+        throw new Error(result.output||result.error||"операция завершилась с ошибкой");
+      }
+      throw new Error("превышено время ожидания; задание продолжает работать на роутере");
+    }finally{routeWatch=null;busy(false);if(options.post!==false){await refresh();if(options.refreshVpn!==false)await refreshVpnNodes();await refreshProfiles();await refreshHistory();await refreshVersions()}}
+  })();
+  return routeWatch;
+}
+async function routeAction(service,mode){const name=serviceLabel[service]||service;if(!confirm(name+": "+(mode==="unmanaged"?"убрать правила проекта":"переключить в "+label[mode])+"?\n\nЭто перезапустит Xkeen и nfqws2."))return;busy(true);log(name+" → "+label[mode],true);try{const d=await api("/api/route/"+service+"/"+mode,{method:"POST",headers:controlHeaders,body:"{}"});log("задание принято; можно закрыть страницу — оно продолжится на роутере");await watchRouteJob(d.job_id,name)}catch(e){log("ошибка: "+e);busy(false);await refresh();await refreshProfiles()}}
+async function resumeRouteJob(){try{const d=await api("/api/route/status");setRouteProgress(d);if(d.active){log("найдена выполняющаяся операция с маршрутами");await watchRouteJob(d.job_id,serviceLabel[d.service]||"Маршрут")}}catch(e){log("статус переключения: "+e)}}
+async function rollbackHistory(jobId,interrupted){if(!confirm((interrupted?"Операция прервана, роутер может быть в промежуточном состоянии.\n\n":"")+"Вернуть состояние до выбранной операции?\n\nСначала будет создан rescue snapshot текущего состояния."))return;busy(true);log("откат операции "+jobId,true);try{const d=await api("/api/history/rollback/"+jobId,{method:"POST",headers:controlHeaders,body:"{}"});await watchRouteJob(d.job_id,"Откат")}catch(e){log("ошибка отката: "+e);busy(false);await refreshHistory()}}
+function trashButton(label,action){const button=document.createElement("button");button.type="button";button.className="trash-button";button.title=label;button.setAttribute("aria-label",label);button.innerHTML='<svg class="i" aria-hidden="true"><use href="#i-trash"/></svg>';button.addEventListener("click",action);return button}
+async function deleteHistory(jobId,date){if(!confirm("Убрать запись истории от "+fmtDate(date)+" в корзину?\n\nФайл записи можно восстановить через SSH. Snapshot отката останется на месте."))return;try{await api("/api/history/delete/"+encodeURIComponent(jobId),{method:"POST",headers:controlHeaders,body:"{}"});log("запись истории перемещена в корзину: "+jobId);await refreshHistory()}catch(e){log("не удалось удалить запись истории: "+e)}}
+async function refreshHistory(){
+  if(!tabVisible("control"))return;
+  const latest=latestView("history");
+  const root=document.getElementById("history");
+  try{
+    const d=await api("/api/history");if(!latest())return;root.textContent="";
+    if(!d.items.length){root.innerHTML='<div class="empty">История пуста.</div>';return}
+    d.items.forEach(item=>{
+      const box=document.createElement("article");box.className="history-item";
+      const head=document.createElement("div");head.className="history-head";
+      const title=document.createElement("b");
+      title.textContent=(item.operation==="rollback"?"Откат":item.operation==="vpn-recover"?"Восстановление VPN":item.operation==="vpn-node"?"Общая VPN-нода":item.operation==="outbound"?"Выбор VPN outbound":"Переключение")+" · "+fmtDate(item.created_utc);
+      const state=document.createElement("span");state.className=item.status==="completed"?"good":"bad";state.textContent=item.status||"unknown";head.append(title,state);
+      const routes=document.createElement("div");routes.className="history-routes";
+      routes.textContent=item.operation==="vpn-node"?("VPN → "+(item.outbound_tag||"?")):item.operation==="vpn-recover"?"Предыдущая VPN-нода":(routesText(item.before_routes)+" → "+routesText(item.after_routes||item.requested_routes)+(item.outbound_tag?" · "+(serviceLabel[item.service]||item.service)+": "+item.outbound_tag:""));
+      box.append(head,routes);
+      if(item.snapshot){const snap=document.createElement("div");snap.className="history-routes mono";snap.textContent=item.snapshot.split("/").pop();box.append(snap)}
+      const actions=document.createElement("div");actions.className="entry-actions";
+      if(item.rollback_available){const b=document.createElement("button");b.className="rollback";b.textContent="Вернуть состояние до операции";b.addEventListener("click",()=>rollbackHistory(item.job_id,item.status==="failed"));actions.append(b)}
+      if(!["queued","running"].includes(item.status))actions.append(trashButton("Убрать запись истории в корзину",()=>deleteHistory(item.job_id,item.created_utc)));
+      box.append(actions);root.append(box);
+    });
+  }catch(e){if(!latest())return;root.textContent="Ошибка истории: "+e}
+}
+
+let notifyLoaded=false,notifySavedTopic="";
+function notifyMessage(text,tone=""){const box=document.getElementById("notifyMessage");box.textContent=text;box.className=tone}
+function renderNotifications(d,force=false){
+  if(!notifyLoaded||force){
+    document.getElementById("notifyEnabled").checked=!!d.enabled;
+    document.getElementById("notifyTopic").value=d.topic||"";notifySavedTopic=d.topic||"";
+    document.getElementById("notifyToken").value="";
+    document.getElementById("notifyToken").placeholder=d.token_set?"Токен сохранён; пустое поле оставит его прежним":"Для темы без аккаунта оставьте пустым";
+    document.getElementById("notifyClearToken").checked=false;
+    const root=document.getElementById("notifyEvents");root.textContent="";
+    for(const [vpn,title] of [[false,"Zapret и расписание"],[true,"VPN"]]){
+      const choices=(d.choices||[]).filter(item=>(item.id.startsWith("vpn-")||item.id==="inspection-unavailable")===vpn);
+      if(!choices.length)continue;
+      const group=document.createElement("fieldset");group.className="notify-event-group";
+      const legend=document.createElement("legend");legend.textContent=title;group.append(legend);
+      choices.forEach(item=>{const label=document.createElement("label");label.className="notify-event";
+        const input=document.createElement("input");input.type="checkbox";input.dataset.notifyEvent=item.id;input.checked=(d.events||[]).includes(item.id);
+        label.append(input,document.createTextNode(item.title));group.append(label)});
+      root.append(group);
+    }
+    notifyLoaded=true;
+  }
+  const link=document.getElementById("notifyLink"),topic=d.topic||"";
+  link.hidden=!/^[A-Za-z0-9_-]{1,128}$/.test(topic);link.removeAttribute("href");if(!link.hidden)link.href="https://ntfy.sh/"+topic;
+  document.getElementById("notifyDelivery").textContent="В очереди: "+(d.pending||0)+(d.last_delivery?" · Последняя отправка: "+new Date(d.last_delivery*1000).toLocaleString("ru-RU"):"")+(d.error?" · "+d.error:"");
+}
+async function refreshNotifications(force=false){
+ if(!tabVisible("notifications"))return;const latest=latestView("notifications");
+ try{const d=await api("/api/notifications");if(latest())renderNotifications(d,force)}
+ catch(e){if(latest())notifyMessage("Ошибка: "+e,"bad")}
+}
+async function saveNotifications(){
+ const topic=document.getElementById("notifyTopic").value.trim(),changed=!!notifySavedTopic&&topic!==notifySavedTopic;
+ if(changed&&!confirm("Сменить тему? Очередь неотправленных сообщений будет очищена."))return;
+ const body={enabled:document.getElementById("notifyEnabled").checked,topic,token:document.getElementById("notifyToken").value,
+ clear_token:document.getElementById("notifyClearToken").checked,confirm_topic_change:changed,
+ events:[...document.querySelectorAll("[data-notify-event]:checked")].map(x=>x.dataset.notifyEvent)};
+ const button=document.getElementById("notifySave");button.disabled=true;
+ try{const d=await api("/api/notifications/save",{method:"POST",headers:controlHeaders,body:JSON.stringify(body)});renderNotifications(d,true);notifyMessage("Сохранено.","good")}
+ catch(e){notifyMessage("Не удалось сохранить: "+e,"bad")}finally{button.disabled=false}
+}
+document.getElementById("notifySave").addEventListener("click",saveNotifications);
+document.getElementById("notifyRefresh").addEventListener("click",()=>refreshNotifications());
+document.getElementById("notifyGenerate").addEventListener("click",async()=>{try{const d=await api("/api/notifications/topic",{method:"POST",headers:controlHeaders,body:"{}"});document.getElementById("notifyTopic").value=d.topic}catch(e){notifyMessage("Ошибка: "+e,"bad")}});
+document.getElementById("notifyTest").addEventListener("click",async()=>{try{await api("/api/notifications/test",{method:"POST",headers:controlHeaders,body:"{}"});notifyMessage("Тест поставлен в очередь. Отправка — в течение 15 секунд.","good");await refreshNotifications()}catch(e){notifyMessage("Тест не отправлен: "+e,"bad")}});
+
+
+let dnsModeState=null;
+function renderDnsMode(d){
+ dnsModeState=d;const status=document.getElementById("dnsModeStatus");
+ status.textContent=d.supported?(d.interface+" · "+(d.mode==="vless"?"DNS over VLESS":"DoH на роутере")+(d.pending?" · Выберите прежний режим для восстановления":"")):(d.detail||"Переключение недоступно");
+ status.className=d.pending||!d.supported?"bad":"hint";
+ status.title=d.host_overrides?"Устройства с собственными DNS-профилями не меняются":"";
+ document.querySelectorAll("[data-dns-mode]").forEach(button=>{
+  const mode=button.dataset.dnsMode;button.classList.toggle("selected",mode===d.mode);
+  button.setAttribute("aria-pressed",String(mode===d.mode));
+  button.disabled=!!routeWatch||operationStarting||!d.supported||(d.pending?mode!==d.recovery_mode:mode===d.mode);
+ });
+}
+async function refreshDnsMode(){
+ if(!tabVisible("control"))return;const latest=latestView("dns-mode");
+ try{const d=await api("/api/dns");if(latest())renderDnsMode(d)}
+ catch(e){if(latest()){dnsModeState=null;document.querySelectorAll("[data-dns-mode]").forEach(b=>b.disabled=true);document.getElementById("dnsModeStatus").textContent="DNS: "+e;document.getElementById("dnsModeStatus").className="bad"}}
+}
+async function switchDnsMode(mode){
+ if(routeWatch||operationStarting||!dnsModeState||!dnsModeState.supported)return;
+ if(!confirm("Переключить DNS сети Home на "+(mode==="vless"?"VLESS":"DoH роутера")+"?\n\nСохранятся все текущие изменения конфигурации Keenetic. Индивидуальные DNS-профили устройств не меняются. Xray/nfqws2 не перезапускаются."))return;
+ operationStarting=true;busy(true);
+ try{
+  const d=await api("/api/dns/"+mode,{method:"POST",headers:controlHeaders,body:JSON.stringify({confirm:true})});
+  operationStarting=false;await watchRouteJob(d.job_id,"DNS домашней сети",{post:false});
+ }catch(e){log("Ошибка DNS: "+e)}
+ finally{operationStarting=false;busy(false);await refreshDnsMode()}
+}
+document.getElementById("refreshDnsMode").addEventListener("click",refreshDnsMode);
+document.querySelectorAll("[data-dns-mode]").forEach(b=>b.addEventListener("click",()=>switchDnsMode(b.dataset.dnsMode)));
+
+function renderPostChecks(config){const root=document.getElementById("postApplyStatus"),checks=config.checks||[],failed=checks.filter(item=>item.ok!==true),warned=checks.filter(item=>item.ok===true&&item.status==="warn"),line=item=>"• "+item.name+" — "+item.detail;root.hidden=false;root.textContent=(failed.length?"Проверка не пройдена:\n"+failed.map(line).join("\n"):"Конфиги и службы: OK")+(warned.length?"\nВнимание:\n"+warned.map(line).join("\n"):"");root.className=failed.length?"bad":"good";if(failed.length||warned.length)log(root.textContent)}
+async function runPostChecks(){const root=document.getElementById("postApplyStatus");root.hidden=false;root.textContent="Проверяю службы и конфиги…";try{renderPostChecks(await api("/api/checks/config"))}catch(e){root.textContent="Ошибка проверки: "+e;root.className="bad";log(root.textContent)}}
+// After a successful change only: the backend sends its check with the result.
+async function postChecksAfter(d){if(d&&d.health){renderPostChecks(d.health);return}await runPostChecks()}
+function diagnosticControls(active){diagnosticRunning=active;document.querySelectorAll(".diag-start").forEach(b=>b.disabled=active||!!routeWatch||operationStarting);document.getElementById("cancelDiagnostic").disabled=!active||!!routeWatch||operationStarting}
+function diagnosticToken(check){const token=document.createElement("span"),status=check.status||"error";token.className="protocol "+(status==="ok"?"ok":["unsupported","timeout","likely_blocked"].includes(status)?"warn":"bad");const suffix=check.http_code&&check.http_code!=="000"?" "+check.http_code:"";token.textContent=(check.protocol||"Ping")+": "+status.toUpperCase()+suffix+(check.uploaded!==undefined?" · ↑"+check.uploaded+" ↓"+check.downloaded+" B":"");token.title=check.detail||"";return token}
+function renderDiagnostic(d){const active=!!d.active,status=d.status||"idle",progress=Math.max(0,Math.min(100,Number(d.progress||0))),progressBox=document.getElementById("diagnosticProgress");diagnosticControls(active);progressBox.classList.toggle("visible",active||["completed","error","cancelled"].includes(status));document.getElementById("diagnosticStatus").textContent=({idle:"Задание не запускалось",running:"Выполняется…",completed:"Готово",error:"Ошибка",cancelled:"Остановлено",cancelling:"Останавливается…"})[status]||status;document.getElementById("diagnosticPercent").textContent=progress+"%";document.getElementById("diagnosticBar").style.width=progress+"%";const sum=d.summary||{},summary=document.getElementById("diagnosticSummary");summary.textContent=d.error?d.error:(status==="completed"?"OK: "+(sum.ok||0)+" · предупреждений: "+((sum.warn||0)+(sum.unsupported||0)+(sum.likely_blocked||0))+" · ошибок: "+(sum.error||0):(active?"Результаты появляются по мере выполнения.":"Пока нет результатов."));const root=document.getElementById("diagnosticResults");root.textContent="";const results=d.results||[];if(!results.length){root.innerHTML='<div class="empty">Результатов пока нет.</div>';return}results.forEach(item=>{const box=document.createElement("article"),head=document.createElement("div"),title=document.createElement("b"),state=document.createElement("span"),detail=document.createElement("div"),protocols=document.createElement("div");head.className="diagnostic-head";detail.className="diagnostic-detail";protocols.className="protocols";const checks=item.checks||(item.kind==="ping"?[item.ping||{}]:[]);const statuses=checks.map(x=>x.status);let level=statuses.includes("error")||statuses.includes("fail")||item.error?"bad":statuses.includes("likely_blocked")||statuses.includes("unsupported")||statuses.includes("timeout")||item.status==="warn"?"warn":"ok";if(d.kind==="health")level=item.status==="ok"?"ok":item.status==="warn"?"warn":"bad";box.className="diagnostic-item "+level;title.textContent=item.name||([item.provider,item.id].filter(Boolean).join(" · "))||"Проверка";state.className=level==="ok"?"good":level==="warn"?"":"bad";state.textContent=level==="ok"?"OK":level==="warn"?"ВНИМАНИЕ":"ОШИБКА";head.append(title,state);detail.textContent=item.detail||item.target||item.host||item.error||"";box.append(head,detail);if(item.dns){const dns=document.createElement("span");dns.className="protocol "+(item.dns.status==="ok"?"ok":"bad");dns.textContent="DNS: "+item.dns.status.toUpperCase();dns.title=item.dns.detail||"";protocols.append(dns)}checks.forEach(check=>protocols.append(diagnosticToken(check)));if(protocols.childNodes.length)box.append(protocols);root.append(box)})}
+async function refreshDiagnostic(){try{const d=await api("/api/diagnostics/status");if(browserDiagnosticRun)return;renderDiagnostic(d);if(d.kind==="health"&&d.status==="completed"&&!d.active){document.getElementById("diagnosticStatus").textContent="Сохранённая проверка роутера · "+fmtDate(d.finished_utc||d.created_utc)}if(d.active&&!diagnosticWatch){diagnosticWatch=watchDiagnostic(d.job_id);try{await diagnosticWatch}catch(e){log("диагностика: "+e)}finally{diagnosticWatch=null}}}catch(e){if(!browserDiagnosticRun)document.getElementById("diagnosticSummary").textContent="Ошибка статуса: "+e}}
+async function watchDiagnostic(jobId){const deadline=Date.now()+12*60*1000;while(Date.now()<deadline){const d=await api("/api/diagnostics/status");if(d.job_id&&d.job_id!==jobId)throw new Error("ID диагностического задания изменился");renderDiagnostic(d);if(d.active){await delay(1200);continue}if(d.status==="completed")return d;throw new Error(d.error||"диагностика завершилась: "+d.status)}throw new Error("превышено время ожидания диагностики")}
+async function startDiagnostic(kind){if(kind!=="health"){await runBrowserDiagnostic(kind);return}if(browserDiagnosticRun||diagnosticWatch)return;diagnosticControls(true);log("проверка роутера",true);try{const d=await api("/api/diagnostics/start/health",{method:"POST",headers:controlHeaders,body:"{}"});renderDiagnostic(d);diagnosticWatch=watchDiagnostic(d.job_id);await diagnosticWatch;log("проверка роутера завершена")}catch(e){log("ошибка диагностики: "+e)}finally{diagnosticWatch=null;await refreshDiagnostic()}}
+async function cancelDiagnostic(){if(browserDiagnosticRun){browserDiagnosticRun.controller.abort();return}try{renderDiagnostic(await api("/api/diagnostics/cancel",{method:"POST",headers:controlHeaders,body:"{}"}))}catch(e){log("ошибка остановки диагностики: "+e)}}
+async function validateReport(){const file=document.getElementById("reportFile").files[0];if(!file){log("выберите JSON-отчёт");return}try{selectedReport=JSON.parse(await file.text());const d=await api("/api/import/validate",{method:"POST",headers:controlHeaders,body:JSON.stringify(selectedReport)});validatedDescriptor=d.profile;document.getElementById("candidateService").textContent=serviceLabel[d.profile.service];document.getElementById("candidateId").textContent=d.profile.candidate_id;document.getElementById("candidateSource").textContent=d.profile.source_name;document.getElementById("candidateFamily").textContent=d.profile.family;document.getElementById("candidateArgs").textContent=d.profile.args.join("\n");document.getElementById("candidate").classList.add("visible");log("отчёт проверен: "+d.profile.service+" / "+d.profile.candidate_id,true)}catch(e){selectedReport=null;validatedDescriptor=null;document.getElementById("candidate").classList.remove("visible");log("отчёт отклонён: "+e,true)}}
+async function applyImport(){if(!selectedReport||!validatedDescriptor)return;if(!confirm("Применить "+serviceLabel[validatedDescriptor.service]+" / "+validatedDescriptor.candidate_id+"?\n\nБудет перезапущен только nfqws2. Xkeen останется запущен без перезапуска."))return;busy(true);log("применение профиля "+validatedDescriptor.candidate_id,true);let done=null;try{const d=await operation("/api/import/apply","Применение профиля",JSON.stringify(selectedReport));log(resultText(serviceLabel[validatedDescriptor.service]+": профиль "+validatedDescriptor.candidate_id+" применён",d.output));done=d}catch(e){log("ошибка применения: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}if(done)await postChecksAfter(done)}
+async function clearImport(service){if(!confirm("Вернуть встроенный профиль для "+serviceLabel[service]+"?\n\nБудет перезапущен только nfqws2."))return;busy(true);log("встроенный профиль: "+service,true);let done=null;try{const d=await operation("/api/import/clear/"+service,"Встроенный профиль "+service);log(resultText(serviceLabel[service]+": встроенный профиль восстановлен",d.output));done=d}catch(e){log("ошибка: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}if(done)await postChecksAfter(done)}
+async function rollbackImport(){if(!confirm("Откатить последнее применение/удаление профиля?\n\nБудет перезапущен только nfqws2."))return;busy(true);log("откат профиля nfqws2",true);let done=null;try{const d=await operation("/api/import/rollback","Откат профиля");log(resultText("профиль nfqws2 откатан",d.output));done=d}catch(e){log("ошибка отката: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}if(done)await postChecksAfter(done)}
+async function deleteVersion(service,id,date){if(!confirm("Убрать версию "+serviceLabel[service]+" от "+fmtDate(date)+" в корзину?\n\nАктивный профиль не изменится; файл можно восстановить через SSH."))return;try{await api("/api/profile-versions/delete/"+encodeURIComponent(service)+"/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:"{}"});log("версия перемещена в корзину: "+service+" / "+id);await refreshVersions()}catch(e){log("не удалось удалить версию: "+e)}}
+async function refreshVersions(){if(!tabVisible("import"))return;const latest=latestView("versions");const root=document.getElementById("profileVersions");try{const d=await api("/api/profile-versions");if(!latest())return;root.textContent="";if(!d.versions.length){root.innerHTML='<div class="empty">Сохранённых версий пока нет. Текущий профиль попадёт сюда при следующем импорте или замене.</div>';return}d.versions.forEach(v=>{const box=document.createElement("article");box.className="version-item";const head=document.createElement("div");head.className="version-head";const title=document.createElement("b");title.textContent=serviceLabel[v.service]+" · "+fmtDate(v.created_utc);const state=document.createElement("span");state.className=v.active?"good":"muted";state.textContent=v.active?"АКТИВЕН":v.reason;head.append(title,state);const meta=document.createElement("div");meta.className="version-meta";meta.textContent=v.family+" · "+v.candidate_id+(v.commit?" · "+v.commit.slice(0,12):"");box.append(head,meta);if(!v.active){const actions=document.createElement("div");actions.className="entry-actions";const b=document.createElement("button");b.className="apply";b.textContent="Применить эту версию";b.addEventListener("click",()=>applyVersion(v.service,v.id));actions.append(b,trashButton("Убрать версию в корзину",()=>deleteVersion(v.service,v.id,v.created_utc)));box.append(actions)}root.append(box)})}catch(e){if(!latest())return;root.textContent="Ошибка версий: "+e}}
+async function applyVersion(service,id){if(!confirm("Применить версию "+serviceLabel[service]+" от выбранной даты?\n\nБудет создан focused snapshot и перезапущен только nfqws2."))return;busy(true);log("применение версии "+id,true);let done=null;try{const d=await operation("/api/profiles/apply/"+service+"/"+id,"Применение версии профиля");log(resultText(serviceLabel[service]+": версия профиля применена",d.output));done=d}catch(e){log("ошибка версии: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}if(done)await postChecksAfter(done)}
+function renderUpdate(d){const root=document.getElementById("updateInfo");root.textContent="";const title=document.createElement("b");title.className=d.status==="error"?"bad":"good";title.textContent=d.status==="up_to_date"?"Актуально":d.status==="downloaded"?"Новые стратегии скачаны":d.status==="error"?"Не удалось обновить":"Нажмите «Проверить обновление»";root.append(title);const detail=document.createElement("div");detail.className="version-meta";detail.textContent=d.error||((d.downloaded_commit?"Версия "+d.downloaded_commit.slice(0,12)+" · файлов: "+d.source_count:"")+(d.checked_utc?" · проверено "+fmtDate(d.checked_utc):""));root.append(detail)}
+async function refreshUpdates(){if(!tabVisible("autotune"))return;const latest=latestView("updates");try{const d=await api("/api/updates");if(!latest())return;renderUpdate(d)}catch(e){if(!latest())return;document.getElementById("updateInfo").textContent="Ошибка: "+e}}
+async function checkUpdates(){const button=document.getElementById("checkUpdates");button.disabled=true;button.textContent="Проверяю и скачиваю…";try{const d=await api("/api/updates/check",{method:"POST",headers:controlHeaders,body:"{}"});renderUpdate(d);log(d.status==="up_to_date"?"Flowseal: актуально":"Flowseal: скачаны новые стратегии ("+d.source_count+" файлов)");await refreshTunerSources()}catch(e){renderUpdate({status:"error",error:String(e)});log("ошибка обновления Flowseal: "+e)}finally{button.disabled=false;button.textContent="Проверить обновление"}}
+let automationLoaded=false,automationPoll=null;
+function renderAutomationSources(){document.querySelectorAll(".automation-scenario").forEach(box=>{const select=box.querySelector(".auto-source"),previous=select.value,service=box.dataset.autoService;select.textContent="";const all=document.createElement("option");all.value="";all.textContent="Все файлы и встроенный профиль";select.append(all);tunerSourceList.filter(item=>(item.services||[]).includes(service)).forEach(item=>{const option=document.createElement("option");option.value=item.name;option.textContent=item.name;select.append(option)});if(previous&&!Array.from(select.options).some(option=>option.value===previous)){const missing=document.createElement("option");missing.value=previous;missing.textContent=previous+" — не в текущем наборе";select.append(missing)}select.value=previous})}
+function renderAutomation(d,forceForm=false){const c=d.config,s=d.state||{};if(!automationLoaded||forceForm){document.getElementById("autoEnabled").checked=c.enabled;document.getElementById("autoTimes").value=c.times.join(", ");document.querySelectorAll(".automation-scenario").forEach(box=>{const scenario=c.services[box.dataset.autoService];box.querySelector(".auto-service-enabled").checked=scenario.enabled;box.querySelector(".auto-mix").value=scenario.mix_level;box.querySelector(".auto-max").value=scenario.max_candidates;const select=box.querySelector(".auto-source");if(scenario.source_file&&!Array.from(select.options).some(option=>option.value===scenario.source_file)){const missing=document.createElement("option");missing.value=scenario.source_file;missing.textContent=scenario.source_file+" — текущий выбор";select.append(missing)}select.value=scenario.source_file});automationLoaded=true}document.getElementById("cancelAutomation").disabled=!d.active;document.getElementById("saveAutomation").disabled=!!d.active||!!routeWatch||operationStarting;document.getElementById("automationSummary").textContent=(c.enabled?"Включено":"Выключено")+" · "+(s.status||"idle")+(s.current_service?" · "+(serviceLabel[s.current_service]||s.current_service):"")+(s.phase?" · "+s.phase:"")+(s.error?" · "+s.error:"");document.getElementById("automationNext").textContent=d.next_run?"Следующий: "+new Date(d.next_run).toLocaleString("ru-RU",{timeZone:"Europe/Moscow",hour12:false}):"Нет запланированных запусков";document.getElementById("automationEvents").textContent=(s.events||[]).map(x=>"["+x.at+"] "+x.message).join("\n")||"Запусков пока не было.";scheduleAutomationPoll(!!d.active)}
+function automationSaveMessage(message,tone=""){const box=document.getElementById("automationSaveStatus");box.className="automation-save-status"+(tone?" "+tone:"");box.textContent=message}
+async function refreshAutomation(forceForm=false){if(!tabVisible("automation"))return;const latest=latestView("automation");try{const d=await api("/api/automation");if(!latest())return;if(!automationLoaded)automationSaveMessage("");renderAutomation(d,forceForm)}catch(e){if(!latest())return;document.getElementById("automationSummary").textContent="Ошибка: "+e;automationSaveMessage("Не удалось прочитать расписание: "+e,"bad")}}
+async function saveAutomation(){const services={};document.querySelectorAll(".automation-scenario").forEach(box=>{services[box.dataset.autoService]={enabled:box.querySelector(".auto-service-enabled").checked,mix_level:box.querySelector(".auto-mix").value,max_candidates:Number(box.querySelector(".auto-max").value),source_file:box.querySelector(".auto-source").value}});const config={version:1,enabled:document.getElementById("autoEnabled").checked,times:document.getElementById("autoTimes").value.split(/[;,\s]+/).filter(Boolean),services};if(config.enabled&&!confirm("Включить проверку по расписанию с автоматическим применением найденного профиля?\n\nПодбор временно перезапускает nfqws2; при ошибке новый профиль будет откатан. Xkeen не перезапускается.")){automationSaveMessage("Включение отменено; прежние настройки не изменены.");return}const button=document.getElementById("saveAutomation");button.disabled=true;button.textContent="Сохраняю…";automationSaveMessage("Сохраняю настройки на роутере…");try{const d=await api("/api/automation/save",{method:"POST",headers:controlHeaders,body:JSON.stringify(config)});renderAutomation(d,true);const message=d.config.enabled?"Сохранено и включено. Следующая проверка: "+(d.next_run?new Date(d.next_run).toLocaleString("ru-RU",{timeZone:"Europe/Moscow",hour12:false}):"уточняется")+" (Москва).":"Сохранено. Расписание выключено.";automationSaveMessage(message,"good");log(message)}catch(e){automationSaveMessage("Не удалось сохранить расписание: "+e,"bad");log("ошибка расписания: "+e)}finally{button.textContent="Сохранить расписание";button.disabled=false}}
+async function cancelAutomation(){try{await api("/api/automation/cancel",{method:"POST",headers:controlHeaders,body:"{}"});log("остановка ночного задания запрошена");await refreshAutomation()}catch(e){log("ошибка остановки задания: "+e)}}
+let tunerSourceList=[];
+function renderTunerSources(){const select=document.getElementById("tunerSource"),service=document.getElementById("tunerService").value,previous=select.value;select.textContent="";const all=document.createElement("option");all.value="";all.textContent="Все файлы и встроенный профиль";select.append(all);tunerSourceList.forEach(item=>{const option=document.createElement("option"),supported=(item.services||[]).includes(service);option.value=item.name;option.textContent=item.name+(supported?"":" — нет профиля для "+serviceLabel[service]);option.disabled=!supported;select.append(option)});const keep=tunerSourceList.find(item=>item.name===previous&&(item.services||[]).includes(service));select.value=keep?previous:""}
+async function refreshTunerSources(){if(!tabVisible("autotune")&&!tabVisible("automation"))return;const latest=latestView("sources");const hint=document.getElementById("tunerSourceHint");try{const d=await api("/api/tuner/sources");if(!latest())return;tunerSourceList=d.sources||[];renderTunerSources();renderAutomationSources();hint.textContent=d.status==="ready"?"Только выбранный файл, без встроенного профиля: сначала профили файла, затем (Safe/Extended) вариации их параметров. Commit "+d.commit.slice(0,12)+".":d.status==="error"?"Список файлов недоступен: "+d.error:"Список файлов появится после «Проверить обновление»."}catch(e){if(!latest())return;hint.textContent="Список файлов недоступен: "+e}}
+function tunerServiceChanged(){const voice=document.getElementById("tunerService").value==="discord-voice";document.getElementById("clientIpField").hidden=!voice;document.getElementById("voiceAutoField").hidden=!voice;renderTunerSources()}
+let voiceEndpoint=null;
+function updateVoiceHint(){const mode=document.getElementById("tunerVoiceCheck").value,e=voiceEndpoint;document.getElementById("voiceAutoHint").textContent=mode==="traffic"?"Зайдите в голосовой канал до старта и оставайтесь в нём. Пока голос не подключён, Discord сам переподключается, и каждая попытка идёт через текущего кандидата; роутер смотрит на трафик и позовёт вас только подтвердить звук найденного профиля.":mode==="probe"?(e?"Сервер "+e.ip+":"+e.port+" из проверки "+fmtDate(e.learned_utc)+". Кандидаты проверяются пакетом с роутера; работает, только если без обхода сервер не отвечает.":"Голосовой сервер ещё не сохранён: один раз пройдите ручную проверку с ответом «Да»."):"Под каждого кандидата переподключитесь к голосовому каналу и ответьте, есть ли звук."}
+async function refreshVoiceEndpoint(){if(!tabVisible("autotune"))return;const latest=latestView("voice-endpoint");const select=document.getElementById("tunerVoiceCheck"),probe=select.querySelector('option[value="probe"]');try{const d=await api("/api/tuner/voice-endpoint");if(!latest())return;voiceEndpoint=d.endpoint||null}catch(e){if(!latest())return;voiceEndpoint=null}probe.disabled=!voiceEndpoint;if(probe.disabled&&select.value==="probe")select.value="traffic";updateVoiceHint()}
+function tunerControls(active){tunerRunning=active;const blocked=active||!!routeWatch||operationStarting;document.getElementById("startTuner").disabled=blocked;document.getElementById("cancelTuner").disabled=!active||!!routeWatch||operationStarting;document.querySelectorAll("[data-action],.mode").forEach(b=>b.disabled=blocked)}
+function tunerStateLabel(state){return ({queued:"Запуск задания…",starting:"Запуск задания…",idle:"Задание не запускалось",preparing:"Получение и разбор стратегий…",running:"Проверка кандидатов…",voice_window:"Окно проверки Discord Voice…",voice_watch:"Слежу за голосовым трафиком Discord…",awaiting_voice:"Ожидается ваш ответ",cancelling:"Остановка и восстановление nfqws2…",found:"Найден проходной профиль",none:"Проходной профиль не найден",cancelled:"Подбор остановлен, nfqws2 восстановлен",error:"Ошибка подбора"})[state]||state}
+const voiceTrafficText={connected:"голос подключился и держится",attempts:"Discord пытается подключиться, но соединение не держится",established:"голос уже подключён — новых попыток нет",idle:"голосового трафика нет — зайдите в голосовой канал",unavailable:"диагностика недоступна"};
+function voiceSummary(d){const parts=[];if(d.voice_traffic_baseline)parts.push("Проверка по трафику. Текущий профиль: "+(voiceTrafficText[d.voice_traffic_baseline]||d.voice_traffic_baseline)+".");if(d.voice_traffic_baseline==="established"||d.voice_traffic_baseline==="connected")parts.push("Голос уже работает с текущим профилем: подбор не нужен, либо выйдите из канала и зайдите снова.");const t=d.last_voice_traffic;if(t&&t.candidate>0)parts.push("Кандидат "+t.candidate+": "+(voiceTrafficText[t.state]||t.state)+".");if(d.voice_auto_mode==="auto")parts.push("Автопроверка: без обхода сервер не отвечает, кандидаты оцениваются пакетом с роутера.");else if(d.voice_auto_mode==="manual")parts.push("Автопроверка невозможна: сохранённый голосовой сервер отвечает даже без обхода (провайдер не блокирует пробный пакет), поэтому пакетом с роутера рабочую стратегию не отличить — каждый кандидат проверяется вручную.");if(d.last_voice_auto)parts.push("Кандидат "+d.last_voice_auto.candidate+": "+(d.last_voice_auto.result==="pass"?"сервер ответил":"нет ответа")+".");if(d.voice_unconfirmed)parts.push("Звук не подтверждён: перед применением проверьте голос вручную.");const active=(d.voice_calibration||{}).active;if(d.status==="none"&&d.voice_auto_mode==="auto"&&!(active&&active.valid>0))parts.push("Сохранённый голосовой сервер не ответил ни с одной стратегией, в том числе с текущей: адрес мог устареть. Повторите подбор без автопроверки.");parts.push(d.voice_auto_mode==="auto"?"Найденный профиль подтверждается звуком в конце.":"Voice: требуется подтверждение звука; UDP-пакеты сами по себе не доказывают качество голоса.");return parts.join(" ")}
+function renderTuner(d){
+  // Only the backend knows whether the job process lives; a stale state is reported as "error".
+  const state=d.status||"idle",active=!!d.active;tunerControls(active);
+  document.getElementById("tunerStatus").textContent=tunerStateLabel(state)+(d.error?": "+d.error:"");
+  document.getElementById("tunerCommit").textContent=[d.source_file||"",d.commit?d.commit.slice(0,12):""].filter(Boolean).join(" · ");
+  document.getElementById("tunerProgress").textContent=d.candidate_count?("кандидат "+(d.current_candidate||0)+" из "+d.candidate_count):"—";
+  const probe=d.last_probe_detail;document.getElementById("tunerProbe").textContent=probe?([probe.phase,"проход "+probe.round,probe.role,probe.http_code,probe.status,probe.seconds+" с",probe.bytes+" B"].join(" · ")):"";
+  const base=d.baseline_result,suite=d.last_suite_result;document.getElementById("tunerVerification").textContent=(base?"Исходный профиль: "+base.verdict+" ("+base.successes+"/"+base.total+"). ":"")+(suite?"Кандидат "+suite.candidate+": "+suite.phase+" · "+suite.verdict+". ":"")+(d.service==="discord-voice"?voiceSummary(d):d.service==="discord-tcp"?"Победитель проходит HTTPS и настоящий Gateway WebSocket в двух раундах.":"Победитель проходит HTTPS и транспорт в двух раундах; QUIC проверяется отдельно, воспроизведение на устройстве не подтверждается.");
+  document.getElementById("tunerLog").textContent=(d.log_tail||[]).join("\n");
+  document.getElementById("voiceVerdict").classList.toggle("visible",state==="awaiting_voice");
+  const found=d.found;document.getElementById("tunerFound").classList.toggle("visible",state==="found"&&!!found);
+  if(found){document.getElementById("tunerFoundId").textContent=found.candidate_id;document.getElementById("tunerFoundFamily").textContent=found.family;document.getElementById("tunerFoundSource").textContent=found.source_name;document.getElementById("tunerFoundArgs").textContent=(found.args||[]).join("\n")}
+  if(active)scheduleTunerPoll();else if(tunerPoll){clearTimeout(tunerPoll);tunerPoll=null}
+  if(tunerWasActive&&!active)refreshVoiceEndpoint();tunerWasActive=active;
+}
+// One status request at a time: the next poll is scheduled only after an answer.
+function scheduleTunerPoll(){if(!document.hidden&&!tunerPoll)tunerPoll=setTimeout(()=>{tunerPoll=null;if(!document.hidden)refreshTuner()},1800)}
+function refreshTuner(){if(tunerRequest)return tunerRequest;tunerRequest=(async()=>{try{renderTuner(await api("/api/tuner/status"))}catch(e){document.getElementById("tunerStatus").textContent="Ошибка статуса: "+e;if(tunerRunning)scheduleTunerPoll()}finally{tunerRequest=null}})();return tunerRequest}
+async function startTuner(){
+  const service=document.getElementById("tunerService").value,max=Number(document.getElementById("tunerMax").value),mix=document.getElementById("tunerMix").value,clientIp=document.getElementById("tunerClientIp").value.trim(),sourceFile=document.getElementById("tunerSource").value,voiceCheck=service==="discord-voice"?document.getElementById("tunerVoiceCheck").value:"manual",voiceAuto=voiceCheck==="probe",voiceTraffic=voiceCheck==="traffic";
+  if(service==="discord-voice"&&!clientIp){log("для Discord Voice укажите LAN IPv4 компьютера");return}
+  if(!confirm("Начать подбор для "+serviceLabel[service]+(sourceFile?" из "+sourceFile:"")+"?\n\nТолько nfqws2 будет временно перезапускаться. Xkeen останется без изменений."))return;
+  document.getElementById("tunerFound").classList.remove("visible");tunerControls(true);log("автоподбор: "+service,true);
+  try{const d=await api("/api/tuner/start",{method:"POST",headers:controlHeaders,body:JSON.stringify({service:service,mix_level:mix,max_candidates:max,client_ip:service==="discord-voice"?clientIp:"",source_file:sourceFile,voice_auto:voiceAuto,voice_traffic:voiceTraffic})});renderTuner(d)}
+  catch(e){log("не удалось начать подбор: "+e);tunerControls(false)}
+}
+async function cancelTuner(){if(!confirm("Остановить подбор? Временный процесс будет завершён, штатный nfqws2 восстановлен."))return;try{renderTuner(await api("/api/tuner/cancel",{method:"POST",headers:controlHeaders,body:"{}"}))}catch(e){log("ошибка остановки: "+e)}}
+async function voiceVerdict(works){try{renderTuner(await api("/api/tuner/verdict",{method:"POST",headers:controlHeaders,body:JSON.stringify({works:works})}))}catch(e){log("ошибка ответа Voice: "+e)}}
+async function applyTunerResult(){
+  const button=document.getElementById("applyTunerResult"),status=document.getElementById("tunerApplyStatus"),progress=document.getElementById("tunerApplyProgress");
+  if(button.disabled||!confirm("Применить найденный профиль постоянно?\n\nБудет перезапущен только nfqws2; перед изменением создаётся focused snapshot."))return;
+  const expected=document.getElementById("tunerFoundId").textContent.trim();
+  busy(true);button.textContent="Применяется…";progress.hidden=false;status.textContent="Применяю профиль "+expected+"…";status.setAttribute("aria-busy","true");let done=null;
+  try{
+    const d=await operation("/api/tuner/apply","Применение найденного профиля");
+    done=d;log(resultText("найденный профиль применён",d.output),true);
+    status.textContent="Применён профиль "+expected;button.textContent="Применён";
+    try{
+      const installed=await api("/api/imported");
+      if(!(installed.profiles||[]).some(p=>p.installed&&p.candidate_id===expected)){
+        status.textContent="Применение завершилось, но установленный ID не совпал. Проверьте журнал.";button.textContent="Проверить применение";
+      }
+    }catch(e){status.textContent="Применение завершилось; подтвердить установленный ID не удалось: "+e;button.textContent="Применение завершено"}
+  }catch(e){status.textContent="Ошибка применения: "+e;button.textContent="Повторить применение";log("ошибка применения: "+e,true)}
+  finally{progress.hidden=true;status.setAttribute("aria-busy","false");busy(false);await refresh();await refreshProfiles();await refreshVersions();await refreshTuner()}
+  if(done)await postChecksAfter(done)
+}
+document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{
+  if(b.classList.contains("active"))return;
+  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===b));
+  document.querySelectorAll(".tab-page").forEach(x=>x.classList.toggle("active",x.id===b.dataset.tab));
+  suspendBackgroundPolls();refreshActiveTab();
+}));
+document.addEventListener("visibilitychange",()=>{
+  suspendBackgroundPolls();
+  if(!document.hidden){if(!tabVisible("control"))refresh();if(!tabVisible("autotune"))refreshTuner();refreshActiveTab()}
+});
+document.querySelectorAll("[data-action]").forEach(b=>b.addEventListener("click",()=>xkeenAction(b.dataset.action)));document.querySelectorAll(".service").forEach(box=>box.querySelectorAll(".mode").forEach(b=>b.addEventListener("click",()=>routeAction(box.dataset.service,b.dataset.mode))));
+document.getElementById("validate").addEventListener("click",validateReport);document.getElementById("applyImport").addEventListener("click",applyImport);document.getElementById("rollbackImport").addEventListener("click",rollbackImport);document.getElementById("clear").addEventListener("click",()=>log("журнал очищен",true));
+document.getElementById("tunerService").addEventListener("change",tunerServiceChanged);document.getElementById("tunerVoiceCheck").addEventListener("change",updateVoiceHint);document.getElementById("startTuner").addEventListener("click",startTuner);document.getElementById("cancelTuner").addEventListener("click",cancelTuner);document.getElementById("voiceYes").addEventListener("click",()=>voiceVerdict(true));document.getElementById("voiceNo").addEventListener("click",()=>voiceVerdict(false));document.getElementById("applyTunerResult").addEventListener("click",applyTunerResult);
+document.getElementById("refreshHistory").addEventListener("click",refreshHistory);document.getElementById("refreshVersions").addEventListener("click",refreshVersions);document.getElementById("checkUpdates").addEventListener("click",checkUpdates);
+document.getElementById("saveAutomation").addEventListener("click",saveAutomation);document.getElementById("cancelAutomation").addEventListener("click",cancelAutomation);
+document.getElementById("refreshVpnNodes").addEventListener("click",refreshVpnNodes);document.getElementById("recoverVpnNode").addEventListener("click",recoverVpnNode);document.getElementById("addVpnNode").addEventListener("click",addVpnNode);document.getElementById("checkAllVpnNodes").addEventListener("click",checkAllVpnNodes);document.getElementById("vpnEditSave").addEventListener("click",saveVpnEdit);document.getElementById("vpnEditCancel").addEventListener("click",cancelVpnEdit);
+document.querySelectorAll("#automation input,#automation select").forEach(control=>control.addEventListener("input",()=>automationSaveMessage("Есть несохранённые изменения. Нажмите «Сохранить расписание».")));
+document.querySelectorAll(".diag-start").forEach(b=>b.addEventListener("click",()=>startDiagnostic(b.dataset.diagKind)));document.getElementById("cancelDiagnostic").addEventListener("click",cancelDiagnostic);
+// Job discovery remains global: route locks and running jobs must not depend on
+// which tab was opened. Heavy lists are loaded only for the visible section.
+log("панель готова",true);tunerServiceChanged();refreshActiveTab();refreshTuner();refreshDiagnostic();resumeRouteJob();
+</script><script src="/assets/inspection.js"></script></body></html>

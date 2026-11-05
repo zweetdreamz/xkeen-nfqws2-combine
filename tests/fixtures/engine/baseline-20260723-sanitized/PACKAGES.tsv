@@ -1,0 +1,4 @@
+ca-certificates	PRESENT	20250419-2
+wget-ssl	PRESENT	1.25.0-4
+wget-nossl	ABSENT	-
+nfqws2-keenetic	ABSENT	-

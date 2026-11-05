@@ -6,17 +6,23 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 TARGET="$SCRIPT_DIR/apply-discord-nfqws2.sh"
+ORACLE="$SCRIPT_DIR/tests/fixtures/engine/legacy-apply-phase6.sh.txt"
 DISCORD_UDP_BLOB="$SCRIPT_DIR/config/blobs/ACTIVE_DISCORD_UDP.bin"
 YOUTUBE_LIST="$SCRIPT_DIR/config/youtube-user.list"
 FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/keenetic-discord-test.XXXXXX")"
-trap 'rm -rf "$FIXTURE"' 0 HUP INT TERM
+# shellcheck source=tests/engine-compare-lib.sh
+. "$SCRIPT_DIR/tests/engine-compare-lib.sh"
+engine_compare_init "$FIXTURE/compare"
+engine_compare_rc=0
+trap 'engine_compare_rc=$?; engine_compare_finish || engine_compare_rc=1; rm -rf "$FIXTURE"; exit "$engine_compare_rc"' 0
+trap 'exit 130' HUP INT TERM
 
 expected_blob_hash="2fe18b3bd20807d36704d0b072092ee49ae84edca907a4420ab9a0f0f28fddcf"
 actual_blob_hash="$(sha256sum "$DISCORD_UDP_BLOB" | awk '{ print $1 }')"
 [ "$actual_blob_hash" = "$expected_blob_hash" ]
-grep -Fq "$expected_blob_hash" "$TARGET"
-grep -Fq -- '--blob=discord_udp:@/opt/etc/nfqws2/blobs/discord_udp.bin' "$TARGET"
-grep -Fq -- '--lua-desync=fake:blob=discord_udp:repeats=6' "$TARGET"
+grep -Fq "$expected_blob_hash" "$ORACLE"
+grep -Fq -- '--blob=discord_udp:@/opt/etc/nfqws2/blobs/discord_udp.bin' "$ORACLE"
+grep -Fq -- '--lua-desync=fake:blob=discord_udp:repeats=6' "$ORACLE"
 if sh "$TARGET" --print-plan --udp-strategy invalid >/dev/null 2>&1; then
   echo "ERROR: invalid UDP strategy unexpectedly passed." >&2
   exit 1
@@ -27,27 +33,27 @@ awk '
   in_function && /^  cat <<'\''EOF'\''$/ { in_data=1; next }
   in_data && /^EOF$/ { exit }
   in_data { print }
-' "$TARGET" > "$FIXTURE/embedded-domains.list"
+' "$ORACLE" > "$FIXTURE/embedded-domains.list"
 diff -u "$SCRIPT_DIR/config/discord-user.list" "$FIXTURE/embedded-domains.list"
-grep -Fq 'ascii_downcase | contains("discord")' "$TARGET"
-grep -Fq 'chmod 700 "$STATE_ROOT" "$SNAPSHOT_ROOT"' "$TARGET"
-grep -Fq 'run_nfqws_init restart' "$TARGET"
-grep -Fq '"ext:geosite_v2fly.dat:discord"' "$TARGET"
-if grep -Fq '"ext:zkeenip.dat:discord"' "$TARGET"; then
+grep -Fq 'ascii_downcase | contains("discord")' "$ORACLE"
+grep -Fq 'chmod 700 "$STATE_ROOT" "$SNAPSHOT_ROOT"' "$ORACLE"
+grep -Fq 'run_nfqws_init restart' "$ORACLE"
+grep -Fq '"ext:geosite_v2fly.dat:discord"' "$ORACLE"
+if grep -Fq '"ext:zkeenip.dat:discord"' "$ORACLE"; then
   echo "ERROR: broad Discord IP category must not be routed directly." >&2
   exit 1
 fi
-grep -Fq '.ip |= map(select(is_discord_ext_selector | not))' "$TARGET"
-grep -Fq 'managed_discord_rule or managed_youtube_rule' "$TARGET"
-grep -Fq '"ext:zkeen.dat:youtube"' "$TARGET"
-grep -Fq '"ext:geosite_v2fly.dat:youtube"' "$TARGET"
-grep -Fq -- '--out-range=-d10' "$TARGET"
-grep -Fq '936c2bee4cfb80aa3c426b2dcbcc834b3fbcd1adb17172959dc569c73a14275c' "$TARGET"
-grep -Fq -- '--lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000' "$TARGET"
-grep -Fq -- '--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up' "$TARGET"
-grep -Fq -- '--lua-desync=fake:blob=youtube_quic:repeats=11' "$TARGET"
-grep -Fq 'if [ -n "$NFQWS_ARGS_CUSTOM" ]; then' "$TARGET"
-if grep -Fq '"domain": (($domains[0]' "$TARGET"; then
+grep -Fq '.ip |= map(select(is_discord_ext_selector | not))' "$ORACLE"
+grep -Fq 'managed_discord_rule or managed_youtube_rule' "$ORACLE"
+grep -Fq '"ext:zkeen.dat:youtube"' "$ORACLE"
+grep -Fq '"ext:geosite_v2fly.dat:youtube"' "$ORACLE"
+grep -Fq -- '--out-range=-d10' "$ORACLE"
+grep -Fq '936c2bee4cfb80aa3c426b2dcbcc834b3fbcd1adb17172959dc569c73a14275c' "$ORACLE"
+grep -Fq -- '--lua-desync=fake:blob=tls_clienthello:tls_mod=rnd,dupsid,sni=fonts.google.com:tcp_seq=10000' "$ORACLE"
+grep -Fq -- '--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=tls_clienthello:tcp_ts_up' "$ORACLE"
+grep -Fq -- '--lua-desync=fake:blob=youtube_quic:repeats=11' "$ORACLE"
+grep -Fq 'if [ -n "$NFQWS_ARGS_CUSTOM" ]; then' "$ORACLE"
+if grep -Fq '"domain": (($domains[0]' "$ORACLE"; then
   echo "ERROR: hardcoded hostlist domains must not be copied into Xray routing." >&2
   exit 1
 fi
@@ -57,13 +63,13 @@ awk '
   in_function && /^  cat <<'\''EOF'\''$/ { in_data=1; next }
   in_data && /^EOF$/ { exit }
   in_data { print }
-' "$TARGET" > "$FIXTURE/embedded-youtube-domains.list"
+' "$ORACLE" > "$FIXTURE/embedded-youtube-domains.list"
 diff -u "$YOUTUBE_LIST" "$FIXTURE/embedded-youtube-domains.list"
 
 # Telegram lists embedded in the engine match config/, and the Mihomo rules
 # built from them use IP-CIDR6 for IPv6 and never resolve domains for IPs.
 sed -n '/^telegram_domains() {$/,/^}$/p; /^telegram_networks() {$/,/^}$/p; /^telegram_mihomo_rules() {$/,/^}$/p' \
-  "$TARGET" > "$FIXTURE/telegram-functions.sh"
+  "$ORACLE" > "$FIXTURE/telegram-functions.sh"
 (
   . "$FIXTURE/telegram-functions.sh"
   telegram_domains | diff -u "$SCRIPT_DIR/config/telegram-user.list" -
@@ -74,9 +80,9 @@ grep -Fqx 'DOMAIN-SUFFIX,t.me,DIRECT' "$FIXTURE/telegram-mihomo.rules"
 grep -Fqx 'IP-CIDR,149.154.160.0/20,DIRECT,no-resolve' "$FIXTURE/telegram-mihomo.rules"
 grep -Fqx 'IP-CIDR6,2001:67c:4e8::/48,DIRECT,no-resolve' "$FIXTURE/telegram-mihomo.rules"
 # Unmanaged Telegram must not remove the user's identical Mihomo rules.
-grep -Fq 'case "$PREVIOUS_TELEGRAM_ROUTE:$TELEGRAM_ROUTE_MODE" in' "$TARGET"
+grep -Fq 'case "$PREVIOUS_TELEGRAM_ROUTE:$TELEGRAM_ROUTE_MODE" in' "$ORACLE"
 [ "$(wc -l < "$FIXTURE/telegram-mihomo.rules" | tr -d ' ')" = "33" ]
-if grep -Fq 'zkeenip.dat:telegram' "$TARGET"; then
+if grep -Fq 'zkeenip.dat:telegram' "$ORACLE"; then
   echo "ERROR: zkeenip.dat:telegram includes 194.221.0.0/16 and must not be used." >&2
   exit 1
 fi
@@ -84,13 +90,15 @@ if sh "$TARGET" --print-plan --telegram-route bogus >/dev/null 2>&1; then
   echo "ERROR: invalid Telegram route unexpectedly passed." >&2
   exit 1
 fi
-if grep -Fq 'test("discord"' "$TARGET"; then
+if grep -Fq 'test("discord"' "$ORACLE"; then
   echo "ERROR: router jq has no ONIGURUMA support; regex test() must not be used." >&2
   exit 1
 fi
 
 ROOT="$FIXTURE/root"
 MOCK_BIN="$FIXTURE/bin"
+# shellcheck source=tests/engine-xray-fixture.sh
+. "$SCRIPT_DIR/tests/engine-xray-fixture.sh"
 mkdir -p \
   "$ROOT/opt/etc/init.d" \
   "$ROOT/opt/etc/ndm/netfilter.d" \
@@ -151,12 +159,13 @@ EOF
 cat > "$MOCK_BIN/xkeen" <<'EOF'
 #!/bin/sh
 case "${1:-}" in
-  -v) echo "XKeen fixture" ;;
+  -v) echo "XKeen 2.1" ;;
   -status) echo "stopped" ;;
   -cp|-cpe|-tp) echo "fixture" ;;
 esac
 exit 0
 EOF
+engine_write_xray_mock "$MOCK_BIN"
 
 cat > "$MOCK_BIN/opkg" <<'EOF'
 #!/bin/sh
@@ -202,12 +211,17 @@ chmod +x \
   "$MOCK_BIN/pidof" \
   "$MOCK_BIN/ip"
 
-run_tool() {
+run_tool_once() {
+  fixture_engine="${KDN_ENGINE:-python}"
+  case " $* " in *' --apply '*) [ -n "${KDN_ENGINE:-}" ] || fixture_engine=legacy ;; esac
+  KDN_ENGINE="$fixture_engine" \
   PATH="$MOCK_BIN:$PATH" \
   KD_TEST_ROOT="$ROOT" \
   KD_ALLOW_TEST_ROOT=1 \
     sh "$TARGET" "$@"
 }
+
+run_tool() { engine_dual_run run_tool_once "$@"; }
 
 run_rollback_launcher() {
   PATH="$MOCK_BIN:$PATH" \

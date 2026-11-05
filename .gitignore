@@ -4,14 +4,25 @@
 !/backups/README.md
 *.ipk
 *.tar.gz
+*.tgz
+*.zip
+*.7z
 *.dpapi
 *.log
 /tools/windows/reports/
+# Private router/network captures; sanitized fixtures must use explicit names.
+raw-captures/
+raw_captures/
+captures/raw/
+*.pcap
+*.pcapng
+*.har
 
 # Python and test runtime
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ruff_cache/
 .test-tmp/
 .venv/
 venv/
@@ -20,6 +31,7 @@ venv/
 .env
 .env.*
 !.env.example
+.pwd
 *.pem
 *.key
 .agents/
@@ -34,6 +46,9 @@ Thumbs.db
 
 # Test and coverage artefacts
 tests/.generated/
+.cache/
+/refactor/
+/big-refactor.md
 .coverage
 .coverage.*
 htmlcov/

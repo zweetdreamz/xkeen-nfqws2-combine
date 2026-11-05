@@ -1,0 +1,48 @@
+{
+  "outbounds": [
+    {
+      "tag": "vless-reality",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "router-fixture.invalid",
+            "port": 50500,
+            "users": [
+              {
+                "id": "00000000-0000-4000-8000-000000000001",
+                "flow": "xtls-rprx-vision",
+                "encryption": "none",
+                "level": 0
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "publicKey": "fixture-only",
+          "fingerprint": "fixture-only",
+          "serverName": "router-fixture.invalid",
+          "shortId": "fixture-only",
+          "spiderX": "/3mg8KsnKiLU77hv"
+        }
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole",
+      "settings": {
+        "response": {
+          "type": "http"
+        }
+      }
+    }
+  ]
+}

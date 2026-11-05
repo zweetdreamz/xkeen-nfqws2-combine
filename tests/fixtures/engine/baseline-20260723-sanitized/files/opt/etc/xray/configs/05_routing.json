@@ -1,0 +1,180 @@
+{
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "domainMatcher": "hybrid",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "block",
+        "network": "udp",
+        "port": "135,137,138,139"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "block",
+        "domain": [
+          "ext:geosite_v2fly.dat:category-ads-all",
+          "google-analytics",
+          "analytics.yandex",
+          "appcenter.ms",
+          "app-measurement.com",
+          "firebase.io",
+          "crashlytics.com"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "vless-reality",
+        "network": "udp",
+        "port": "50000-50030"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "vless-reality",
+        "domain": [
+          "chatgpt.com",
+          "ipleak.net",
+          "ipv6.ipleak.net",
+          "polymarket.com",
+          "clob.polymarket.com",
+          "opinion.trade",
+          "proxy.opinion.trade",
+          "paradex.trade",
+          "app.lighter.xyz",
+          "auth.magic.link",
+          "api.web3modal.org",
+          "api.rabby.io",
+          "ext:zkeen.dat:domains",
+          "ext:zkeen.dat:other",
+          "ext:zkeen.dat:politic",
+          "ext:zkeen.dat:youtube",
+          "ext:geosite_v2fly.dat:youtube",
+          "ext:geosite_v2fly.dat:telegram",
+          "ext:geosite_v2fly.dat:discord",
+          "ext:geosite_v2fly.dat:twitter",
+          "ext:geosite_v2fly.dat:facebook",
+          "ext:geosite_v2fly.dat:instagram",
+          "ext:geosite_v2fly.dat:whatsapp",
+          "ext:geosite_v2fly.dat:spotify",
+          "ext:geosite_v2fly.dat:netflix",
+          "ext:geosite_v2fly.dat:hbo",
+          "ext:geosite_v2fly.dat:hulu",
+          "ext:geosite_v2fly.dat:primevideo",
+          "ext:geosite_v2fly.dat:disney",
+          "ext:geosite_refilter.dat:refilter"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "vless-reality",
+        "ip": [
+          "ext:zkeenip.dat:telegram",
+          "ext:zkeenip.dat:discord",
+          "ext:zkeenip.dat:youtube",
+          "ext:zkeenip.dat:cloudflare",
+          "ext:zkeenip.dat:google",
+          "ext:zkeenip.dat:amazon",
+          "ext:zkeenip.dat:azure",
+          "ext:zkeenip.dat:fastly",
+          "ext:zkeenip.dat:meta",
+          "ext:zkeenip.dat:akamai",
+          "ext:zkeenip.dat:bunnycdn",
+          "ext:zkeenip.dat:cdn77",
+          "ext:zkeenip.dat:gcore",
+          "ext:zkeenip.dat:hetzner",
+          "ext:zkeenip.dat:leaseweb",
+          "ext:zkeenip.dat:linode",
+          "ext:zkeenip.dat:oracle",
+          "ext:zkeenip.dat:ovh",
+          "ext:zkeenip.dat:scaleway",
+          "ext:zkeenip.dat:vultr",
+          "ext:geoip_v2fly.dat:telegram",
+          "ext:geoip_refilter.dat:refilter"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "direct",
+        "protocol": [
+          "bittorrent"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "direct",
+        "domain": [
+          "bunkr",
+          "pixeldrain",
+          "domain:hyperliquid.xyz",
+          "domain:bitget.com",
+          "domain:binance.com",
+          "domain:binance.info",
+          "domain:backpack.exchange",
+          "domain:bnbstatic.com",
+          "domain:1cupis.org",
+          "domain:docker.com",
+          "domain:docker.io",
+          "domain:cdn.auth0.com",
+          "domain:login.docker.com",
+          "domain:auth.docker.com",
+          "domain:desktop.docker.com",
+          "domain:hub.docker.com",
+          "domain:production.cloudfront.docker.com",
+          "domain:cloudfront.docker.com",
+          "domain:docker-pinata-support.s3.amazonaws.com",
+          "domain:api.dso.docker.com",
+          "domain:api.docker.com"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "direct",
+        "ip": [
+          "ext:geoip_v2fly.dat:private",
+          "ext:geoip_v2fly.dat:ru"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "direct",
+        "network": "tcp,udp"
+      }
+    ]
+  }
+}

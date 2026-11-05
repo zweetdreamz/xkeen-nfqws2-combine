@@ -1,0 +1,241 @@
+{
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "discord-direct",
+        "domain": [
+          "ext:geosite_v2fly.dat:discord"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "discord-direct",
+        "network": "udp",
+        "port": "3478-3481,5349,19294-19344,50000-50100"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "youtube-direct",
+        "domain": [
+          "ext:geosite_v2fly.dat:youtube",
+          "ext:zkeen.dat:youtube"
+        ]
+      },
+      {
+        "type": "field",
+        "ruleTag": "kdn-telegram-domain",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "vless-reality",
+        "domain": [
+          "ext:geosite_v2fly.dat:telegram"
+        ]
+      },
+      {
+        "type": "field",
+        "ruleTag": "kdn-telegram-ip",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "vless-reality",
+        "ip": [
+          "ext:geoip_v2fly.dat:telegram"
+        ]
+      },
+      {
+        "type": "field",
+        "ruleTag": "kdn-claude-fastly-vless",
+        "outboundTag": "vless-reality",
+        "ip": [
+          "192.0.2.1"
+        ]
+      },
+      {
+        "type": "field",
+        "ruleTag": "temporary-tor-via-xray",
+        "inboundTag": [
+          "tor-socks-in"
+        ],
+        "outboundTag": "vless-reality",
+        "network": "tcp"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "direct",
+        "ip": [
+          "ext:geoip_v2fly.dat:private",
+          "ext:geoip_v2fly.dat:ru"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "direct",
+        "domain": [
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "block",
+        "network": "udp",
+        "port": "135,137,138,139"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "block",
+        "domain": [
+          "ext:geosite_v2fly.dat:category-ads-all",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "vless-reality",
+        "domain": [
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "ext:zkeen.dat:domains",
+          "ext:zkeen.dat:other",
+          "ext:zkeen.dat:politic",
+          "ext:geosite_v2fly.dat:openai",
+          "ext:geosite_v2fly.dat:reddit",
+          "ext:geosite_v2fly.dat:telegram",
+          "ext:geosite_v2fly.dat:twitter",
+          "ext:geosite_v2fly.dat:facebook",
+          "ext:geosite_v2fly.dat:instagram",
+          "ext:geosite_v2fly.dat:whatsapp",
+          "ext:geosite_v2fly.dat:spotify",
+          "ext:geosite_v2fly.dat:netflix",
+          "ext:geosite_v2fly.dat:hbo",
+          "ext:geosite_v2fly.dat:hulu",
+          "ext:geosite_v2fly.dat:primevideo",
+          "ext:geosite_v2fly.dat:disney",
+          "ext:geosite_refilter.dat:refilter",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "example.invalid",
+          "ext:geosite_v2fly.dat:anthropic",
+          "ext:geosite_v2fly.dat:pinterest",
+          "example.invalid",
+          "example.invalid"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "vless-reality",
+        "ip": [
+          "ext:zkeenip.dat:telegram",
+          "ext:zkeenip.dat:youtube",
+          "ext:zkeenip.dat:cloudflare",
+          "ext:zkeenip.dat:google",
+          "ext:zkeenip.dat:amazon",
+          "ext:zkeenip.dat:azure",
+          "ext:zkeenip.dat:fastly",
+          "ext:zkeenip.dat:meta",
+          "ext:zkeenip.dat:akamai",
+          "ext:zkeenip.dat:bunnycdn",
+          "ext:zkeenip.dat:cdn77",
+          "ext:zkeenip.dat:gcore",
+          "ext:zkeenip.dat:hetzner",
+          "ext:zkeenip.dat:leaseweb",
+          "ext:zkeenip.dat:linode",
+          "ext:zkeenip.dat:oracle",
+          "ext:zkeenip.dat:ovh",
+          "ext:zkeenip.dat:scaleway",
+          "ext:zkeenip.dat:vultr",
+          "ext:geoip_v2fly.dat:telegram",
+          "ext:geoip_refilter.dat:refilter"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "direct",
+        "protocol": [
+          "bittorrent"
+        ]
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "redirect",
+          "tproxy"
+        ],
+        "outboundTag": "direct",
+        "network": "tcp,udp"
+      }
+    ]
+  }
+}

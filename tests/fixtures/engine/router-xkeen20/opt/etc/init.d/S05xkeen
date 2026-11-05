@@ -1,0 +1,12 @@
+#!/bin/sh
+# shellcheck disable=SC2034
+# Skeleton of the XKeen 2.0 init script: the assignments the engine modes read.
+name_client="xray"
+table_mark="0x111"
+custom_mark=""
+dscp_exclude="62"
+dscp_proxy="63"
+proxy_dns="on"
+proxy_router="off"
+start_auto="on"
+ipv6_support="on"

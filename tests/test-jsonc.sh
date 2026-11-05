@@ -6,7 +6,7 @@ set -eu
 # from apply-discord-nfqws2.sh and run on its own; nothing else is executed.
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-TARGET="$SCRIPT_DIR/apply-discord-nfqws2.sh"
+TARGET="$SCRIPT_DIR/tests/fixtures/engine/legacy-apply-phase6.sh.txt"
 FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/keenetic-jsonc.XXXXXX")"
 trap 'rm -rf "$FIXTURE"' 0 HUP INT TERM
 

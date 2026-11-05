@@ -10,8 +10,11 @@ import importlib.util
 import io
 import os
 import shutil
+import signal
 import socket
+import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -105,6 +108,12 @@ class FakeWebSocketServer:
         self.done = asyncio.Event()
 
     async def handle(self, reader, writer):
+        try:
+            await self.serve(reader, writer)
+        finally:
+            writer.close()  # Python 3.12: Server.wait_closed() waits for every open connection
+
+    async def serve(self, reader, writer):
         request = b""
         while not request.endswith(b"\r\n\r\n"):
             chunk = await reader.read(1)
@@ -793,45 +802,89 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         await server.wait_closed()
 
 
+RELAY_SCRIPT = ROOT / "tools" / "router" / "telegram_ws_relay.py"
+# Stand-ins for urllib.request.urlopen in the relay process (the Cloudflare
+# domain list download), so these tests never touch the network.
+DOWNLOAD_FAILS = "def urlopen(*args, **kwargs):\n    raise OSError('offline')"
+
+
+def download_hangs(started: Path) -> str:
+    """A download that never answers, as when GitHub is blocked."""
+    return f"def urlopen(*args, **kwargs):\n    open({str(started)!r}, 'w').close()\n    time.sleep(60)"
+
+
 class ProcessTests(unittest.TestCase):
-    def test_sigterm_does_not_wait_for_open_clients(self):
-        import signal
-        import subprocess
-        import tempfile
-        import time
+    def start_relay(self, directory: str, download: str) -> tuple[subprocess.Popen, int, Path]:
+        """The relay as a process; download replaces urlopen inside it."""
         port = free_port()
-        with tempfile.TemporaryDirectory() as directory:
-            pidfile = Path(directory) / "relay.pid"
-            process = subprocess.Popen(
-                [sys.executable, str(ROOT / "tools" / "router" / "telegram_ws_relay.py"),
-                 "--listen", f"127.0.0.1:{port}", "--pidfile", str(pidfile),
-                 "--log", str(Path(directory) / "relay.log")],
-            )
+        pidfile = Path(directory) / "relay.pid"
+        launcher = "\n".join([
+            "import runpy, sys, time, urllib.request",
+            download,
+            "urllib.request.urlopen = urlopen",
+            "sys.argv = sys.argv[1:]",
+            f"runpy.run_path({str(RELAY_SCRIPT)!r}, run_name='__main__')",
+        ])
+        process = subprocess.Popen(
+            [sys.executable, "-c", launcher, str(RELAY_SCRIPT),
+             "--listen", f"127.0.0.1:{port}", "--pidfile", str(pidfile),
+             "--log", str(Path(directory) / "relay.log")],
+        )
+        self.addCleanup(self.reap, process)
+        return process, port, pidfile
+
+    @staticmethod
+    def reap(process: subprocess.Popen) -> None:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+    @staticmethod
+    def connect(port: int) -> socket.socket:
+        deadline = time.monotonic() + 10
+        while True:
             try:
-                deadline = time.monotonic() + 10
-                while True:
-                    try:
-                        client = socket.create_connection(("127.0.0.1", port), timeout=1)
-                        break
-                    except OSError:
-                        if time.monotonic() > deadline:
-                            raise
-                        time.sleep(0.1)
-                with client:
-                    self.assertEqual(pidfile.read_text(encoding="ascii"), f"{process.pid}\n")
-                    client.sendall(b"partial header")  # Telegram keeps its connections open
-                    time.sleep(0.3)
-                    process.send_signal(signal.SIGTERM)
-                    self.assertEqual(process.wait(timeout=5), 0)
-                self.assertFalse(pidfile.exists())
-            finally:
-                if process.poll() is None:
-                    process.kill()
-                    process.wait()
+                return socket.create_connection(("127.0.0.1", port), timeout=10)
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.1)
+
+    def wait_until_serving(self, port: int) -> None:
+        """Returns once the relay's event loop has answered, so its signal handlers are in place.
+
+        The port accepts connections before that, from the kernel.
+        """
+        with self.connect(port) as probe:
+            probe.sendall(b"\x16\x03\x01" + bytes(61))  # not MTProto: the relay closes it
+            self.assertEqual(probe.recv(10), b"")
+
+    def test_sigterm_does_not_wait_for_open_clients(self):
+        with tempfile.TemporaryDirectory() as directory:
+            process, port, pidfile = self.start_relay(directory, DOWNLOAD_FAILS)
+            with self.connect(port) as client:
+                client.sendall(b"partial header")  # Telegram keeps its connections open
+                self.wait_until_serving(port)
+                self.assertEqual(pidfile.read_text(encoding="ascii"), f"{process.pid}\n")
+                process.send_signal(signal.SIGTERM)
+                self.assertEqual(process.wait(timeout=5), 0)
+            self.assertFalse(pidfile.exists())
+
+    def test_sigterm_does_not_wait_for_the_domain_list_download(self):
+        # The init script gives a relay 5 s after SIGTERM, then kills it.
+        with tempfile.TemporaryDirectory() as directory:
+            started = Path(directory) / "download.started"
+            process, port, pidfile = self.start_relay(directory, download_hangs(started))
+            self.wait_until_serving(port)
+            deadline = time.monotonic() + 10
+            while not started.exists():
+                self.assertLess(time.monotonic(), deadline, "the relay never started the download")
+                time.sleep(0.05)
+            process.send_signal(signal.SIGTERM)
+            self.assertEqual(process.wait(timeout=5), 0)
+            self.assertFalse(pidfile.exists())
 
     def test_no_pidfile_when_the_port_is_taken(self):
-        import subprocess
-        import tempfile
         with tempfile.TemporaryDirectory() as directory, socket.socket() as taken:
             taken.bind(("127.0.0.1", 0))
             taken.listen()

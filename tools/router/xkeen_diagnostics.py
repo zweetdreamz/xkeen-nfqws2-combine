@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import datetime as dt
 import ipaddress
 import json
 import os
@@ -30,10 +29,10 @@ import stat
 import struct
 import subprocess
 import sys
-import tempfile
 import threading
 from typing import Any
 
+from kdn.common import fsutil, jsonc, proc, timeutil
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 TEST_ROOT = os.environ.get("KD_DIAGNOSTICS_TEST_ROOT", "")
@@ -42,6 +41,7 @@ NFQWS_CONFIG_LOGICAL = "/opt/etc/nfqws2/nfqws2.conf"
 DISCORD_LIST_LOGICAL = "/opt/etc/nfqws2/lists/user.list"
 YOUTUBE_LIST_LOGICAL = "/opt/etc/nfqws2/lists/youtube.list"
 XRAY_CONFIG_DIR_LOGICAL = "/opt/etc/xray/configs"
+XRAY_DAT_DIR_LOGICAL = "/opt/etc/xray/dat"
 PROJECT_LOCK_LOGICAL = "/opt/tmp/keenetic-discord-nfqws2.lock"
 TELEGRAM_WS_PIDFILE_LOGICAL = "/opt/var/run/kdn-telegram-ws.pid"
 NFQWS_PIDFILE_LOGICAL = "/opt/var/run/nfqws2.pid"
@@ -74,7 +74,6 @@ DOH_RESOLVERS = (
 )
 # Unblocked SNI used to tell an SNI block from an IP block.
 SNI_CONTROL_HOST = "ya.ru"
-SNI_CHECK_HOSTS = ("discord.com", "www.youtube.com")
 STATE_LIMIT = 512 * 1024
 STANDARD_WORKERS = 4
 DPI_WORKERS = 3
@@ -137,26 +136,12 @@ STATE_PATH = JOB_DIR / "state.json"
 
 
 def utc_now() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat()
+    return timeutil.utc_now_iso()
 
 
 def atomic_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(path.parent, 0o700)
-    encoded = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    if len(encoded) > STATE_LIMIT:
-        raise RuntimeError("diagnostic state exceeds 512 KiB")
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    fsutil.atomic_json(path, payload, maximum=STATE_LIMIT, parent_mode=0o700,
+                       too_large='diagnostic state exceeds 512 KiB')
 
 
 class StateWriter:
@@ -186,7 +171,7 @@ def run(command: list[str], timeout: int, extra_env: dict[str, str] | None = Non
             stderr=subprocess.STDOUT,
             timeout=timeout,
             check=False,
-            env={**os.environ, "PATH": "/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin", **(extra_env or {})},
+            env={**proc.command_env(), **(extra_env or {})},
         )
         output = completed.stdout.decode("utf-8", errors="replace").strip()
         return {"ok": completed.returncode == 0, "code": completed.returncode, "output": output[-12000:]}
@@ -305,28 +290,7 @@ def process_ids(name: str) -> list[int]:
 
 
 def strip_json_comments(text: str) -> str:
-    """Remove // and /* */ comments outside strings (Xray accepts JSONC)."""
-    result: list[str] = []
-    index, length = 0, len(text)
-    while index < length:
-        char = text[index]
-        if char == '"':
-            end = index + 1
-            while end < length and text[end] != '"':
-                end += 2 if text[end] == "\\" else 1
-            result.append(text[index:end + 1])
-            index = end + 1
-        elif text.startswith("//", index):
-            end = text.find("\n", index)
-            index = length if end < 0 else end
-        elif text.startswith("/*", index):
-            end = text.find("*/", index + 2)
-            result.append(" ")
-            index = length if end < 0 else end + 2
-        else:
-            result.append(char)
-            index += 1
-    return "".join(result)
+    return jsonc.strip_json_comments(text)
 
 
 def xray_upgrade_findings(files: dict[str, str]) -> list[str]:
@@ -337,14 +301,17 @@ def xray_upgrade_findings(files: dict[str, str]) -> list[str]:
     """
     findings = []
     for name, raw_text in sorted(files.items()):
-        text = strip_json_comments(raw_text)
-        if re.search(r'"proxySettings"\s*:', text):
-            findings.append(f"{name}: proxySettings → sockopt.dialerProxy")
+        text = strip_json_comments(raw_text).lstrip('\ufeff')
         try:
             data = json.loads(text)
         except ValueError:
+            findings.append(f"{name}: JSON/JSONC не разобран; совместимость не подтверждена")
             continue
         outbounds = data.get("outbounds", []) if isinstance(data, dict) else []
+        outbounds = outbounds if isinstance(outbounds, list) else []
+        if any(isinstance(outbound, dict) and 'proxySettings' in outbound
+               for outbound in outbounds):
+            findings.append(f"{name}: proxySettings → sockopt.dialerProxy")
         for outbound in outbounds if isinstance(outbounds, list) else []:
             if not isinstance(outbound, dict) or outbound.get("protocol") != "freedom":
                 continue
@@ -1107,9 +1074,9 @@ def quic_live_check(
         return make_check(name, "ok", f"QUIC Initial к {where}: ответ за {elapsed} мс. Проверка с самого роутера, не с телефона")
     if status == "no-reply":
         return make_check(
-            name, "error",
+            name, "warn",
             f"QUIC Initial к {where}: нет ответа — приложение YouTube (QUIC/HTTP3) может не загружаться. "
-            "Проверка с самого роутера: путь через nfqws2 и провайдера",
+            "Проверка с самого роутера не доказывает путь LAN-трафика или DPI-блокировку; проверьте клиент",
         )
     return make_check(name, "warn", f"проверка не выполнена: {status} для {where}")
 
@@ -1260,8 +1227,8 @@ def dns_check(host: str) -> dict[str, str]:
     if not local_ok:
         if doh:
             return make_check(
-                f"DNS {host}", "error",
-                f"DNS роутера: {local_detail}; {doh_text} — подмена или блокировка DNS у провайдера",
+                f"DNS {host}", "warn",
+                f"DNS роутера: {local_detail}; {doh_text} — причина различий не подтверждена; проверьте DNS/FakeDNS и маршрут",
             )
         return make_check(f"DNS {host}", "error", f"{local_detail}; {doh_text}")
     local = set(local_detail.split(", "))
@@ -1270,10 +1237,7 @@ def dns_check(host: str) -> dict[str, str]:
 
 
 def sni_block_check(host: str) -> dict[str, str]:
-    """Tell an SNI block from an IP block: the same IP is asked with SNI ya.ru.
-
-    Runs from the router: the router's own traffic passes nfqws2 but not Xray.
-    """
+    """Router-local control probe; a difference is a hint, never proof of DPI/IP blocking."""
     name = f"SNI/IP {host} (с роутера)"
     base = [
         command_path("curl"), "-sS", "-o", "/dev/null", "--max-time", "5", "--connect-timeout", "3",
@@ -1286,14 +1250,14 @@ def sni_block_check(host: str) -> dict[str, str]:
     swapped = run(base + ["-k", "--connect-to", f"{SNI_CONTROL_HOST}:443:{host}:443", f"https://{SNI_CONTROL_HOST}/"], 9)
     if swapped["ok"]:
         return make_check(
-            name, "error",
+            name, "warn",
             f"HTTPS не отвечает (curl {direct['code']}), а тот же сервер с SNI {SNI_CONTROL_HOST} отвечает: "
-            "блокировка по SNI, текущая стратегия nfqws2 её не обходит",
+            "возможна фильтрация SNI или политика сервера; это не доказательство блокировки",
         )
     return make_check(
-        name, "error",
+        name, "warn",
         f"сервер не отвечает и с SNI {SNI_CONTROL_HOST} (curl {direct['code']}/{swapped['code']}): "
-        "блокировка по IP или недоступен порт — обход nfqws2 не поможет, нужен VPN",
+        "причина не определена: DNS, маршрут, порт или сервер. Не останавливайте подбор только по этой пробе",
     )
 
 
@@ -1401,8 +1365,17 @@ def run_health(writer: StateWriter) -> list[dict[str, str]]:
         for check in config_invariant_checks(config, engine_run, ENGINE_PATH):
             add_check(check)
 
-    xtest = run([command_path("xkeen"), "-xtest"], 35)
-    add("Xray config test", "ok" if xtest["ok"] else "error", "Configuration OK" if xtest["ok"] else xtest["output"][-500:])
+    # "xkeen -xtest" always exits 0 (the XKeen main loop has no exit); run what it runs.
+    xray_test = run(
+        [command_path("xray"), "run", "-test", "-confdir", str(root_path(XRAY_CONFIG_DIR_LOGICAL)), "-format", "json"],
+        60,
+        extra_env={"XRAY_LOCATION_ASSET": str(root_path(XRAY_DAT_DIR_LOGICAL))},
+    )
+    add(
+        "Xray config test",
+        "ok" if xray_test["ok"] else "error",
+        "Configuration OK" if xray_test["ok"] else xray_test["output"][-500:],
+    )
 
     families = [("IPv4", "iptables-save")]
     if values.get("IPV6_ENABLED", "0").strip() not in {"", "0"}:
@@ -1707,6 +1680,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not re.fullmatch(r"[0-9a-f]{16}", args.job_id):
         raise SystemExit("invalid job id")
+    from kdn.common import xkeen
+    try:
+        xkeen.require()
+    except xkeen.UnsupportedXKeen:
+        print(json.dumps(xkeen.error_status(), ensure_ascii=False))
+        return 2
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
     initial = {

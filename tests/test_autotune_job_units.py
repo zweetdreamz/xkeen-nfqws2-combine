@@ -139,6 +139,14 @@ class ValidateArgsTests(unittest.TestCase):
         self.assertIsNone(args.search_seed)
         self.assertIsNone(args.client_ip)
         self.assertIsNone(args.source_dir)
+        self.assertFalse(args.baseline_only)
+
+    def test_baseline_only_is_noninteractive_tcp_only(self):
+        JOB.validate_args(parse_args("--service", "youtube", "--job-id", "0123456789abcdef", "--baseline-only"))
+        JOB.validate_args(parse_args("--service", "discord-tcp", "--job-id", "0123456789abcdef", "--baseline-only"))
+        with self.assertRaisesRegex(ValueError, "YouTube and Discord TCP"):
+            JOB.validate_args(parse_args("--service", "discord-voice", "--job-id", "0123456789abcdef",
+                                         "--client-ip", "192.168.1.5", "--baseline-only"))
 
     def test_rejections(self):
         job = "0123456789abcdef"
@@ -521,6 +529,12 @@ class ParseEventTests(unittest.TestCase):
         self.parse("EVENT|RAW_BASELINE|tcp-unreachable|0|4")
         self.assertIsNone(self.writer.payload["network_discriminates"])
         self.assertIn("перебор стратегий продолжается", self.writer.logs[-1])
+        self.parse("EVENT|BASELINE_ONLY|fail")
+        self.assertEqual(self.writer.payload["baseline_only_result"], "fail")
+        self.parse("EVENT|QUIC_BASELINE|active|1|2")
+        self.assertEqual(self.writer.payload["baseline_quic"], {"status": "active", "replies": 1, "total": 2})
+        self.parse("EVENT|WS_RESULT|1|confirm|2|ok|0.012|upgrade")
+        self.assertEqual(self.writer.payload["last_ws_probe"]["status"], "ok")
         self.parse("EVENT|QUIC|candidate-2|www.youtube.com|142.250.74.14|ok|12")
         self.assertEqual(self.writer.payload["last_quic_probe"]["ms"], 12)
         self.parse("EVENT|QUIC_GATE|on|active-reply")
@@ -956,6 +970,52 @@ class RunnerRecoveryTests(TempRootTestCase):
         self.assertEqual(writer.payload["nfqws_restored"], "stopped")
         self.assertEqual(self.init_log.read_text().split(), ["firewall_stop"])
 
+    def write_late_pidfile_init(self, *, firewall_rc, pidfile=True):
+        # nfqws2-keenetic 1.3.2: "start" returns 1 when the pidfile is late,
+        # before it installs the rules; the daemon (the pidfile) is up anyway.
+        init = self.root / "opt" / "etc" / "init.d" / "S51nfqws2"
+        pidfile_path = self.root / "opt" / "var" / "run" / "nfqws2.pid"
+        start = f"echo 99 > '{pidfile_path}'; exit 1" if pidfile else "exit 1"
+        init.write_text(
+            "#!/bin/sh\n"
+            f"echo \"$1\" >> '{self.init_log}'\n"
+            "case \"$1\" in\n"
+            f"  start) {start} ;;\n"
+            f"  firewall_iptables|firewall_ip6tables) exit {firewall_rc} ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+
+    def test_start_that_returned_before_the_rules_gets_them_installed(self):
+        self.write_state(candidate_pid="")
+        self.write_late_pidfile_init(firewall_rc=0)
+        writer = FakeWriter()
+        JOB.recover_runner_runtime(writer, 4321)
+        self.assertEqual(writer.payload["nfqws_restored"], "running")
+        self.assertEqual(writer.payload["restored_by"], "job")
+        self.assertNotIn("restore_error", writer.payload)
+        self.assertEqual(self.init_log.read_text().split(),
+                         ["firewall_stop", "start", "firewall_iptables", "firewall_ip6tables"])
+
+    def test_start_that_returned_before_the_rules_is_an_error_when_they_stay_missing(self):
+        self.write_state(candidate_pid="")
+        self.write_late_pidfile_init(firewall_rc=1)
+        writer = FakeWriter()
+        JOB.recover_runner_runtime(writer, 4321)
+        self.assertEqual(writer.payload["restore_error"], "job-nfqws2-firewall-missing")
+        self.assertNotIn("nfqws_restored", writer.payload)
+        self.assertEqual(self.init_log.read_text().split()[:3], ["firewall_stop", "start", "firewall_iptables"])
+
+    def test_start_without_a_daemon_is_an_error_and_installs_no_rules(self):
+        self.write_state(candidate_pid="")
+        self.write_late_pidfile_init(firewall_rc=0, pidfile=False)
+        writer = FakeWriter()
+        with mock.patch.object(JOB.time, "sleep"):
+            JOB.recover_runner_runtime(writer, 4321)
+        self.assertEqual(writer.payload["restore_error"], "job-could-not-restart-nfqws2")
+        self.assertNotIn("nfqws_restored", writer.payload)
+        self.assertEqual(self.init_log.read_text().split(), ["firewall_stop", "start"])
+
     def test_no_state_or_foreign_state_does_nothing(self):
         writer = FakeWriter()
         JOB.recover_runner_runtime(writer, 4321)
@@ -981,6 +1041,10 @@ class MainTests(TempRootTestCase):
 
     def setUp(self):
         super().setUp()
+        from kdn.common import xkeen
+        target = mock.patch.object(xkeen, "require", return_value="2.1")
+        target.start()
+        self.addCleanup(target.stop)
         self.sources = self.root / "fixture-sources"
         self.sources.mkdir()
         (self.sources / "general (ALT11).bat").write_text(SAMPLE, encoding="utf-8")

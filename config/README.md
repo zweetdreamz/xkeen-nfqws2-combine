@@ -6,7 +6,6 @@
 - `youtube-user.list` — узкий hostlist YouTube. В него намеренно не включён
   весь Google.
 - `discord-xray-*.json` — примеры структуры Xray, не готовый полный конфиг.
-- `discord-mihomo-rules-direct.yaml` — справочный пример Mihomo.
 - `xkeen-port-proxying-discord.lst` — набор требуемых портов.
 - `blobs/ACTIVE_DISCORD_UDP.bin` — закреплённый fake для Discord Voice/STUN.
 
@@ -27,7 +26,8 @@ quic_initial.bin
 обязательно сохраняйте `config/blobs`: профиль `--udp-strategy flowseal` без
 проверенного файла не пройдёт preflight.
 
-Списки дублируются внутри `apply-discord-nfqws2.sh`; тесты контролируют их
-совпадение. Ручное изменение только файла `.list` не станет постоянной
-настройкой после следующего `apply`.
+Native-движок читает `config/*-user.list` при применении и формирует из них
+рабочие hostlists в `/opt/etc/nfqws2/lists/`. Правки только в рабочих списках
+могут быть перезаписаны следующим `apply`. Тесты также сверяют исходные списки
+с эталонными fixtures.
 

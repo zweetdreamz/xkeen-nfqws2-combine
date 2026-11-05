@@ -1,0 +1,22 @@
+# Files that tools/dev/deploy.sh ships to the router: paths relative to the
+# project root, one per line, * allowed. Every line must match a file.
+apply-discord-nfqws2.sh
+set-service-route.sh
+set-zapret-mode.sh
+rollback-last-change.sh
+rollback-to-baseline.sh
+scripts/*.sh
+config/*.list
+config/*.lst
+config/*.json
+config/blobs/*.bin
+tools/router/*.py
+tools/router/*.js
+tools/router/*.sh
+tools/router/kdn/*.py
+tools/router/kdn/*/*.py
+tools/router/kdn/*/*/*.py
+tools/router/kdn/web/assets/*
+tools/windows/zapret_tuner.py
+tools/windows/router-candidate-runner.sh
+tools/windows/reset-discord-cache.ps1

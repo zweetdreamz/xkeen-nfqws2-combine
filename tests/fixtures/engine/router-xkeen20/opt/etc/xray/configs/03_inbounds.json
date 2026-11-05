@@ -1,0 +1,47 @@
+{
+  "inbounds": [
+    {
+      "tag": "redirect",
+      "protocol": "dokodemo-door",
+      "port": 61219,
+      "settings": {
+        "followRedirect": true,
+        "network": "tcp"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "fakedns",
+          "http",
+          "quic",
+          "tls"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "tproxy",
+      "protocol": "dokodemo-door",
+      "port": 61219,
+      "settings": {
+        "followRedirect": true,
+        "network": "udp"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "fakedns",
+          "http",
+          "quic",
+          "tls"
+        ],
+        "routeOnly": true
+      }
+    }
+  ]
+}

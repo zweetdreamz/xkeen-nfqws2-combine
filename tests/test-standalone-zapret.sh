@@ -25,7 +25,12 @@ safe_cleanup() {
     "${TMPDIR:-/tmp}/keenetic-standalone."*) rm -rf "$FIXTURE" ;;
   esac
 }
-trap safe_cleanup 0 HUP INT TERM
+# shellcheck source=tests/engine-compare-lib.sh
+. "$SCRIPT_DIR/tests/engine-compare-lib.sh"
+engine_compare_init "$FIXTURE/compare"
+engine_compare_rc=0
+trap 'engine_compare_rc=$?; engine_compare_finish || engine_compare_rc=1; safe_cleanup; exit "$engine_compare_rc"' 0
+trap 'exit 130' HUP INT TERM
 
 mkdir -p \
   "$ROOT/opt/etc/init.d" \
@@ -39,6 +44,10 @@ mkdir -p \
   "$MOCK_BIN"
 
 touch "$PACKAGE_STATE/ca-certificates" "$PACKAGE_STATE/wget-ssl"
+# Scope/retention regression only: a synthetic supported version precondition,
+# not a claim that native standalone apply is supported without XKeen.
+printf '#!/bin/sh\n[ "$1" = -v ] || exit 97\necho "XKeen 2.1"\n' > "$MOCK_BIN/xkeen"
+chmod +x "$MOCK_BIN/xkeen"
 printf 'Package: jq\n' > "$ROOT/opt/var/opkg-lists/entware"
 
 # shellcheck source=tests/engine-nfqws2-fixture.sh
@@ -128,13 +137,27 @@ engine_write_iptables_mocks "$MOCK_BIN"
 
 chmod +x "$MOCK_BIN/opkg" "$MOCK_BIN/ip"
 
-run_tool() {
+run_tool_once() {
+  fixture_engine="${KDN_ENGINE:-python}"
+  case " $* " in *' --apply '*) [ -n "${KDN_ENGINE:-}" ] || fixture_engine=legacy ;; esac
+  case "$fixture_engine $*" in
+    'legacy --apply '*)
+      KDN_ENGINE=legacy PATH="$MOCK_BIN:$PATH" KD_TEST_ROOT="$ROOT" KD_ALLOW_TEST_ROOT=1 \
+        KD_STANDALONE_FIXTURE="$FIXTURE" python3 "$SCRIPT_DIR/tests/standalone_oracle_apply.py" "$TARGET" "$@"
+      return $? ;;
+  esac
+  KDN_ENGINE="$fixture_engine" \
   PATH="$MOCK_BIN:$PATH" \
   KD_TEST_ROOT="$ROOT" \
   KD_ALLOW_TEST_ROOT=1 \
   KD_STANDALONE_FIXTURE="$FIXTURE" \
     sh "$TARGET" "$@"
 }
+
+run_tool() { engine_dual_run run_tool_once "$@"; }
+
+# The regression restores only a newly generated supported snapshot.
+KDN_ENGINE=python run_tool_once --snapshot-baseline --standalone-zapret --yes-router >/dev/null
 
 plan="$(run_tool --print-plan --standalone-zapret)"
 printf '%s\n' "$plan" | grep -Fq 'Discord TCP=zapret, Discord Voice=zapret, YouTube=zapret'

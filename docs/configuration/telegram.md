@@ -1,0 +1,48 @@
+# Telegram
+
+| Режим | Действие |
+|---|---|
+| Выкл / unmanaged | Проект не добавляет правил, остаётся пользовательская маршрутизация |
+| Direct | Управляемые правила в telegram-direct |
+| VPN / vless | Общая активная VPN-нода |
+| WS | MTProto TCP через локальный WebSocket-ретранслятор; сайт/CDN/UDP напрямую |
+
+Режима Zapret нет. Требуется поддержанный XKeen/Xray; Mihomo/standalone
+не поддерживаются. Telegram включается явно.
+
+## WS
+
+Xray отправляет MTProto к `telegram-ws`: freedom redirect127.0.0.1:18443.
+Служба `S99kdn-telegram-ws` запускает telegram_ws_relay.py.
+Клиентам не требуется настраивать MTProxy или секрет.
+
+Ретранслятор определяет DC из obfuscated2 и пробует WebSocket/Cloudflare,
+затем допустимый direct TCP. Сайт и CDN обслуживаются через прямой
+TLS-профиль nfqws2. UDP-звонки внутри WebSocket не передаются:
+для звонков используйте VPN и проверьте приложение.
+
+Проект меняет только свои правила kdn-telegram-domain,
+kdn-telegram-sniffed, kdn-telegram-ip, kdn-telegram-udp.
+В ограниченный port_proxying.lst добавляется5222.
+При выходе из WS служба убирается; rollback восстанавливает соответствующее состояние.
+
+## Настройка и проверка
+
+Выберите режим Telegram в панели или через
+`sh set-service-route.sh telegram ws --core auto --yes-router`.
+Это изменяющая операция, не проба.
+
+Проверьте вход, отправку сообщений, загрузку медиа и звонки отдельно.
+При своём MTProxy приложения его соединения могут обходить relay.
+WS не гарантирует работу при любой блокировке или доступность Cloudflare.
+
+Цель «Telegram» в [чекере ресурсов](../usage/route-checker.md) проверяет HTTPS
+сайта `telegram.org` через Direct/VPN. Она не подтверждает MTProto, работу
+WS relay, доставку сообщений или UDP-звонки приложения.
+
+Лог: /opt/var/log/kdn-telegram-ws.log, ограниченный размер с ротацией.
+Не публикуйте приватные captures/конфиги.
+
+Выбор списка доменов/IP проверяйте по своим DAT. Доменные категории относятся
+к domain, IP-категории — к ip; совпадение названий не делает их взаимозаменяемыми.
+Чтение категорий: [dat-reader](../../tools/dat-reader/README.md).

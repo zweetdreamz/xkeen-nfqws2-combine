@@ -953,6 +953,11 @@ class ProbeEventTests(unittest.TestCase):
         self.assertFalse(TUNER.verification_report("youtube", gate_off, 2)["quic_verified"])
         raw_pass = TUNER.verification_report("youtube", ["EVENT|RAW_BASELINE|pass|4|4"])
         self.assertIs(raw_pass["network_discriminates"], False)
+        websocket = TUNER.verification_report(
+            "discord-tcp", ["EVENT|WS_RESULT|1|confirm|2|ok|0.012|upgrade"], 1
+        )
+        self.assertTrue(websocket["ws_verified"])
+        self.assertEqual(len(websocket["ws_results"]), 1)
 
     def test_parse_quic_event(self):
         self.assertEqual(

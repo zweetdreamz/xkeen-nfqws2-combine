@@ -16,6 +16,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -50,6 +51,20 @@ def write_file(base: Path, logical: str, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
+
+
+def wait_for_cmdline(pid: int, timeout: float = 5.0) -> None:
+    """Wait until /proc/<pid>/cmdline is non-empty: right after Popen it can still be empty on a loaded host."""
+    path = Path(f"/proc/{pid}/cmdline")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if path.read_bytes():
+                return
+        except OSError:
+            pass
+        time.sleep(0.001)
+    raise AssertionError(f"{path} stayed empty for {timeout} s")
 
 
 VOICE_RULE_PORTS = "3478-3481,5349,19294-19344,50000-50100"
@@ -153,8 +168,8 @@ def healthy_run(pids=None, iptables=None, engine_output=ENGINE_WITHOUT_CHECK, ip
         if name == "pidof":
             value = pids.get(command[1])
             return {"ok": value is not None, "code": 0 if value else 1, "output": value or ""}
-        if name == "xkeen":
-            return {"ok": True, "code": 0, "output": "ok"}
+        if name == "xray":
+            return {"ok": True, "code": 0, "output": "Configuration OK"}
         if name == "iptables-save":
             return {"ok": True, "code": 0, "output": iptables}
         if name == "ip":
@@ -231,6 +246,18 @@ class JsoncTests(DiagnosticsUnitBase):
 
 
 class XrayUpgradeTests(DiagnosticsUnitBase):
+    def test_only_real_outbound_fields_are_migration_findings(self):
+        files = {'notes.json': json.dumps({'notes': {'proxySettings': {}}, 'outbounds': []}),
+                 'bom.json': '\ufeff// header\n{"outbounds": []}',
+                 'types.json': '{"outbounds": null}'}
+        self.assertEqual(self.module.xray_upgrade_findings(files), [])
+
+    def test_malformed_json_does_not_claim_compatibility_or_echo_contents(self):
+        findings = self.module.xray_upgrade_findings({'broken.json': '{"secret":"PRIVATE_SENTINEL"'})
+        self.assertEqual(len(findings), 1)
+        self.assertIn('совместимость не подтверждена', findings[0])
+        self.assertNotIn('PRIVATE_SENTINEL', findings[0])
+
     def test_clean_configs(self):
         files = {
             "04_outbounds.json": json.dumps({"outbounds": [
@@ -890,7 +917,12 @@ class RunHealthTests(DiagnosticsUnitBase):
         self.assertEqual(checks["Telegram route"]["status"], "ok")
         self.assertEqual(checks["Telegram WS relay"]["status"], "error")
         self.assertIn("нет pid-файла", checks["Telegram WS relay"]["detail"])
-        pidfile = write_file(self.tmp, self.module.TELEGRAM_WS_PIDFILE_LOGICAL, f"{os.getpid()}\n")
+        # Another live process: a child with a command line of its own, not the runner, whose arguments are not ours.
+        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "other_process.py"])
+        self.addCleanup(other.wait)
+        self.addCleanup(other.kill)
+        wait_for_cmdline(other.pid)
+        pidfile = write_file(self.tmp, self.module.TELEGRAM_WS_PIDFILE_LOGICAL, f"{other.pid}\n")
         checks = self.by_name(healthy_run())
         self.assertIn("не telegram_ws_relay.py", checks["Telegram WS relay"]["detail"])
 
@@ -901,6 +933,7 @@ class RunHealthTests(DiagnosticsUnitBase):
         relay = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "telegram_ws_relay.py"])
         self.addCleanup(relay.wait)
         self.addCleanup(relay.kill)
+        wait_for_cmdline(relay.pid)
         pidfile.write_text(f"{relay.pid}\n", encoding="ascii")
         with mock.patch.object(self.module, "TELEGRAM_WS_PORT", listener.getsockname()[1]):
             checks = self.by_name(healthy_run())
@@ -925,7 +958,7 @@ class RunHealthTests(DiagnosticsUnitBase):
                         "output": f"EVENT|QUIC|health|www.youtube.com|142.250.74.110|{status}|41\n"}
             return base(command, timeout)
 
-        for status, expected in (("ok", "ok"), ("no-reply", "error"), ("dns-error", "warn")):
+        for status, expected in (("ok", "ok"), ("no-reply", "warn"), ("dns-error", "warn")):
             answers["status"] = status
             with self.subTest(status=status):
                 checks, _writer = self.run_health(fake_run, probe=probe)
@@ -937,10 +970,10 @@ class RunHealthTests(DiagnosticsUnitBase):
 
     def test_dns_check_compares_with_doh(self):
         build_healthy_tree(self.tmp, self.module)
-        # The router's resolver fails or lies while DoH answers: DNS is the culprit.
+        # A non-public answer can also be intentional FakeDNS; don't infer provider blocking.
         checks = self.by_name(healthy_run(), resolve=(False, "private/unexpected DNS answer: 10.0.0.1"))
-        self.assertEqual(checks["DNS discord.com"]["status"], "error")
-        self.assertIn("подмена или блокировка DNS", checks["DNS discord.com"]["detail"])
+        self.assertEqual(checks["DNS discord.com"]["status"], "warn")
+        self.assertIn("причина различий не подтверждена", checks["DNS discord.com"]["detail"])
         # Different addresses are only a note: CDNs answer by location.
         checks = self.by_name(healthy_run(), doh=lambda host, name, ip: ["162.159.128.233"])
         self.assertEqual(checks["DNS discord.com"]["status"], "ok")
@@ -953,7 +986,7 @@ class RunHealthTests(DiagnosticsUnitBase):
         self.assertEqual(checks["DNS discord.com"]["status"], "ok")
         self.assertIn("DoH недоступен", checks["DNS discord.com"]["detail"])
 
-    def test_sni_block_is_told_from_ip_block(self):
+    def test_sni_control_probe_cannot_prove_sni_or_ip_block(self):
         build_healthy_tree(self.tmp, self.module)
         calls = []
 
@@ -966,11 +999,12 @@ class RunHealthTests(DiagnosticsUnitBase):
             return answer
 
         checks = self.by_name(healthy_run(curl=curl({False: False, True: True})))
-        self.assertEqual(checks["SNI/IP discord.com (с роутера)"]["status"], "error")
-        self.assertIn("блокировка по SNI", checks["SNI/IP discord.com (с роутера)"]["detail"])
+        self.assertEqual(checks["SNI/IP discord.com (с роутера)"]["status"], "warn")
+        self.assertIn("не доказательство блокировки", checks["SNI/IP discord.com (с роутера)"]["detail"])
         self.assertIn(["--connect-to", "ya.ru:443:discord.com:443"], [c[i:i + 2] for c in calls for i in range(len(c))])
         checks = self.by_name(healthy_run(curl=curl({False: False, True: False})))
-        self.assertIn("блокировка по IP", checks["SNI/IP discord.com (с роутера)"]["detail"])
+        self.assertEqual(checks["SNI/IP discord.com (с роутера)"]["status"], "warn")
+        self.assertIn("причина не определена", checks["SNI/IP discord.com (с роутера)"]["detail"])
         # Services routed through the VPN are not probed from the router.
         build_healthy_tree(self.tmp, self.module, HEALTHY_CONF.replace("YouTube=direct", "YouTube=vless"))
         checks = self.by_name(healthy_run())
@@ -1021,8 +1055,8 @@ class RunHealthTests(DiagnosticsUnitBase):
             "NFQUEUE": "error",
             "IPv4 WAN route": "error",
             "IPv6 и nfqws2": "ok",
-            "DNS discord.com": "error",
-            "DNS www.youtube.com": "error",
+            "DNS discord.com": "warn",  # independent DoH answers: local failure is not proven provider blocking
+            "DNS www.youtube.com": "warn",
             "Свободное место /opt": "error",
             "Доступная память": "warn",
             "Conntrack": "warn",
@@ -1109,13 +1143,15 @@ class RunHealthTests(DiagnosticsUnitBase):
         # Without parsed tags, direct routes are inconsistent.
         self.assertEqual(by_name["YouTube route"]["status"], "error")
 
-    def test_xtest_failure_reports_tail_of_output(self):
+    def test_xray_test_failure_reports_tail_of_output(self):
         build_healthy_tree(self.tmp, self.module)
         base = healthy_run()
+        calls = []
 
         def fake_run(command, timeout, extra_env=None):
-            if Path(command[0]).name == "xkeen":
-                return {"ok": False, "code": 1, "output": "x" * 600 + "END"}
+            if Path(command[0]).name == "xray":
+                calls.append((command, timeout, extra_env))
+                return {"ok": False, "code": 23, "output": "x" * 600 + "END"}
             return base(command, timeout)
 
         checks, _writer = self.run_health(fake_run)
@@ -1123,6 +1159,28 @@ class RunHealthTests(DiagnosticsUnitBase):
         self.assertEqual(detail["status"], "error")
         self.assertEqual(len(detail["detail"]), 500)
         self.assertTrue(detail["detail"].endswith("END"))
+        (command, timeout, extra_env), = calls
+        self.assertEqual(Path(command[0]).name, "xray")
+        self.assertEqual(command[1:4], ["run", "-test", "-confdir"])
+        self.assertEqual(command[4], str(self.tmp / "opt" / "etc" / "xray" / "configs"))
+        self.assertEqual(command[5:], ["-format", "json"])
+        self.assertEqual(timeout, 60)
+        self.assertEqual(extra_env, {"XRAY_LOCATION_ASSET": str(self.tmp / "opt" / "etc" / "xray" / "dat")})
+
+    def test_xray_test_never_calls_xkeen_xtest(self):
+        build_healthy_tree(self.tmp, self.module)
+        base = healthy_run()
+        commands = []
+
+        def fake_run(command, timeout, extra_env=None):
+            commands.append(command)
+            return base(command, timeout)
+
+        checks, _writer = self.run_health(fake_run)
+        # xkeen -xtest exits 0 whatever the configuration is: it proves nothing.
+        self.assertFalse([command for command in commands if "-xtest" in command])
+        self.assertEqual(sum(Path(command[0]).name == "xray" for command in commands), 1)
+        self.assertEqual({check["name"]: check for check in checks}["Xray config test"]["status"], "ok")
 
     def test_resource_thresholds(self):
         cases = (
@@ -1167,6 +1225,10 @@ class MainTests(DiagnosticsUnitBase):
 
     def setUp(self):
         super().setUp()
+        from kdn.common import xkeen
+        target = mock.patch.object(xkeen, "require", return_value="2.1")
+        target.start()
+        self.addCleanup(target.stop)
         self.state_path = self.tmp / "opt" / "tmp" / "xkeen-diagnostics" / "state.json"
         for patcher in (
             mock.patch.object(self.module, "STATE_PATH", self.state_path),

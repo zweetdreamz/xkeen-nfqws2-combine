@@ -1,0 +1,60 @@
+status	--status
+check-config	--check-config
+print-nfqws-profiles	--print-nfqws-profiles
+show-snapshots	--show-snapshots
+preflight	--preflight
+print-plan	--print-plan
+show-snapshots	--show-rollback
+apply	--apply
+snapshot-baseline	--snapshot-baseline
+rollback-baseline	--rollback
+rollback-baseline	--rollback-baseline
+rollback-latest	--rollback-latest
+rollback-import	--rollback-import
+apply-import-profile	--apply-import-profile x
+clear-imported-profile	--clear-imported-profile youtube
+rollback-snapshot	--rollback-snapshot x
+status	--status --yes-router
+status	--yes-router --status
+status	--apply --status
+apply	--status --apply
+rollback-snapshot	--rollback-snapshot --status
+print-plan	--print-plan --wan-interface --status
+status	--status --json
+apply	--yes-router
+apply	--help --yes-router
+help	--yes-router --help
+help	
+help	--help
+help	-h
+help	--without-xkeen
+help	--no-xkeen
+help	--integrated
+help	--standalone-zapret
+help	--wide-udp
+help	--narrow-udp
+status	--without-xkeen --status
+?	--bogus --status
+?	--status --bogus
+?	--status --bogus --help
+?	@empty@
+?	--status @empty@
+?	--apply-import-profile
+?	--clear-imported-profile
+?	--rollback-snapshot
+?	--udp-strategy
+?	--discord-route
+?	--discord-tcp-route
+?	--discord-voice-route
+?	--youtube-route
+?	--telegram-route
+?	--proxy-outbound
+?	--core
+?	--direct-mark
+?	--wan-interface
+help	--status --help
+check-config	--status --check-config
+apply	--status --help --yes-router
+status	--help --status
+preflight	--core xray --preflight
+rollback-snapshot	--rollback-snapshot --yes-router

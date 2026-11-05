@@ -1,0 +1,192 @@
+# Pre-phase5 validator oracle; test data, never a production entrypoint.
+# Source: SCRIPT_VERSION 3.2.0 before shared safety validation.
+validate_imported_profile() {
+  profile_file="$1"
+  [ -f "$profile_file" ] && [ ! -L "$profile_file" ] || {
+    echo "ERROR: imported profile is not a regular file: $profile_file" >&2
+    return 1
+  }
+  have jq && have sha256sum || {
+    echo "ERROR: jq and sha256sum are required for profile import." >&2
+    return 1
+  }
+
+  jq -e '
+    type == "object"
+    and .format == 1
+    and (.service == "youtube" or .service == "discord-tcp" or
+         .service == "discord-voice")
+    and (.candidate_id | type == "string" and length == 12)
+    and (.source_name | type == "string" and length > 0 and length <= 160 and
+         index("\n") == null and index("\r") == null)
+    and (.source_sha | type == "string" and length <= 128 and
+         index("\n") == null and index("\r") == null)
+    and (.source_url | type == "string" and length <= 500 and
+         index("\n") == null and index("\r") == null)
+    and (.family | type == "string" and length > 0 and length <= 240 and
+         index("\n") == null and index("\r") == null)
+    and (.rank | type == "number" and floor == . and . >= 0 and . <= 100000)
+    and (.args | type == "array" and length > 0 and length <= 40 and
+         all(.[]; type == "string" and length > 0 and length <= 600 and
+             index("\n") == null and index("\r") == null))
+    and (.notes | type == "array" and length <= 20 and
+         all(.[]; type == "string" and length <= 500 and
+             index("\n") == null and index("\r") == null))
+    and ((keys - ["args", "candidate_id", "family", "format", "notes",
+                  "rank", "report", "service", "source_name", "source_sha",
+                  "source_url"]) | length == 0)
+    and ((.report // {}) | type == "object")
+    and (((.report // {}) | keys - ["commit", "created_utc", "ref", "repository", "search_seed"]) | length == 0)
+    and ((.report.repository // "") | type == "string" and length <= 200 and
+         index("\n") == null and index("\r") == null)
+    and ((.report.ref // "") | type == "string" and length <= 200 and
+         index("\n") == null and index("\r") == null)
+    and ((.report.commit // "") | type == "string" and length <= 128 and
+         index("\n") == null and index("\r") == null)
+    and ((.report.created_utc // "") | type == "string" and length <= 80 and
+         index("\n") == null and index("\r") == null)
+    and ((.report.search_seed // null) as $seed |
+         $seed == null or
+         ($seed | type == "number" and floor == . and . >= 0 and . <= 4294967295))
+  ' "$profile_file" >/dev/null || {
+    echo "ERROR: imported profile has an invalid schema." >&2
+    return 1
+  }
+
+  profile_tokens="$(make_tmp)"
+  jq -r '.args[]' "$profile_file" > "$profile_tokens"
+  profile_service="$(jq -r '.service' "$profile_file")"
+  profile_new_count=0
+  while IFS= read -r profile_token; do
+    if [ "$profile_token" = "--new" ]; then
+      profile_new_count=$((profile_new_count + 1))
+      continue
+    fi
+    printf '%s\n' "$profile_token" |
+      grep -Eq '^--[a-z0-9-]+=[A-Za-z0-9_@/.,:+<>=!-]+$' || {
+        echo "ERROR: unsafe nfqws2 token in imported profile: $profile_token" >&2
+        return 1
+      }
+    profile_option="${profile_token%%=*}"
+    profile_option="${profile_option#--}"
+    case "$profile_option" in
+      filter-tcp|filter-udp|filter-l7|hostlist|out-range|payload|lua-desync) ;;
+      *)
+        echo "ERROR: unsupported imported nfqws2 option: --$profile_option" >&2
+        return 1
+        ;;
+    esac
+    case "$profile_token" in
+      --lua-desync=*)
+        profile_lua="${profile_token#--lua-desync=}"
+        profile_lua="${profile_lua%%:*}"
+        case "$profile_lua" in
+          fake|multisplit|multidisorder|fakedsplit|hostfakesplit) ;;
+          *)
+            echo "ERROR: unsupported imported Lua desync: $profile_lua" >&2
+            return 1
+            ;;
+        esac
+        ;;
+    esac
+  done < "$profile_tokens"
+
+  case "$profile_service" in
+    youtube)
+      [ "$profile_new_count" -eq 1 ] &&
+        grep -Fqx -- '--filter-tcp=443' "$profile_tokens" &&
+        grep -Fqx -- '--filter-udp=443' "$profile_tokens" &&
+        grep -Fqx -- '--filter-l7=tls' "$profile_tokens" &&
+        grep -Fqx -- '--filter-l7=quic' "$profile_tokens" &&
+        grep -Fqx -- '--hostlist=/opt/etc/nfqws2/lists/youtube.list' "$profile_tokens" &&
+        grep -Fqx -- '--payload=tls_client_hello' "$profile_tokens" &&
+        grep -Fqx -- '--payload=quic_initial' "$profile_tokens" || {
+          echo "ERROR: YouTube profile is missing its bounded TCP/QUIC selectors." >&2
+          return 1
+        }
+      if grep -E '^--filter-(tcp|udp)=' "$profile_tokens" |
+           grep -Ev '^--filter-tcp=443$|^--filter-udp=443$' >/dev/null ||
+         grep -E '^--filter-l7=' "$profile_tokens" |
+           grep -Ev '^--filter-l7=tls$|^--filter-l7=quic$' >/dev/null ||
+         grep -E '^--hostlist=' "$profile_tokens" |
+           grep -Fvx -- '--hostlist=/opt/etc/nfqws2/lists/youtube.list' >/dev/null ||
+         grep -E '^--payload=' "$profile_tokens" |
+           grep -Ev '^--payload=tls_client_hello$|^--payload=quic_initial$' >/dev/null ||
+         grep -Eq 'user\.list|discord_udp|discord_ip_discovery' "$profile_tokens"; then
+        echo "ERROR: YouTube profile crosses into a Discord profile." >&2
+        return 1
+      fi
+      ;;
+    discord-tcp)
+      [ "$profile_new_count" -eq 0 ] &&
+        grep -Fqx -- '--filter-tcp=443' "$profile_tokens" &&
+        grep -Fqx -- '--filter-l7=tls' "$profile_tokens" &&
+        grep -Fqx -- '--hostlist=/opt/etc/nfqws2/lists/user.list' "$profile_tokens" &&
+        grep -Fqx -- '--payload=tls_client_hello' "$profile_tokens" || {
+          echo "ERROR: Discord TCP profile is missing its bounded TLS selectors." >&2
+          return 1
+        }
+      if grep -E '^--filter-tcp=' "$profile_tokens" |
+           grep -Fvx -- '--filter-tcp=443' >/dev/null ||
+         grep -E '^--filter-l7=' "$profile_tokens" |
+           grep -Fvx -- '--filter-l7=tls' >/dev/null ||
+         grep -E '^--hostlist=' "$profile_tokens" |
+           grep -Fvx -- '--hostlist=/opt/etc/nfqws2/lists/user.list' >/dev/null ||
+         grep -E '^--payload=' "$profile_tokens" |
+           grep -Fvx -- '--payload=tls_client_hello' >/dev/null ||
+         grep -Eq '^--filter-udp=|youtube\.list|quic_initial|discord_udp' "$profile_tokens"; then
+        echo "ERROR: Discord TCP profile crosses into another protocol family." >&2
+        return 1
+      fi
+      ;;
+    discord-voice)
+      [ "$profile_new_count" -eq 0 ] &&
+        grep -Fqx -- '--filter-l7=stun,discord' "$profile_tokens" &&
+        grep -Fqx -- '--payload=stun,discord_ip_discovery' "$profile_tokens" &&
+        grep -Eq '^--lua-desync=fake:blob=discord_udp:' "$profile_tokens" || {
+          echo "ERROR: Discord Voice profile is missing its bounded UDP selectors." >&2
+          return 1
+        }
+      if grep -Eq '^--filter-tcp=|^--hostlist=|youtube|quic_initial|tls_client' "$profile_tokens"; then
+        echo "ERROR: Discord Voice profile crosses into another protocol family." >&2
+        return 1
+      fi
+      profile_voice_lua_count="$(grep -c '^--lua-desync=' "$profile_tokens" || true)"
+      [ "$profile_voice_lua_count" -eq 1 ] &&
+        grep -Eq '^--lua-desync=fake:blob=discord_udp:repeats=([1-9]|[1-9][0-9])$' "$profile_tokens" || {
+          echo "ERROR: Discord Voice permits one bounded discord_udp fake only." >&2
+          return 1
+        }
+      profile_voice_filters="$(sed -n 's/^--filter-udp=//p' "$profile_tokens")"
+      [ "$(printf '%s\n' "$profile_voice_filters" | awk 'NF { count++ } END { print count + 0 }')" -eq 1 ] || {
+        echo "ERROR: Discord Voice profile must contain one UDP filter." >&2
+        return 1
+      }
+      # The range limit applies only while the profile is used (A10); an
+      # unused profile is still checked against the widest range.
+      if [ "$VOICE_RANGE_CHECK" -eq 1 ]; then
+        profile_voice_limit="$VOICE_HIGH"
+      else
+        profile_voice_limit=65535
+      fi
+      voice_ports_allowed "$profile_voice_filters" "$profile_voice_limit" || {
+        echo "ERROR: Discord Voice UDP ports exceed the currently configured safe ranges." >&2
+        echo "       Imported Discord Voice profile $(jq -r '.candidate_id' "$profile_file") uses UDP $profile_voice_filters; the configured range ends at $VOICE_HIGH." >&2
+        echo "       Apply with --wide-udp, or remove the profile: --clear-imported-profile discord-voice." >&2
+        return 1
+      }
+      ;;
+  esac
+
+  profile_serialized="$(make_tmp)"
+  profile_serialized_value="$(
+    jq -r '[.service, .source_name, .family] + .args | join("\n")' "$profile_file"
+  )"
+  printf '%s' "$profile_serialized_value" > "$profile_serialized"
+  profile_expected_id="$(sha256sum "$profile_serialized" | awk '{ print substr($1, 1, 12) }')"
+  profile_actual_id="$(jq -r '.candidate_id' "$profile_file")"
+  [ "$profile_expected_id" = "$profile_actual_id" ] || {
+    echo "ERROR: imported profile candidate_id does not match its contents." >&2
+    return 1
+  }
+}

@@ -10,9 +10,9 @@ set -eu
 # "busybox sh" is closest to the router's Entware shell). With
 # TEST_BUSYBOX_APPLETS=1 the shell tests also use busybox awk, sed, grep and
 # the other core utilities, as on the router (jq and python3 stay native).
-# test-routing-modes.sh needs the stock nfqws2 blobs: on a router it finds
-# them in /opt; elsewhere set NFQWS_TEST_BLOB_SOURCE or let this script fetch
-# them with tests/fetch-nfqws2-blobs.sh (needs network access).
+# The test-routing-modes-*.sh parts need the stock nfqws2 blobs: on a router
+# they find them in /opt; elsewhere set NFQWS_TEST_BLOB_SOURCE or let this
+# script fetch them with tests/fetch-nfqws2-blobs.sh (needs network access).
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 TEST_SHELL="${TEST_SHELL:-sh}"
@@ -77,9 +77,6 @@ for test_script in tests/test-*.sh; do
 done
 
 if [ "$coverage" -eq 1 ]; then
-  # coverage.py only measures source directories that exist at start-up;
-  # tests/panel_loader.py writes the extracted panel app there.
-  mkdir -p tests/.generated
   run_suite pytest "$PYTHON" -m coverage run -m pytest -q tests
   "$PYTHON" -m coverage report || true
 else

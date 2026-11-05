@@ -1,0 +1,8 @@
+{
+  "outbounds": [
+    {
+      "tag": "youtube-direct",
+      "protocol": "freedom"
+    }
+  ]
+}

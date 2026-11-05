@@ -1,0 +1,23 @@
+Scrubbed copy of the tree of a real router (read-only capture), used by the engine tests.
+
+captured: 2026-10-28
+router: mips, BusyBox v1.37.0 (awk is the BusyBox applet), jq-1.8.1, Python 3.13.9
+XKeen: 2.0 Stable (build 2026-06-06)
+Xray: 26.10.21
+nfqws2-keenetic: 1.3.2
+engine script on the router: script_version 3.2.0
+
+How the files were made. Secrets never left the router: everything was filtered there.
+- opt/etc/xray/configs: jq whitelist filters (tag, protocol and the sockopt mark of outbounds; tag, port,
+  settings flags and sniffing of inbounds; the rule keys type, ruleTag, inboundTag, outboundTag, network, protocol, port, domain, ip
+  of routing). Elements of domain and ip stay only as ext:, geosite: and geoip: references, all the others are
+  replaced by example.invalid and 192.0.2.1. 01_log, 02_dns and 06_policy are synthetic skeletons.
+- opt/etc/init.d/S05xkeen, opt/etc/ndm/netfilter.d/proxy.sh: the assignments the modes read (grep whitelist).
+- opt/etc/nfqws2/nfqws2.conf, opt/etc/xkeen/port_proxying.lst, opt/etc/xkeen/port_exclude.lst: as they are.
+  ISP_INTERFACE in nfqws2.conf is the provider interface of the router; the real-router scenario replaces it.
+- opt/etc/nfqws2/lists: synthetic entries, as many significant lines as on the router.
+- opt/etc/xray/dat: one-byte files with the names of the router.
+- opt/etc/xkeen/xkeen.json: {} (the router has no killswitch and no pbr_strict, and no token is set).
+- opt/etc/keenetic-discord-nfqws2/snapshots: the baseline and the latest pre-apply snapshot with a minimal STATE.tsv.
+  Pointers are not stored: scenarios write them under the current root.
+Files with CR, ANSI sequences and NBSP are not stored; the tests that need them build them.

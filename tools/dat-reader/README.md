@@ -51,12 +51,34 @@ python tools/dat-reader/dat_reader.py C:\path\to\*.dat --match cdn.discordapp.co
 Файл с роутера можно разобрать без сохранения локальной копии:
 
 ```powershell
-ssh root@192.168.1.1 "cat /opt/etc/xray/dat/geosite_refilter.dat" |
+ssh root@192.168.2.1 "cat /opt/etc/xray/dat/geosite_refilter.dat" |
   python tools/dat-reader/dat_reader.py -
 ```
 
 `geoip.dat` и `zkeenip.dat` распознаются отдельно. Для них reader выводит
 категории и число IP-сетей и явно отмечает, что доменных правил в базе нет.
+
+## Отчёт по актуальным базам роутера
+
+Скрипт `router_dat_report.py` использует этот же декодер: считает все категории,
+сверяет SHA-256 файлов и проверяет, что селекторы действующего `routing.json`
+существуют и стоят в правильном поле (`geosite` → `domain`, `geoip` → `ip`).
+Он не изменяет конфигурацию и проверяет переданный файловый снимок, а не
+живой Xray. Для решения работающего Xray используйте отдельную
+[проверку маршрута](../../docs/usage/route-checker.md).
+После копирования файлов с роутера:
+
+```powershell
+python tools/dat-reader/router_dat_report.py dat/router-snapshot `
+  --routing dat/router-snapshot/05_routing.json `
+  --output-dir dat/router-snapshot/analysis `
+  --alias geoip_zkeenip.dat=zkeenip.dat `
+  --alias geosite_zkeen.dat=zkeen.dat
+```
+
+Результат: `report.md` с краткой сводкой и полным перечнем категорий, а также
+`categories.json` для поиска и фильтрации. Папка `dat/` намеренно исключена
+из Git: снимки баз и пользовательского routing остаются локальными.
 
 ## Формат строк с доменами
 

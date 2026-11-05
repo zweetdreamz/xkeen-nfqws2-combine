@@ -1,0 +1,7 @@
+# XKeen port proxying list (migrated)
+80
+443
+596:599
+1400
+5222
+50000:50030

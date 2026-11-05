@@ -1,20 +1,20 @@
 #!/bin/sh
 set -eu
 
-# Downloads the two stock nfqws2 blobs that test-routing-modes.sh needs when
-# it runs outside a router (CI, a developer machine). The files come from a
+# Downloads the two stock nfqws2 blobs that the test-routing-modes-*.sh parts
+# need when they run outside a router (CI, a developer machine). The files come from a
 # pinned zapret2 commit and must match the SHA-256 values that
 # apply-discord-nfqws2.sh enforces, so a changed upstream file fails here
 # instead of silently weakening the test.
 #
 # Usage: sh tests/fetch-nfqws2-blobs.sh DEST_DIR
-# Then:  NFQWS_TEST_BLOB_SOURCE=DEST_DIR sh tests/test-routing-modes.sh
+# Then:  NFQWS_TEST_BLOB_SOURCE=DEST_DIR sh tests/test-routing-modes-routes.sh
 
 ZAPRET2_COMMIT="5786448c9378cc8aa00bfadd27cc36e49d53039c"
 BASE_URL="https://raw.githubusercontent.com/bol-van/zapret2/$ZAPRET2_COMMIT/files/fake"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-TARGET="$SCRIPT_DIR/apply-discord-nfqws2.sh"
+TARGET="$SCRIPT_DIR/tools/router/kdn/engine/config.py"
 
 [ "$#" -eq 1 ] || {
   echo "Usage: $0 DEST_DIR" >&2
@@ -24,7 +24,7 @@ dest="$1"
 mkdir -p "$dest"
 
 pinned_hash() {
-  sed -n "s/^$1=\"\\([0-9a-f]\\{64\\}\\)\"$/\\1/p" "$TARGET"
+  sed -n "s/^$1[[:space:]]*=[[:space:]]*\"\\([0-9a-f]\\{64\\}\\)\"$/\\1/p" "$TARGET"
 }
 
 fetch_blob() {

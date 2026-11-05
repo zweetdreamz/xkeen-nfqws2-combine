@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import concurrent.futures
 import contextlib
 import hashlib
 import importlib.util
@@ -53,6 +54,7 @@ import socket
 import ssl
 import struct
 import sys
+import threading
 import time
 import urllib.request
 from collections import deque
@@ -947,11 +949,32 @@ class Relay:
                 writer.close()
 
 
+def fetch_cf_domains_detached() -> asyncio.Future:
+    """fetch_cf_domains() in a daemon thread, awaitable.
+
+    The loop's executor is joined at shutdown, so a download stuck in DNS or
+    connect (GitHub blocked) would hold up the exit after SIGTERM for its whole
+    timeout; a daemon thread is simply left behind.
+    """
+    outcome: concurrent.futures.Future = concurrent.futures.Future()
+
+    def work() -> None:
+        if not outcome.set_running_or_notify_cancel():
+            return
+        try:
+            outcome.set_result(fetch_cf_domains())
+        except BaseException as error:  # noqa: BLE001 - handed to the awaiting task
+            outcome.set_exception(error)
+
+    threading.Thread(target=work, daemon=True).start()
+    return asyncio.wrap_future(outcome)
+
+
 async def refresh_cf_domains(relay: Relay, interval: float = CF_REFRESH_INTERVAL) -> None:
     """Keeps the default Cloudflare domains current, as tg-ws-proxy does."""
     while True:
         try:
-            domains = await asyncio.to_thread(fetch_cf_domains)
+            domains = await fetch_cf_domains_detached()
         except Exception as error:  # noqa: BLE001 - any failure keeps the old list
             log(f"Cloudflare domain list not refreshed: {describe(error)}")
         else:

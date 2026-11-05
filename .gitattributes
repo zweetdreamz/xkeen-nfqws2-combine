@@ -5,8 +5,20 @@
 *.py text eol=lf
 *.js text eol=lf
 *.cjs text eol=lf
+*.lua text eol=lf
+tests/docker/Dockerfile text eol=lf
+tests/docker/.dockerignore text eol=lf
+tools/dev/deploy-manifest.txt text eol=lf
 *.md text eol=lf
 *.json text eol=lf
+*.list text eol=lf
+*.lst text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.html text eol=lf
+.shellcheckrc text eol=lf
 *.bat text eol=crlf
 *.ps1 text eol=crlf
 *.bin -text
+tests/fixtures/engine/** -text

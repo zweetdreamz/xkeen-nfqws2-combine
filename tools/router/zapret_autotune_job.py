@@ -12,7 +12,6 @@ itself from the runner's runtime.state.
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import ipaddress
 import json
 import os
@@ -22,10 +21,10 @@ import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 from typing import Any
 
+from kdn.common import fsutil, proc, timeutil
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 WINDOWS_DIR = PROJECT_DIR / "tools" / "windows"
@@ -62,30 +61,11 @@ def root_path(logical: str) -> Path:
 
 
 def utc_now() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat()
+    return timeutil.utc_now_iso()
 
 
 def atomic_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        dir=path.parent,
-        text=True,
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+    fsutil.atomic_json(path, payload)
 
 
 def process_alive(pid: int) -> bool:
@@ -97,11 +77,7 @@ def process_alive(pid: int) -> bool:
 
 
 def read_pid(path: Path) -> int | None:
-    try:
-        raw = path.read_text(encoding="ascii").strip()
-    except (OSError, UnicodeError):
-        return None
-    return int(raw) if raw.isdigit() and int(raw) > 1 else None
+    return proc.read_job_pid(path)
 
 
 def acquire_project_lock() -> Path:
@@ -290,6 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--client-ip")
     parser.add_argument("--source-dir", type=Path)
     parser.add_argument("--source-file")
+    parser.add_argument("--baseline-only", action="store_true",
+                        help="check the live TCP profile twice without stopping nfqws2")
     parser.add_argument(
         "--voice-auto",
         action="store_true",
@@ -330,6 +308,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("choose one Voice check: voice-auto or voice-traffic")
     if args.source_dir and not TEST_ROOT:
         raise ValueError("source-dir is allowed only in an isolated test root")
+    if args.baseline_only and args.service == "discord-voice":
+        raise ValueError("baseline-only supports YouTube and Discord TCP only")
 
 
 def voice_endpoint_valid(ip: Any, port: Any, voice_range: str = "narrow") -> bool:
@@ -528,6 +508,16 @@ def parse_event(
         writer.write(raw_baseline=parts[2], network_discriminates={"pass": False, "fail": True}.get(parts[2]))
         if parts[2] in RAW_BASELINE_LOG:
             writer.log(RAW_BASELINE_LOG[parts[2]])
+    elif event == "BASELINE_ONLY" and len(parts) >= 3:
+        writer.write(baseline_only_result=parts[2])
+    elif event == "QUIC_BASELINE" and len(parts) >= 5:
+        writer.write(baseline_quic={"status": parts[2],
+                                     "replies": int(parts[3]) if parts[3].isdigit() else 0,
+                                     "total": int(parts[4]) if parts[4].isdigit() else 0})
+    elif event == "WS_RESULT" and len(parts) >= 8:
+        writer.write(last_ws_probe={"candidate": int(parts[2]), "phase": parts[3],
+                                    "round": int(parts[4]), "status": parts[5],
+                                    "seconds": parts[6], "reason": parts[7]})
     elif event == "QUIC" and len(parts) >= 7:
         quic = {"label": parts[2], "host": parts[3], "ip": parts[4], "status": parts[5],
                 "ms": int(parts[6]) if parts[6].isdigit() else None}
@@ -683,6 +673,16 @@ def nfqws_process(pid: int) -> bool:
     return b"nfqws2" in cmdline
 
 
+def install_nfqws_firewall(init: Path) -> bool:
+    """Run the init's firewall_iptables and firewall_ip6tables; True when both succeed."""
+    for command in ("firewall_iptables", "firewall_ip6tables"):
+        result = subprocess.run([str(init), command], stdin=subprocess.DEVNULL,
+                                capture_output=True, check=False, timeout=60)
+        if result.returncode != 0:
+            return False
+    return True
+
+
 def recover_runner_runtime(writer: StateWriter, runner_pid: int) -> None:
     """Undo what a dead runner left: its candidate nfqws2 and a stopped service.
 
@@ -711,27 +711,34 @@ def recover_runner_runtime(writer: StateWriter, runner_pid: int) -> None:
     if state.get("prepared") == "1":
         init = root_path(NFQWS_INIT_LOGICAL)
         restored = "stopped"
+        restore_error = "job-could-not-restart-nfqws2"
         try:
             subprocess.run([str(init), "firewall_stop"], stdin=subprocess.DEVNULL,
                            capture_output=True, check=False, timeout=60)
             root_path(NFQWS_PIDFILE_LOGICAL).unlink(missing_ok=True)
             if state.get("was_running") == "1":
-                subprocess.run([str(init), "start"], stdin=subprocess.DEVNULL,
-                               capture_output=True, check=False, timeout=60)
+                started = subprocess.run([str(init), "start"], stdin=subprocess.DEVNULL,
+                                         capture_output=True, check=False, timeout=60)
                 restored = "running"
+                # The 1.3.2 "start" waits 5 s for the pidfile and, when it is
+                # late, returns 1 before the firewall rules: the daemon is up
+                # without them. The loop waits for that daemon.
                 for _ in range(15):
                     if root_path(NFQWS_PIDFILE_LOGICAL).exists():
                         break
                     time.sleep(1)
                 else:
                     restored = ""
+                if restored and started.returncode != 0 and not install_nfqws_firewall(init):
+                    restored = ""
+                    restore_error = "job-nfqws2-firewall-missing"
         except (OSError, subprocess.SubprocessError):
             restored = ""
         if restored:
             writer.write(nfqws_restored=restored, restored_by="job")
             writer.log("nfqws2 восстановлен заданием после принудительной остановки проверки.")
         else:
-            writer.write(restore_error="job-could-not-restart-nfqws2")
+            writer.write(restore_error=restore_error)
     shutil.rmtree(runtime_dir, ignore_errors=True)
 
 
@@ -759,6 +766,12 @@ def stop_and_drain_runner(
 
 def main() -> int:
     args = build_parser().parse_args()
+    from kdn.common import xkeen
+    try:
+        xkeen.require()
+    except xkeen.UnsupportedXKeen:
+        print('EVENT|FATAL|' + xkeen.ERROR_CODE)
+        return 2
     args.search_seed = tuner.resolve_search_seed(args.search_seed)
     job_dir = root_path(JOB_LOGICAL)
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -817,6 +830,44 @@ def main() -> int:
                     "кандидаты используют встроенный QUIC-профиль проекта."
                 )
 
+        if args.baseline_only:
+            runner = tuner.render_runner(
+                RUNNER_TEMPLATE.read_text(encoding="utf-8"),
+                service=args.service, candidates=[], client_ip="127.0.0.1",
+                voice_duration=args.voice_duration, http_timeout=args.http_timeout,
+            )
+            runner_path = job_dir / "runner.sh"
+            runner_path.write_text(runner, encoding="utf-8")
+            os.chmod(runner_path, 0o700)
+            environment = os.environ.copy()
+            environment["KD_TUNER_LOCK_HELD"] = str(os.getpid())
+            environment["KD_TUNER_BASELINE_ONLY"] = "1"
+            writer.write(status="running", started_utc=utc_now(), candidate_count=0)
+            runner_process = subprocess.Popen(
+                ["/bin/sh", str(runner_path)], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                encoding="utf-8", errors="replace", bufsize=1, env=environment,
+            )
+            writer.write(runner_pid=runner_process.pid)
+            assert runner_process.stdout is not None
+            for raw_line in runner_process.stdout:
+                line = raw_line.rstrip("\r\n")
+                writer.log(line)
+                parse_event(writer, line, [])
+            code = runner_process.wait(timeout=40)
+            if code != 0 or writer.payload.get("baseline_only_result") not in {"pass", "fail", "unstable"}:
+                raise RuntimeError(f"live baseline runner failed (exit={code})")
+            xkeen_after = core_pids()
+            if xkeen_after != xkeen_before:
+                raise RuntimeError("XKeen core PID changed during live baseline check")
+            verdict = writer.payload["baseline_only_result"]
+            writer.write(
+                status={"pass": "healthy", "fail": "unhealthy", "unstable": "unstable"}[verdict],
+                finished_utc=utc_now(), xkeen_pids_after=xkeen_after,
+                needs_voice_verdict=False,
+            )
+            return 0
+
         if args.source_dir:
             sources, commit = tuner.load_local_sources(args.source_dir)
             writer.write(source_origin="fixture")
@@ -834,6 +885,7 @@ def main() -> int:
                 sources = tuner.select_source(sources, args.source_file)
             except ValueError as error:
                 raise RuntimeError(str(error)) from error
+        translation_rejections: list[dict] = []
         available = tuner.build_candidates(
             args.service,
             sources,
@@ -841,7 +893,11 @@ def main() -> int:
             include_builtin=not args.source_file,
             youtube_quic=youtube_quic,
             voice_range=udp_range,
+            translation_rejections=translation_rejections,
         )
+        for rejected in translation_rejections:
+            writer.log(f"Пропущен {rejected['source']} / профиль {rejected['profile']}: "
+                       + ", ".join(rejected["reasons"]))
         candidates = tuner.select_candidates(available, args.max_candidates, args.search_seed)
         writer.log(available_log_line(len(available), args.max_candidates, args.mix_level))
         if not candidates and args.source_file:

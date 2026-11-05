@@ -1,0 +1,9 @@
+{
+  "clash_api": {
+    "hide_unavailable_proxies": true
+  },
+  "gui": {
+    "log": true,
+    "routing": true
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "inbounds": [
+    {
+      "tag": "tor-socks-in",
+      "protocol": "socks",
+      "listen": "127.0.0.1",
+      "port": 10808
+    }
+  ]
+}

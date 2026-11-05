@@ -2,13 +2,15 @@
 # Shared nfqws2 fixture for the engine tests (sourced, not run).
 #
 # engine_write_stock_nfqws2_conf FILE IFACE IPV6
-#     The stock /opt/etc/nfqws2/nfqws2.conf of nfqws2-keenetic 1.3.1, with the
+#     The stock /opt/etc/nfqws2/nfqws2.conf of nfqws2-keenetic 1.3.2, with the
 #     given ISP_INTERFACE and IPV6_ENABLED.
 # engine_write_nfqws2_init FILE
-#     A fixture /opt/etc/init.d/S51nfqws2 that behaves like the 1.3.1 init: it
+#     A fixture /opt/etc/init.d/S51nfqws2 that behaves like the 1.3.2 init: it
 #     composes the arguments with the package _startup_args, starts the
-#     fixture binary, writes the iptables rules the real init would create and
-#     refuses to start twice.
+#     fixture binary, waits for its pidfile, writes the iptables rules the
+#     real init would create and refuses to start twice. Like the 1.3.2 init,
+#     start returns 1 and installs no rules when the daemon fails or its
+#     pidfile does not appear.
 # engine_write_fake_nfqws2 FILE
 #     A fixture /opt/usr/bin/nfqws2.
 # engine_write_iptables_mocks MOCK_BIN
@@ -16,7 +18,7 @@
 #
 # nfqws2-keenetic (https://github.com/nfqws/nfqws2-keenetic) is MIT licensed,
 # Copyright (c) 2026 nfqws. The stock config and _startup_args below are
-# copied from its v1.3.1 tag.
+# copied from its v1.3.2 tag.
 
 engine_write_stock_nfqws2_conf() {
   cat > "$1" <<'EOF'
@@ -64,7 +66,7 @@ NFQWS_ARGS_UDP="--filter-udp=590-600,1400,3478-3481,5349,19294-19344,49152-65535
                 --payload=wireguard_initiation,wireguard_response,wireguard_cookie,stun,discord_ip_discovery,mtproto_initial,unknown
                 --lua-desync=circular:fails=2:time=300:retrans=3:nld=2
                 # Strategy 1
-                --lua-desync=fake:repeats=6:strategy=1
+                --lua-desync=fake:blob=0x00000000:repeats=6:strategy=1
                 # Strategy 2
                 --lua-desync=fake:blob=quic_initial:repeats=6:strategy=2"
 
@@ -112,13 +114,16 @@ EOF
 engine_write_nfqws2_init() {
   cat > "$1" <<'EOF'
 #!/bin/sh
-# Fixture /opt/etc/init.d/S51nfqws2 modeled on nfqws2-keenetic 1.3.1
+# Fixture /opt/etc/init.d/S51nfqws2 modeled on nfqws2-keenetic 1.3.2
 # (MIT License, Copyright (c) 2026 nfqws); _startup_args is unchanged.
 # Knob files in $KD_TEST_ROOT:
 #   nfqws-init.keep-old     restart does nothing (the old daemon keeps running)
 #   nfqws-init.stale-rules  start keeps the firewall rules of the previous start
 #   nfqws-init.fail-start   start fails
 #   nfqws-init.wrong-args   start runs the daemon without the config's profiles
+#   nfqws-start-fail        a counter N > 0: the next N starts fail at once,
+#                           without a daemon or rules
+# KD_FIXTURE_PIDFILE_WAIT: seconds start waits for the pidfile (default 5).
 NFQWS_BIN="$KD_TEST_ROOT/opt/usr/bin/nfqws2"
 CONFFILE="$KD_TEST_ROOT/opt/etc/nfqws2/nfqws2.conf"
 PIDFILE="$KD_TEST_ROOT/opt/var/run/nfqws2.pid"
@@ -211,6 +216,13 @@ start() {
     echo 'fixture: start fails' >&2
     return 1
   fi
+  start_fail_left=$(cat "$KD_TEST_ROOT/nfqws-start-fail" 2>/dev/null || true)
+  case "$start_fail_left" in ''|*[!0-9]*) start_fail_left=0 ;; esac
+  if [ "$start_fail_left" -gt 0 ]; then
+    echo $((start_fail_left - 1)) > "$KD_TEST_ROOT/nfqws-start-fail"
+    echo 'fixture: start fails (nfqws-start-fail)' >&2
+    return 1
+  fi
   if is_running; then
     echo 'Service NFQWS2 is already running' >&2
     return 1
@@ -220,6 +232,16 @@ start() {
   else
     # shellcheck disable=SC2046
     "$NFQWS_BIN" --daemon --pidfile="$PIDFILE" $(_startup_args) || return 1
+  fi
+  # The parent can exit before the child writes its pidfile.
+  pidfile_wait="${KD_FIXTURE_PIDFILE_WAIT:-5}"
+  while ! is_running && [ "$pidfile_wait" -gt 0 ]; do
+    sleep 1
+    pidfile_wait=$((pidfile_wait - 1))
+  done
+  if ! is_running; then
+    echo 'NFQWS2 daemon did not start, firewall rules not installed' >&2
+    return 1
   fi
   if [ ! -f "$KD_TEST_ROOT/nfqws-init.stale-rules" ] || [ ! -f "$RULES4" ]; then
     write_rules > "$RULES4"
