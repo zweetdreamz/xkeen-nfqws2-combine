@@ -9,6 +9,19 @@ from kdn.engine import config, snapshot_store as store
 
 
 class SnapshotStoreTests(unittest.TestCase):
+    def test_full_pointer_directory_sync_error_is_not_ignored(self):
+        import os
+        import stat
+        snapshot = self.capture()
+        real_fsync = os.fsync
+        def fail_directory(descriptor):
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError('injected pointer directory sync failure')
+            return real_fsync(descriptor)
+        with mock.patch.object(os, 'fsync', side_effect=fail_directory):
+            with self.assertRaisesRegex(OSError, 'pointer directory sync'):
+                store.publish_pointer(self.paths, self.paths.latest_pointer, snapshot)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

@@ -143,14 +143,18 @@ def private_json(path: Path, limit: int = MAX_STORE_BYTES) -> dict:
     return value
 
 
+def _json_bytes(value: dict) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
 def atomic_json(path: Path, value: dict, mode: int = 0o600) -> None:
+    payload = _json_bytes(value)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, filename = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(filename)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
         os.chmod(temporary, mode)
@@ -467,6 +471,14 @@ class VpnNodeManager:
             result['warning'] = 'Изменение сохранено, но очистка старых VPN-бэкапов не удалась; проверьте место и права'
         return result
 
+    def _check_store_size(self, state):
+        if len(_json_bytes(state)) > MAX_STORE_BYTES:
+            raise ValueError('реестр VPN превышает допустимый размер')
+
+    def _save_state(self, state):
+        self._check_store_size(state)
+        atomic_json(self.state_file, state)
+
     @store_mutation
     def add(self, name: str, source: str) -> dict:
         name = display_name(name)
@@ -482,7 +494,7 @@ class VpnNodeManager:
         health = self.probe(outbound)
         state["nodes"][key] = {"name": name, "outbound": outbound,
                                 "created_utc": utc_now(), "health": health}
-        atomic_json(self.state_file, state)
+        self._save_state(state)
         return {"ok": True, "node": self._public_node(key, state["nodes"][key], state["active"])}
 
     def update(self, node_id: str, *, name=None, source=None) -> dict:
@@ -516,15 +528,14 @@ class VpnNodeManager:
                 return {'ok': True, 'node': self._public_node(node_id, old, state['active'])}
             new['updated_utc'] = utc_now()
             state['nodes'][node_id] = new
-            if len(json.dumps(state, ensure_ascii=False).encode('utf-8')) > MAX_STORE_BYTES:
-                raise ValueError('реестр VPN превышает допустимый размер')
+            self._check_store_size(state)
             versions = self.state_file.parent / 'vpn-node-versions'
             if versions.is_symlink():
                 raise ValueError('небезопасный каталог версий нод')
             versions.mkdir(parents=True, exist_ok=True, mode=0o700)
             os.chmod(versions, 0o700)
             atomic_json(versions / (str(time.time_ns()) + '-' + node_id + '-' + secrets.token_hex(4) + '.json'), old)
-            atomic_json(self.state_file, state)
+            self._save_state(state)
             return self._after_commit({'ok': True, 'node': self._public_node(node_id, new, state['active'])})
 
     def rename(self, node_id: str, name: str) -> dict:
@@ -537,7 +548,7 @@ class VpnNodeManager:
             raise ValueError("нода не найдена")
         health = self.probe(state["nodes"][name]["outbound"])
         state["nodes"][name]["health"] = health
-        atomic_json(self.state_file, state)
+        self._save_state(state)
         return {"ok": True, "health": health}
 
     @store_mutation
@@ -547,13 +558,14 @@ class VpnNodeManager:
             raise ValueError("нода не найдена")
         if name == state["active"]:
             raise ValueError("активную VPN-ноду удалять нельзя")
+        removed = state['nodes'].pop(name)
+        self._check_store_size(state)
         trash = self.state_file.parent / "vpn-node-trash"
         trash.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(trash, 0o700)
         atomic_json(trash / f"{int(time.time())}-{name}-{secrets.token_hex(4)}.json",
-                    state["nodes"][name])
-        del state["nodes"][name]
-        atomic_json(self.state_file, state)
+                    removed)
+        self._save_state(state)
         return {"ok": True}
 
     def _probe_config(self, outbound: dict, port: int) -> dict:
@@ -717,8 +729,11 @@ class VpnNodeManager:
         health = self.probe(state["nodes"][name]["outbound"])
         if not health["ok"]:
             state["nodes"][name]["health"] = health
-            atomic_json(self.state_file, state)
+            self._save_state(state)
             raise ValueError("нода не прошла проверку; действующий VPN не изменён")
+        state["active"] = name
+        state["nodes"][name]["health"] = health
+        self._check_store_size(state)
         document, _ = self._current_file()
         updated = copy.deepcopy(document)
         updated["outbounds"] = [normalize_outbound(state["nodes"][name]["outbound"])
@@ -751,9 +766,7 @@ class VpnNodeManager:
             stage('xray')
             self._restart_xkeen(self._xray_pids())
             stage('verify')
-            state["active"] = name
-            state["nodes"][name]["health"] = health
-            atomic_json(self.state_file, state)
+            self._save_state(state)
             self.transaction_file.unlink()
         except BaseException as exc:
             try:
@@ -841,7 +854,7 @@ class VpnNodeManager:
             raise ValueError("активная нода отсутствует в реестре")
         state["nodes"][active]["outbound"] = normalize_outbound(current)
         state["nodes"][active]["health"] = None
-        atomic_json(self.state_file, state)
+        self._save_state(state)
         return {"ok": True}
 
 

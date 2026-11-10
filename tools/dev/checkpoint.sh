@@ -9,7 +9,7 @@ set -eu
 #
 # save     packs the tree into .cache/checkpoints/<UTC stamp>-<label>.tar.gz
 #          and prints that path. Left out: .cache/, tests/.generated/,
-#          local backups/dat, credentials, raw network captures, __pycache__/, .idea/, node_modules/ and
+#          local backups/dat, private-router, credentials, raw network captures, __pycache__/, .idea/, node_modules/ and
 #          .DS_Store files.
 # list     prints the saved archives, oldest first.
 # restore  unpacks an archive into DIR (default .cache/restore-<stamp>/), which
@@ -58,6 +58,7 @@ cmd_save() {
     --exclude=tests/.generated \
     --exclude='./backups' \
     --exclude='./dat' \
+    --exclude=private-router \
     --exclude='./tools/windows/reports' \
     --exclude=.git \
     --exclude=.pwd \

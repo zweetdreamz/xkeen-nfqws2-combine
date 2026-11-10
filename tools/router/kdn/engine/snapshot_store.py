@@ -359,6 +359,9 @@ def create(paths, *, purpose, scope='integrated', xkeen_version='', metadata=(),
     managed_roots(scope)
     planned = capture_plan(paths, scope, focused=focused)
     store = _store(paths, focused)
+    sync_ancestor = store.parent.parent
+    while not sync_ancestor.exists():
+        sync_ancestor = sync_ancestor.parent
     store.mkdir(parents=True, exist_ok=True)
     os.chmod(Path(paths.state_root), 0o700)
     os.chmod(store, 0o700)
@@ -414,20 +417,19 @@ def create(paths, *, purpose, scope='integrated', xkeen_version='', metadata=(),
                 rows.append((digest + '  ./' + relative + '\n').encode('utf-8', 'surrogateescape'))
         _atomic_bytes(stage / 'CHECKSUMS.sha256', b''.join(rows))
         verify(stage, focused=focused)
-        if focused:
-            # Snapshot data/modes and all directory entries precede the durable cue.
-            for relative, _info in reversed(content):
-                fsutil.fsync_path(data_dir / relative)
-            if data_dir.exists():
-                fsutil.fsync_path(data_dir)
-            for name in ('STATE.tsv', 'CHECKSUMS.sha256', *auxiliary):
-                fsutil.fsync_path(stage / name)
-            fsutil.fsync_path(stage)
+        # Snapshot data/modes and all directory entries precede the durable cue.
+        for relative, _info in reversed(content):
+            fsutil.fsync_path(data_dir / relative)
+        if data_dir.exists():
+            fsutil.fsync_path(data_dir)
+        for name in ('STATE.tsv', 'CHECKSUMS.sha256', *auxiliary, *(() if focused else ('MANIFEST',))):
+            fsutil.fsync_path(stage / name)
+        fsutil.fsync_path(stage)
         os.rename(stage, final)
-        if focused:
-            fsutil.fsync_path(store)
-            fsutil.fsync_path(store.parent)
-            fsutil.fsync_path(store.parent.parent)
+        for parent in (store, *store.parents):
+            fsutil.fsync_path(parent)
+            if parent == sync_ancestor:
+                break
         return final
     except BaseException:
         # Stage is our own unpublished directory; cleanup never follows links.
@@ -460,9 +462,8 @@ def publish_pointer(paths, pointer, snapshot, *, baseline=False, focused=False, 
     if baseline and pointer.exists():
         return False
     fsutil.atomic_text(pointer, str(snapshot) + '\n')
-    if focused:
-        fsutil.fsync_path(pointer)
-        fsutil.fsync_path(pointer.parent)
+    fsutil.fsync_path(pointer)
+    fsutil.fsync_path(pointer.parent)
     return True
 
 

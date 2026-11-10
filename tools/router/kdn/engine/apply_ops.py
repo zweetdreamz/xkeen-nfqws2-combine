@@ -92,20 +92,20 @@ def operation(tx):
     previous_import = snapshot_store._read(imported_pointer, 4096) if imported_pointer.exists() else None
 
     def undo():
-        try:
-            relay_restore.restore_init(ctx, relay)
-            rollback_ops.restore(ctx, rescue, reconcile_relay=False)
-            relay_restore.restore_saved(ctx, relay)
-        finally:
-            for pointer, old in ((latest, previous_latest), (imported_pointer, previous_import)):
-                if old is None:
-                    pointer.unlink(missing_ok=True)
-                else:
-                    fsutil.atomic_bytes(pointer, old)
+        relay_restore.restore_init(ctx, relay)
+        rollback_ops.restore(ctx, rescue, reconcile_relay=False)
+        relay_restore.restore_saved(ctx, relay)
+        # A partial rescue still needs the fresh durable recovery cue.
+        for pointer, old in ((latest, previous_latest), (imported_pointer, previous_import)):
+            if old is None:
+                pointer.unlink(missing_ok=True)
+            else:
+                fsutil.atomic_bytes(pointer, old)
 
-    tx.arm(undo)
     # Publish the durable recovery cue before the first config/package mutation.
+    # A failed publication must not trigger working-state restore or services.
     snapshot_store.publish_pointer(ctx.paths, latest, rescue, allow_live=True)
+    tx.arm(undo)
     tx.stage('config')
     apply_files.publish(tx, plan, rescue)
     apply_dependencies.install_packages(tx, packages)

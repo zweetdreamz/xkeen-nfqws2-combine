@@ -9,6 +9,26 @@ from test_engine_apply_files import ApplyFilesFixture
 
 
 class ApplyDependenciesTests(ApplyFilesFixture, unittest.TestCase):
+    def test_package_actions_reach_real_bounded_runner_and_empty_plan_is_noop(self):
+        import shlex
+        self.feed()
+        trace = self.root / 'package-actions'
+        executable = self.root / 'fake-bin/opkg'
+        executable.parent.mkdir()
+        executable.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> ' + shlex.quote(str(trace)) + '\n')
+        executable.chmod(0o700)
+        self.env['PATH'] = str(executable.parent) + ':' + self.env['PATH']
+        for actions, installed, expected in (
+                ((), '', []),
+                ((('install', 'ca-certificates'),), '1', ['update', 'install ca-certificates']),
+                ((('remove', 'wget-nossl'),), '', ['remove wget-nossl'])):
+            with self.subTest(actions=actions):
+                trace.unlink(missing_ok=True)
+                with lock.ProjectLock(self.paths.lock_dir), \
+                        mock.patch.object(dep.rollback_ops, 'package_version', return_value=installed):
+                    dep.install_packages(self.tx(), actions)
+                self.assertEqual(trace.read_text().splitlines() if trace.exists() else [], expected)
+
     def test_dependency_port_matrix(self):
         before = b'# user\n1234\n\n'
         for route in ('unmanaged', 'direct', 'vless', 'ws'):

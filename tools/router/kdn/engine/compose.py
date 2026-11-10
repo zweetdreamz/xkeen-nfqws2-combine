@@ -126,7 +126,7 @@ def _user_view(text):
     return '\n'.join(selected) + ('\n' if selected else '')
 
 
-def compose(conf_path, paths, environ, timeout, *, processed_mark=None):
+def compose(conf_path, paths, environ, timeout, *, processed_mark=None, custom_ports=False):
     """Return startup tokens and first-word META; no host environment except PATH is inherited."""
     import shutil
     import tempfile
@@ -146,6 +146,19 @@ def compose(conf_path, paths, environ, timeout, *, processed_mark=None):
             with open(path, 'wb') as handle:
                 handle.write(text.encode('utf-8', 'surrogateescape'))
         script = SOURCE_SCRIPT
+        if custom_ports:
+            # Reuse the already sourced user-only view; never source config again.
+            script = script.replace('    . "$1" >/dev/null 2>&1', r'''
+    custom_tcp= custom_udp=
+    for custom_token in $user_custom; do
+      case "$custom_token" in
+        --filter-tcp=*) custom_tcp="$custom_tcp,${custom_token#*=}" ;;
+        --filter-udp=*) custom_udp="$custom_udp,${custom_token#*=}" ;;
+      esac
+    done
+    printf "META CUSTOM_FILTER_TCP %s\n" "${custom_tcp#,}"
+    printf "META CUSTOM_FILTER_UDP %s\n" "${custom_udp#,}"
+    . "$1" >/dev/null 2>&1''')
         extra = []
         if processed_mark is not None:
             # Opt-in metadata for the mark preflight; keep the established

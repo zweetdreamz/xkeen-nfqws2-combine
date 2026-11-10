@@ -21,7 +21,7 @@ PROJECT="$FIXTURE/project"
 mkdir -p "$PROJECT/tools/dev" "$PROJECT/docs" "$PROJECT/backups" \
   "$PROJECT/tests/.generated" "$PROJECT/tools/router/__pycache__" \
   "$PROJECT/.cache/old" "$PROJECT/.idea" "$PROJECT/node_modules/pkg" \
-  "$PROJECT/tests/node_modules/pkg"
+  "$PROJECT/tests/node_modules/pkg" "$PROJECT/private-router/nested/deep"
 cp "$TARGET" "$PROJECT/tools/dev/checkpoint.sh"
 cp "$SCRIPT_DIR/README.md" "$PROJECT/README.md"
 echo "kept" > "$PROJECT/docs/note.md"
@@ -40,7 +40,8 @@ echo "skipped" > "$PROJECT/tools/router/.DS_Store"
 echo "kept" > "$PROJECT/docs/.DS_Store.md"
 mkdir -p "$PROJECT/raw-captures" "$PROJECT/docs/raw_captures" "$PROJECT/captures/raw" \
   "$PROJECT/dat" "$PROJECT/.git" "$PROJECT/tools/windows/reports"
-for private in .env .env.router docs/.pwd docs/router.key docs/router.pem docs/trace.pcap \
+for private in private-router/settings.json private-router/nested/deep/state.txt \
+  .env .env.router docs/.pwd docs/router.key docs/router.pem docs/trace.pcap \
   docs/trace.pcapng docs/session.har docs/token.dpapi raw-captures/router.json \
   docs/raw_captures/router.txt captures/raw/config.json dat/router.dat \
   backups/plaintext.json .git/config tools/windows/reports/router.json \
@@ -69,7 +70,8 @@ if printf '%s\n' "$listing" | grep -Eq '(^|/)(\.pwd|\.cache|\.idea|node_modules|
   fail "archive contains excluded paths:
 $(printf '%s\n' "$listing" | grep -E '(^|/)(\.pwd|\.cache|\.idea|node_modules|__pycache__|\.generated|\.DS_Store)(/|$)|\.dpapi$')"
 fi
-for private in .env .env.router docs/.pwd docs/router.key docs/router.pem docs/trace.pcap \
+for private in private-router/settings.json private-router/nested/deep/state.txt \
+  .env .env.router docs/.pwd docs/router.key docs/router.pem docs/trace.pcap \
   docs/trace.pcapng docs/session.har docs/token.dpapi raw-captures/router.json \
   docs/raw_captures/router.txt captures/raw/config.json dat/router.dat backups/README.md \
   backups/plaintext.json .git/config tools/windows/reports/router.json \
@@ -97,6 +99,7 @@ if cmp -s "$SCRIPT_DIR/README.md" "$PROJECT/README.md"; then
   fail "restore overwrote the working tree README.md"
 fi
 [ ! -e "$FIXTURE/out/.pwd" ] || fail "restored tree contains .pwd"
+[ ! -e "$FIXTURE/out/private-router" ] || fail "restored tree contains private-router"
 
 # Without DIR it restores into .cache/restore-<stamp>/.
 checkpoint restore "$archive" > /dev/null || fail "restore without DIR failed"

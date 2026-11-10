@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from kdn.common import fsutil
-from kdn.engine import apply_files, config, import_ops, nfqws_render, nfqws_validate, snapshot_store
+from kdn.engine import apply_files, compose, config, import_ops, nfqws_render, nfqws_validate, snapshot_store
 
 
 Prepared = namedtuple('Prepared', 'rendered changes')
@@ -38,6 +38,8 @@ def _verified(path, expected):
 
 def prepare(ctx, *, routes, wan, ipv6, proxy_outbound):
     raw = snapshot_store._read(ctx.paths.nfqws_conf, 1024 * 1024)
+    composition = compose.compose(ctx.paths.nfqws_conf, ctx.paths, ctx.environ,
+                                  config.timeout('compose', ctx.environ), custom_ports=True)
     imports = {}
     for service in ('discord-tcp', 'discord-voice', 'youtube'):
         path = Path(ctx.paths.nfqws_conf).parent / 'imported-profiles' / (service + '.json')
@@ -46,7 +48,8 @@ def prepare(ctx, *, routes, wan, ipv6, proxy_outbound):
             imports[service] = import_ops._profile(path, high)
     rendered = nfqws_render.render(nfqws_render.RenderInput(raw, routes,
         udp_strategy=ctx.resolved.udp_strategy, wide_udp=ctx.resolved.wide_udp,
-        wan_interfaces=wan, ipv6_enabled=ipv6, proxy_outbound=proxy_outbound, imported_profiles=imports))
+        wan_interfaces=wan, ipv6_enabled=ipv6, proxy_outbound=proxy_outbound, imported_profiles=imports,
+        custom_ports=(composition.meta['CUSTOM_FILTER_TCP'], composition.meta['CUSTOM_FILTER_UDP'])))
     directory = Path(ctx.paths.nfqws_conf).parent
     data = {'nfqws2.conf': rendered.config,
             'lists/user.list': _hostlist(ctx, 'discord') if routes[0] == 'zapret' else (config.NFQWS_DISABLED_HOST + '\n').encode(),

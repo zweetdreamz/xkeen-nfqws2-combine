@@ -206,6 +206,7 @@ make_router() {
     "$r/opt/etc/xkeen-web-backups" "$r/opt/tmp" "$r/opt/xkeen-web" \
     "$proj/scripts" "$proj/tools/router" "$proj/tools/windows" "$proj/config/blobs" \
     "$m/panel" "$m/pids"
+  : > "$r/opt/tmp/kdn-software.lock"
   cp "$MOCKS/curl" "$MOCKS/pidof" "$r/opt/bin/"
   printf '#!/bin/sh\n[ "$1" = -v ] || exit 97\ncat "$MOCK_DIR/xkeen-version" 2>/dev/null || echo "XKeen 2.1.1 Stable"\n' > "$r/opt/bin/xkeen"
   chmod 755 "$r/opt/bin/xkeen"
@@ -434,7 +435,7 @@ expect_content "$backup/PROJECT_DIR" "/$PROJECT_REL" "(a) the backup records the
 
 # Only the two newest staging directories remain.
 ls "$CASE/router/opt/tmp" > "$CASE/tmp.list"
-expect_count "$CASE/tmp.list" 3 "(a) staging cleanup"
+expect_count "$CASE/tmp.list" 4 "(a) staging cleanup (two stages, unrelated dir, permanent lock)"
 grep -Fxq unrelated "$CASE/tmp.list" || fail "(a) cleanup removed an unrelated directory"
 grep -Fxq kdn-deploy-20200103T000000Z "$CASE/tmp.list" || fail "(a) cleanup removed the second newest stage"
 
@@ -518,7 +519,8 @@ expect_out "panel did not become ready" "(c)"
 expect_router_unchanged "(c) the previous files, the panel and the new-file directories are restored"
 expect_content "$CASE/mock/init.log" "stop
 start
-restart" "(c) deploy stop and start, rollback restart"
+stop
+restart" "(c) deploy stop and start, rollback stop then restart"
 grep -Fx "GET /api/vpn-nodes" "$CASE/mock/curl.log" > "$CASE/probes.log"
 expect_count "$CASE/probes.log" 15 "(c) readiness attempts"
 # The panel started by the deploy and by the rollback gets default signal
@@ -572,7 +574,8 @@ expect_out "panel start failed" "(c3)"
 expect_router_unchanged "(c3) restored after a failed start"
 expect_content "$CASE/mock/init.log" "stop
 start
-restart" "(c3) deploy stop and start, rollback restart"
+stop
+restart" "(c3) deploy stop and start, rollback stop then restart"
 
 # (c4) a project file that is a directory: refused before anything changes.
 new_case c4
@@ -614,7 +617,8 @@ grep -Fx "GET /api/vpn-nodes" "$CASE/mock/curl.log" > "$CASE/probes.log"
 expect_count "$CASE/probes.log" 15 "(c5) readiness attempts"
 expect_content "$CASE/mock/init.log" "stop
 start
-restart" "(c5) deploy stop and start, rollback restart"
+stop
+restart" "(c5) deploy stop and start, rollback stop then restart"
 grep -Fq "panel did not become ready" "$stage/deploy.log" || fail "(c5) the outcome is not in $stage/deploy.log"
 grep -Fq "restored the previous files" "$stage/deploy.log" || fail "(c5) the rollback is not in $stage/deploy.log"
 
@@ -693,8 +697,7 @@ run_deploy
 expect_rc 1 "(k2) deploy"
 expect_out "panel stop failed" "(k2)"
 expect_router_unchanged "(k2) restored after a failed stop"
-expect_content "$CASE/mock/init.log" "stop
-restart" "(k2) the rollback brings the panel back"
+expect_content "$CASE/mock/init.log" "stop" "(k2) failed stop refuses without a restore/restart"
 
 # ---------------------------------------------------------------- (l) a job outlives the stopped panel
 # A job process that is alive after the stop (its pid file names it) stops the
@@ -753,7 +756,8 @@ expect_rc 1 "(m) deploy"
 expect_out "panel did not become ready" "(m)"
 expect_content "$CASE/mock/init.log" "stop
 start
-restart" "(m) deploy stop and start, rollback restart"
+stop
+restart" "(m) deploy stop and start, rollback stop then restart"
 [ ! -e "$router_project/extras" ] || fail "(m) the new directory (with its __pycache__) is still there"
 expect_router_unchanged "(m) the new directories are gone, the rest is as before"
 expect_content "$router_project/tools/router/__pycache__/x.pyc" pyc "(m) an existing directory keeps its __pycache__"
@@ -985,7 +989,7 @@ rm -rf "$CASE/project"
 mkdir -p "$CASE/project"
 (
   cd "$SCRIPT_DIR"
-  tar -cf - --exclude=__pycache__ .gitattributes ./*.sh scripts config tools
+  tar -cf - --exclude=__pycache__ .gitattributes LICENSE THIRD_PARTY_NOTICES.md ./*.sh scripts config tools
 ) | (cd "$CASE/project" && tar -xf -)
 remember_router
 run_deploy --dry-run

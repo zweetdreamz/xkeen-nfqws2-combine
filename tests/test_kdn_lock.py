@@ -3,9 +3,8 @@
 The module is imported directly and patched only with mock.patch.object on
 the module object. Every lock lives in a TemporaryDirectory; nothing touches
 /opt. The last classes run the lock of the other users (autotune job, VPN node
-manager) in child processes: they are still the old mkdir + pid-file code and
-must keep working against a lock written by the new one, and the new one
-against theirs.
+manager) in child processes: every user must keep working against the shared
+mkdir + pid-file protocol.
 """
 
 from __future__ import annotations
@@ -471,19 +470,26 @@ class TakeoverRaceTests(LockTestCase):
         self.assertEqual(self.pid_file.read_text(encoding="ascii"), f"{os.getpid()}\n")
         self.assertEqual(os.listdir(self.path), ["pid"])
 
-    def test_fresh_acquirer_that_wins_the_mkdir_after_the_removal_keeps_the_lock(self):
-        # C removed the stale directory; before C makes its own, a fresh acquirer makes one and publishes.
+    def test_fresh_publisher_cannot_interleave_with_stale_takeover(self):
+        # A fresh mkdir may win the gap after removal, but it cannot publish
+        # while the stale taker still holds the publication/takeover mutex.
         self.make_lock_dir(f"{self.dead_pid()}\n")
-        winner = lock.ProjectLock(self.path, pid_wait=0)
+        contender = lock.ProjectLock(self.path, pid_wait=0)
         taker = lock.ProjectLock(self.path, pid_wait=0)
-        self.hook(taker, "_create", winner.acquire, nth=2)
-        with self.assertRaises(lock.LockBusy) as caught:
+
+        def contender_arrives():
+            with self.assertRaises(lock.LockBusy):
+                contender.acquire()
+            self.assertFalse(contender.held)
+
+        self.hook(taker, "_create", contender_arrives, nth=2)
+        with mock.patch.object(lock, "_MIN_MUTEX_WAIT", 0.01):
             taker.acquire()
-        self.assertEqual(caught.exception.pid, os.getpid())
-        self.assertTrue(winner.held)
-        self.assertFalse(taker.held)
+        self.assertTrue(taker.held)
+        self.assertFalse(contender.held)
+        self.assertEqual(self.pid_file.read_text(encoding="ascii"), f"{os.getpid()}\n")
         self.assertEqual(os.listdir(self.path), ["pid"])
-        winner.release()
+        taker.release()
         self.assertFalse(self.path.exists())
 
     def open_fails_once_in_a_removed_directory(self, number, recreated):
@@ -693,10 +699,10 @@ class TakeoverMutexTests(LockTestCase):
             os.close(descriptor)
         return True
 
-    def test_fresh_acquire_does_not_need_the_mutex(self):
+    def test_fresh_publication_releases_mutex_before_entering_critical_section(self):
         with lock.ProjectLock(self.path):
-            pass
-        self.assertFalse(self.mutex_file.exists())
+            self.assertTrue(self.probe_mutex())
+        self.assertTrue(self.probe_mutex())
 
     def test_mutex_file_is_a_permanent_private_sibling_of_the_directory(self):
         self.make_lock_dir(f"{self.dead_pid()}\n")
@@ -807,16 +813,25 @@ class TakeoverMutexTests(LockTestCase):
             self.assertEqual(self.pid_file.read_text(encoding="ascii"), f"{os.getpid()}\n")
         self.assertLess(time.monotonic() - started, 1.0)
 
-    def test_filesystem_without_flock_takes_a_stale_lock_over_without_the_mutex(self):
+    def test_filesystem_without_flock_can_still_take_a_fresh_directory(self):
+        with mock.patch.object(lock.fcntl, "flock", side_effect=OSError(errno.ENOSYS, "no flock")):
+            with lock.ProjectLock(self.path) as project_lock:
+                self.assertTrue(project_lock.held)
+                self.assertEqual(self.pid_file.read_text(encoding="ascii"), f"{os.getpid()}\n")
+        self.assertFalse(self.path.exists())
+
+    def test_filesystem_without_flock_refuses_stale_takeover(self):
         for number in (errno.ENOLCK, errno.EOPNOTSUPP, errno.ENOTSUP, errno.ENOSYS, errno.EINVAL):
             with self.subTest(errno=errno.errorcode[number]):
-                self.make_lock_dir(f"{self.dead_pid()}\n")
-                with mock.patch.object(lock.fcntl, "flock", side_effect=OSError(number, "no flock")) as flock:
-                    with lock.ProjectLock(self.path, pid_wait=0) as project_lock:
-                        self.assertTrue(project_lock.held)
-                        self.assertEqual(self.pid_file.read_text(encoding="ascii"), f"{os.getpid()}\n")
-                self.assertEqual(flock.call_count, 1, "tried once, then went on without the mutex")
-                self.assertFalse(self.path.exists())
+                dead = self.dead_pid()
+                if not self.path.exists():
+                    self.make_lock_dir()
+                self.pid_file.write_text(f"{dead}\n", encoding="ascii")
+                with mock.patch.object(lock.fcntl, "flock", side_effect=OSError(number, "no flock")):
+                    with self.assertRaises(lock.LockBusy):
+                        lock.ProjectLock(self.path, pid_wait=0).acquire()
+                self.assertEqual(self.pid_file.read_text(encoding="ascii"), f"{dead}\n")
+                self.assertEqual(os.listdir(self.path), ["pid"])
 
     def test_other_flock_errors_are_raised_and_leave_the_lock_alone(self):
         dead = self.dead_pid()
@@ -1065,7 +1080,7 @@ try:
 except RuntimeError as error:
     print('busy:', error)
 else:
-    print('acquired', job.read_pid(held / 'pid') == os.getpid())
+    print('acquired', job.read_pid(held.path / 'pid') == os.getpid())
     job.release_project_lock(held)
 """
 VPN_SETUP = """

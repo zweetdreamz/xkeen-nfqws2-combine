@@ -23,8 +23,12 @@ GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
 def response_ok(header: bytes, key: str) -> bool:
+    end = header.find(b"\r\n\r\n")
+    if end < 0 or end + 4 > 8192:
+        return False
     try:
-        text = header.decode("ascii")
+        # The same TLS read may include the first binary WebSocket frame.
+        text = header[:end].decode("ascii")
         lines = text.split("\r\n")
         if not lines[0].startswith("HTTP/1.1 101 "):
             return False
@@ -86,8 +90,8 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=6)
     parser.add_argument("--label", default="")  # diagnostic/test correlation only
     args = parser.parse_args()
-    if not 2 <= args.timeout <= 20:
-        parser.error("timeout must be 2..20 seconds")
+    if not 2 <= args.timeout <= 30:
+        parser.error("timeout must be 2..30 seconds")
     started = time.monotonic()
     try:
         status, reason = probe(args.timeout)

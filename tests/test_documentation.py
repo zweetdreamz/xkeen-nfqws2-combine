@@ -12,6 +12,10 @@ DOC_TREE = (
     'configuration/zapret.md', 'configuration/vpn.md', 'configuration/telegram.md', 'configuration/dns.md',
     'reference/architecture.md', 'reference/safety.md', 'development.md',
 )
+DOC_ASSETS = (
+    'images/control.png', 'images/notifications.png',
+    'images/schedule.png', 'images/vpn-nodes.png',
+)
 CURRENT_DOCS = ('README.md', 'tools/router/README.md', 'tools/windows/README.md',
                 'tools/dat-reader/README.md') + tuple('docs/' + name for name in DOC_TREE)
 
@@ -26,7 +30,7 @@ class DocumentationTests(unittest.TestCase):
     def test_docs_tree_contains_current_documents_only(self):
         actual = {p.relative_to(ROOT / 'docs').as_posix()
                   for p in (ROOT / 'docs').rglob('*') if p.is_file()}
-        self.assertEqual(actual, set(DOC_TREE))
+        self.assertEqual(actual, set(DOC_TREE) | set(DOC_ASSETS))
 
     def test_current_local_links_resolve(self):
         for relative in CURRENT_DOCS:

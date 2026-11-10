@@ -310,70 +310,65 @@ class PidTests(unittest.TestCase):
 class ProjectLockTests(TempRootTestCase):
     def test_acquire_and_release(self):
         lock = JOB.acquire_project_lock()
-        self.assertEqual(lock, self.lock_dir)
-        self.assertTrue(lock.is_dir())
-        self.assertEqual(JOB.read_pid(lock / "pid"), os.getpid())
+        self.assertEqual(lock.path, self.lock_dir)
+        self.assertTrue(lock.path.is_dir())
+        self.assertEqual(JOB.read_pid(lock.path / "pid"), os.getpid())
         if os.name == "posix":
-            self.assertEqual((lock / "pid").stat().st_mode & 0o777, 0o600)
+            self.assertEqual((lock.path / "pid").stat().st_mode & 0o777, 0o600)
         JOB.release_project_lock(lock)
-        self.assertFalse(lock.exists())
+        self.assertFalse(lock.path.exists())
 
     def test_second_acquire_while_owner_alive_fails(self):
         lock = JOB.acquire_project_lock()
         with self.assertRaisesRegex(RuntimeError, f"PID {os.getpid()}"):
             JOB.acquire_project_lock()
-        self.assertEqual(JOB.read_pid(lock / "pid"), os.getpid())
+        self.assertEqual(JOB.read_pid(lock.path / "pid"), os.getpid())
         JOB.release_project_lock(lock)
 
     def test_stale_lock_with_dead_pid_is_reclaimed(self):
         self.lock_dir.mkdir(parents=True)
         (self.lock_dir / "pid").write_text("999999\n", encoding="ascii")
-        with mock.patch.object(JOB, "process_alive", return_value=False) as alive:
-            lock = JOB.acquire_project_lock()
-        alive.assert_called_once_with(999999)
-        self.assertEqual(JOB.read_pid(lock / "pid"), os.getpid())
+        lock = JOB.acquire_project_lock()
+        self.assertEqual(JOB.read_pid(lock.path / "pid"), os.getpid())
         JOB.release_project_lock(lock)
 
     def test_stale_lock_without_pid_is_reclaimed(self):
         self.lock_dir.mkdir(parents=True)
-        with mock.patch.object(JOB, "process_alive") as alive:
-            lock = JOB.acquire_project_lock()
-        alive.assert_not_called()
-        self.assertEqual(JOB.read_pid(lock / "pid"), os.getpid())
+        lock = JOB.acquire_project_lock()
+        self.assertEqual(JOB.read_pid(lock.path / "pid"), os.getpid())
         JOB.release_project_lock(lock)
 
     def test_stale_lock_with_garbage_pid_is_reclaimed(self):
         self.lock_dir.mkdir(parents=True)
         (self.lock_dir / "pid").write_text("garbage", encoding="ascii")
         lock = JOB.acquire_project_lock()
-        self.assertEqual(JOB.read_pid(lock / "pid"), os.getpid())
+        self.assertEqual(JOB.read_pid(lock.path / "pid"), os.getpid())
         JOB.release_project_lock(lock)
 
     def test_stale_lock_with_extra_file_is_refused(self):
         self.lock_dir.mkdir(parents=True)
         (self.lock_dir / "pid").write_text("999999\n", encoding="ascii")
         (self.lock_dir / "other").write_text("x", encoding="ascii")
-        with mock.patch.object(JOB, "process_alive", return_value=False):
-            with self.assertRaisesRegex(RuntimeError, "stale project lock is not empty"):
-                JOB.acquire_project_lock()
+        with self.assertRaisesRegex(RuntimeError, "stale lock directory is not empty"):
+            JOB.acquire_project_lock()
         self.assertTrue((self.lock_dir / "other").exists())
 
     def test_release_ignores_foreign_or_missing_lock(self):
         JOB.release_project_lock(None)
         self.lock_dir.mkdir(parents=True)
         (self.lock_dir / "pid").write_text("999999\n", encoding="ascii")
-        JOB.release_project_lock(self.lock_dir)
+        JOB.release_project_lock(JOB.ProjectLock(self.lock_dir))
         self.assertTrue((self.lock_dir / "pid").exists())
         missing = self.root / "missing.lock"
-        JOB.release_project_lock(missing)
+        JOB.release_project_lock(JOB.ProjectLock(missing))
         self.assertFalse(missing.exists())
 
     def test_release_swallows_os_errors(self):
         lock = JOB.acquire_project_lock()
-        (lock / "extra").write_text("x", encoding="ascii")
+        (lock.path / "extra").write_text("x", encoding="ascii")
         JOB.release_project_lock(lock)
-        self.assertTrue(lock.is_dir())
-        self.assertFalse((lock / "pid").exists())
+        self.assertTrue(lock.path.is_dir())
+        self.assertFalse((lock.path / "pid").exists())
 
 
 class CorePidsTests(unittest.TestCase):
@@ -1269,6 +1264,18 @@ class MainTests(TempRootTestCase):
         self.assertFalse(state["needs_voice_verdict"])
         self.assertEqual(state["nfqws_restored"], "ok")
         self.assertTrue(runner.terminated)
+        self.assertFalse(self.lock_dir.exists())
+
+    def test_cancellation_with_failed_restore_is_error(self):
+        self.write_conf()
+        runner = FakeRunner([JOB.JobCancelled()], remaining="EVENT|RESTORE_ERROR|nfqws2-start-failed\n")
+        code = self.run_main(runner)
+        state = self.state()
+        self.assertEqual(code, 1)
+        self.assertEqual(state["status"], "error")
+        self.assertEqual(state["restore_error"], "nfqws2-start-failed")
+        self.assertIn("nfqws2-start-failed", state["error"])
+        self.assertFalse(state["needs_voice_verdict"])
         self.assertFalse(self.lock_dir.exists())
 
     def test_repeated_cancel_during_drain_still_records_cancelled(self):

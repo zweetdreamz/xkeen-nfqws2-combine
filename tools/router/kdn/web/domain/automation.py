@@ -402,6 +402,18 @@ def launch_automation_slot(slot, config):
         return False
     started = False
     try:
+        # The scheduler's state/config snapshots may predate a recovery that just
+        # released this lease. Never turn its failure or pending transaction into
+        # a fresh run. Read the schedule again while holding the same lease.
+        state = automation_state()
+        if (state_blocker(state) or state.get("status") == "recovery-failed"
+                or isinstance(state.get("transaction"), dict)):
+            return False
+        config = automation_config()
+        now = datetime.now(AUTOMATION_ZONE)
+        if (not config["enabled"] or now.strftime("%H:%M") not in config["times"]
+                or slot != now.strftime("%Y-%m-%dT%H:%M%z") or state.get("last_slot") == slot):
+            return False
         try:
             jobfiles.COORDINATOR.ensure_idle(refusals.AUTOMATION_START, holder="automation")
             busy = jobfiles.COORDINATOR.start_in_progress()

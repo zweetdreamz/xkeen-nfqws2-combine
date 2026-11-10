@@ -14,6 +14,98 @@ from kdn.engine import nfqws_service, nfqws_validate, options, relay_restore, ro
 
 
 class NativeApplyTests(unittest.TestCase):
+    def test_latest_pointer_directory_sync_failure_never_restores_or_changes_working_state(self):
+        # PanelHarness can replace sys.modules; inject into this caller's binding.
+        fsutil = snapshot_store.fsutil
+        latest = Path(self.paths.latest_pointer)
+        before = {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
+        real_sync = fsutil.fsync_path
+        pointer_file_synced = False
+        def fail_latest_parent(path):
+            nonlocal pointer_file_synced
+            path = Path(path)
+            if path == latest:
+                pointer_file_synced = True
+            elif path == latest.parent and pointer_file_synced:
+                raise OSError('injected latest parent sync failure')
+            return real_sync(path)
+        with mock.patch.object(fsutil, 'fsync_path', side_effect=fail_latest_parent), \
+                mock.patch.object(rollback_ops, 'restore', wraps=rollback_ops.restore) as restore, \
+                mock.patch.object(snapshot_store, 'restore_files', wraps=snapshot_store.restore_files) as restore_files, \
+                mock.patch.object(relay_restore, 'restore_init') as restore_init, \
+                mock.patch.object(relay_restore, 'restore_saved') as restore_saved, \
+                mock.patch.object(nfqws_service, 'action') as service_action:
+            self.assertEqual(apply_ops.run(self.ctx), 1)
+        self.assertTrue(pointer_file_synced, 'failure must follow successful snapshot creation and pointer write')
+        restore.assert_not_called()
+        restore_files.assert_not_called()
+        restore_init.assert_not_called()
+        restore_saved.assert_not_called()
+        service_action.assert_not_called()
+        self.xkeen_action.assert_not_called()
+        self.nfqws_restart.assert_not_called()
+        self.assertEqual(self.out.getvalue().splitlines()[-1], 'RESULT|failed')
+        for path, data in before.items():
+            self.assertEqual(path.read_bytes(), data, str(path))
+        saved = snapshot_store.verify(latest.read_text().strip())
+        self.assertEqual(saved.metadata.value('PURPOSE'), 'pre-apply')
+
+    def test_partial_rescue_keeps_fresh_recovery_cue_and_import_pointer(self):
+        for had_latest in (False, True):
+            with self.subTest(had_latest=had_latest):
+                latest = Path(self.paths.latest_pointer)
+                latest.unlink(missing_ok=True)
+                old_latest = None
+                if had_latest:
+                    old_snapshot = snapshot_store.create(self.paths, purpose='previous', xkeen_version='2.1.1')
+                    old_latest = (str(old_snapshot) + '\n').encode()
+                    latest.write_bytes(old_latest)
+                imported = self.put('/opt/etc/keenetic-discord-nfqws2/latest-nfqws-import.ptr', b'previous-import\n')
+                self.nfqws_stage.side_effect = ValueError('injected apply failure')
+                with mock.patch.object(rollback_ops, 'restore', side_effect=RuntimeError('injected rescue failure')):
+                    self.assertEqual(apply_ops.run(self.ctx), 1)
+                self.assertEqual(self.out.getvalue().splitlines()[-1], 'RESULT|partial')
+                self.assertTrue(latest.exists(), 'partial rescue must retain a recovery pointer')
+                self.assertNotEqual(latest.read_bytes(), old_latest)
+                saved = snapshot_store.verify(latest.read_text().strip())
+                self.assertEqual(saved.metadata.value('PURPOSE'), 'pre-apply')
+                self.assertEqual(imported.read_bytes(), b'previous-import\n')
+
+    def test_snapshot_directory_sync_failure_prevents_working_mutation(self):
+        import stat
+        real_fsync = os.fsync
+        before = self.routing.read_bytes()
+        def fail_directory(descriptor):
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError('injected directory sync failure')
+            return real_fsync(descriptor)
+        with mock.patch.object(os, 'fsync', side_effect=fail_directory):
+            self.assertEqual(apply_ops.run(self.ctx), 1)
+        self.assertEqual(self.routing.read_bytes(), before)
+        self.assertEqual(self.out.getvalue().splitlines()[-1], 'RESULT|failed')
+        self.xkeen_action.assert_not_called()
+        self.nfqws_restart.assert_not_called()
+
+    def test_snapshot_and_pointer_entries_are_durable_before_config_mutation(self):
+        import stat
+        synced = set()
+        real_fsync, real_publish = os.fsync, apply_files.publish
+        def record(descriptor):
+            info = os.fstat(descriptor)
+            if stat.S_ISDIR(info.st_mode):
+                synced.add((info.st_dev, info.st_ino))
+            return real_fsync(descriptor)
+        def publish(tx, plan, rescue):
+            directories = [rescue, *rescue.parents[:3]]
+            directories.extend(path for path in rescue.rglob('*') if path.is_dir())
+            for directory in directories:
+                info = directory.stat()
+                self.assertIn((info.st_dev, info.st_ino), synced, str(directory))
+            return real_publish(tx, plan, rescue)
+        with mock.patch.object(os, 'fsync', side_effect=record), \
+                mock.patch.object(apply_files, 'publish', side_effect=publish):
+            self.assertEqual(apply_ops.run(self.ctx), 0, self.err.getvalue())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

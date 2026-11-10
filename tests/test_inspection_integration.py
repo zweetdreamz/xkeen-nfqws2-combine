@@ -151,6 +151,7 @@ def test_approval_requires_exact_shown_observation_and_identity(panel, monkeypat
     cfg = panel.module('infra.config')
     identity = {'node_id': 'current', 'source_digest': 'a'*64}
     monkeypatch.setattr(monitor.vpn, 'active_identity', lambda: identity)
+    monkeypatch.setattr(monitor.vpn, 'vpn_manager', lambda: SimpleNamespace(load=lambda: {'nodes': {'current': {}}}))
     monkeypatch.setattr(monitor.receipt, 'observation_current', lambda *_args: True)
     import time
     result = identity | {'kind': 'vpn', 'status': 'completed', 'checked_at': int(time.time()),

@@ -15,6 +15,39 @@ from kdn.engine import config
 
 
 class BoundedProcessTests(unittest.TestCase):
+    def test_parent_only_term_in_spawn_gap_reaps_child_and_closes_pipe(self):
+        with tempfile.TemporaryDirectory() as folder:
+            marker = Path(folder) / 'late-mutation'
+            child_code = ('import time,pathlib; time.sleep(.2); pathlib.Path('
+                          + repr(str(marker)) + ').write_text("unexpected mutation")')
+            real_popen = subprocess.Popen
+            children = []
+            def spawn_then_signal(*args, **kwargs):
+                child = real_popen(*args, **kwargs)
+                children.append(child)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return child
+            previous = signal.signal(signal.SIGTERM, lifecycle._on_signal)
+            try:
+                with mock.patch.object(subprocess, 'Popen', side_effect=spawn_then_signal):
+                    with self.assertRaises(SystemExit) as caught:
+                        nfqws_process.run([sys.executable, '-c', child_code], os.environ, timeout=5)
+                self.assertEqual(caught.exception.code, 130)
+                for child in children:
+                    child.wait(timeout=3)
+                    self.assertNotEqual(child.returncode, 0)
+                    self.assertTrue(child.stdout.closed)
+                self.assertFalse(marker.exists())
+                self.assertEqual(lifecycle._children, [])
+            finally:
+                signal.signal(signal.SIGTERM, previous)
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                        child.wait(timeout=3)
+                    child.stdout.close()
+                    lifecycle.unregister_child(child)
+
     def test_stdout_eof_waits_for_exit_but_not_past_deadline(self):
         for pause, timeout, expected in ((0.05, 2, 0), (30, 0.1, 124)):
             with self.subTest(pause=pause):

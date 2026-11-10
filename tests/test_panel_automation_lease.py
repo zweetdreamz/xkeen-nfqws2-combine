@@ -1,4 +1,5 @@
 """Automation's lease excludes manual starts and cancellation waits for restoration."""
+from datetime import datetime
 from unittest import mock
 
 import panel_harness
@@ -23,8 +24,15 @@ class LeaseTests(panel_harness.PanelTestCase):
             self.jobs.COORDINATOR.ensure_idle(self.auto.refusals.TUNER_START, holder="automation")
 
     def test_slot_sees_quick_operation_start_without_family(self):
+        config = {**self.auto.default_automation_config(), "enabled": True}
+        self.auto.CONFIG.write(config)
+        now = datetime.now(self.auto.AUTOMATION_ZONE).replace(hour=3, minute=0)
+        slot = now.strftime("%Y-%m-%dT%H:%M%z")
+        clock = mock.patch.object(self.auto, "datetime")
+        clock.start().now.return_value = now
+        self.addCleanup(clock.stop)
         with self.jobs.COORDINATOR.exclusive(self.auto.refusals.ROUTE_CHANGE), mock.patch.object(self.auto.threading, "Thread") as thread:
-            self.assertFalse(self.auto.launch_automation_slot("test", self.auto.default_automation_config()))
+            self.assertFalse(self.auto.launch_automation_slot(slot, config))
             thread.assert_not_called()
         self.assertEqual(self.auto.automation_state()["status"], "skipped")
 

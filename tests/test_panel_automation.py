@@ -8,6 +8,7 @@ starts releases it.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import tempfile
 import threading
@@ -34,6 +35,10 @@ class PanelAutomationTests(panel_harness.PanelTestCase):
         self.addCleanup(self.cancel.clear)
         self.addCleanup(self.release_lock)
         self.config = {**self.ns["default_automation_config"](), "enabled": True}
+        self.ns.module("automation").CONFIG.write(self.config)
+        clock = mock.patch.object(self.ns.module("automation"), "datetime")
+        clock.start().now.return_value = datetime(2026, 11, 6, 3, 0, tzinfo=self.ns["AUTOMATION_ZONE"])
+        self.addCleanup(clock.stop)
 
     def release_lock(self):
         if self.lock.locked():
@@ -44,16 +49,16 @@ class PanelAutomationTests(panel_harness.PanelTestCase):
 
     def test_launch_releases_the_run_lock_when_the_router_is_busy(self):
         self.patch(**BUSY)
-        self.assertFalse(self.ns["launch_automation_slot"]("slot-1", self.config))
+        self.assertFalse(self.ns["launch_automation_slot"]("2026-11-06T03:00+0300", self.config))
         self.assertFalse(self.lock.locked())
         self.assertEqual(self.state()["status"], "skipped")
-        self.assertEqual(self.state()["last_slot"], "slot-1")
+        self.assertEqual(self.state()["last_slot"], "2026-11-06T03:00+0300")
 
     def test_launch_remembers_a_slot_missed_while_a_run_holds_the_lock(self):
         self.lock.acquire()
-        self.assertFalse(self.ns["launch_automation_slot"]("slot-2", self.config))
+        self.assertFalse(self.ns["launch_automation_slot"]("2026-11-06T03:00+0300", self.config))
         self.assertTrue(self.lock.locked())
-        self.assertEqual(self.state()["last_slot"], "slot-2")
+        self.assertEqual(self.state()["last_slot"], "2026-11-06T03:00+0300")
 
     def test_launch_hands_the_run_lock_to_the_slot_thread(self):
         seen, finished = [], threading.Event()
@@ -64,9 +69,9 @@ class PanelAutomationTests(panel_harness.PanelTestCase):
             finished.set()
 
         self.patch(run_automation_slot=slot, **FREE)
-        self.assertTrue(self.ns["launch_automation_slot"]("slot-3", self.config))
+        self.assertTrue(self.ns["launch_automation_slot"]("2026-11-06T03:00+0300", self.config))
         self.assertTrue(finished.wait(10))
-        self.assertEqual(seen, [("slot-3", True)])
+        self.assertEqual(seen, [("2026-11-06T03:00+0300", True)])
         self.assertFalse(self.lock.locked())
         self.assertEqual(self.state()["status"], "running")
 

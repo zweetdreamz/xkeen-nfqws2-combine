@@ -63,8 +63,11 @@ Allowlist: tools/dev/deploy-manifest.txt.
 произвольно названного config/sample.json: просматривайте diff и пакет.
 
 deploy.sh проверяет приватные пути независимо от allowlist до upload/SSH.
-Checkpoint исключает .cache/.git, backups/dat, Windows reports,
+Checkpoint исключает известные приватные пути: private-router со всем содержимым,
+.cache/.git, backups/dat, Windows reports,
 ключи, dotenv, captures и архивы; это копия исходников, не состояния роутера.
+Фильтры имён checkpoint не гарантируют отсутствие секретов в произвольных файлах:
+проверяйте содержимое перед сохранением и передачей архива.
 
 ```sh
 sh tools/dev/checkpoint.sh save before-change

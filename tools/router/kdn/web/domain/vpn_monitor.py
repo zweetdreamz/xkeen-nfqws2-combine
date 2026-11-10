@@ -14,6 +14,14 @@ def monitor_config():
     return policy.validate_monitor_config(inspection.read_inspection_state(cfg.VPN_MONITOR_CONFIG, policy.defaults()))
 
 
+def _registry_monitor_config():
+    # Explicit save/approve callers hold ProjectLock: CLI and web registry
+    # mutations cannot race this snapshot or its subsequent publication.
+    with vpn.VPN_STORE_LOCK:
+        registry_ids = vpn.vpn_manager().load()['nodes']
+    return policy.prune_removed_nodes(monitor_config(), registry_ids)
+
+
 def monitor_state():
     saved = inspection.read_inspection_state(cfg.VPN_MONITOR_STATE, {})
     now = int(time.time())
@@ -75,7 +83,7 @@ def save(changes, expected_identity):
         identity = vpn.active_identity()
         if expected_identity != identity:
             raise ValueError('нода изменилась; обновите статус и подтвердите её IP заново')
-        updated = policy.configure(monitor_config(), identity, changes)
+        updated = policy.configure(_registry_monitor_config(), identity, changes)
         inspection.write_inspection_state(cfg.VPN_MONITOR_CONFIG, updated)
     return vpn_monitor_status()
 
@@ -87,7 +95,7 @@ def approve_vpn_monitor_ips(families, expected_identity, observation_id):
             raise ValueError('нода или наблюдение изменились; обновите статус и подтвердите показанный IP заново')
         if not receipt.observation_current(cfg.INSPECTION_RUNTIME, cfg.XRAY_CONFIG_DIR, result.get('runtime_identity')):
             raise ValueError('Xray или конфиг изменились после наблюдения; выполните новую проверку')
-        updated = policy.approve_monitor_ips(monitor_config(), identity, result, families)
+        updated = policy.approve_monitor_ips(_registry_monitor_config(), identity, result, families)
         inspection.write_inspection_state(cfg.VPN_MONITOR_CONFIG, updated)
     return vpn_monitor_status()
 

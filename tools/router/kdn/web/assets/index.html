@@ -384,7 +384,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
 
 <div id="import" class="tab-page">
   <section class="card"><div class="section-head"><svg class="i"><use href="#i-upload"/></svg><h2>Отчёт Windows-тюнера</h2></div><p class="hint">Выберите JSON-отчёт с найденным кандидатом. Сначала он проверяется, применение доступно только для сервиса в режиме Zapret.</p><div class="upload"><input id="reportFile" type="file" accept="application/json,.json"><button id="validate">Проверить</button></div>
-    <div id="candidate" class="candidate"><div class="meta"><div><b>Сервис</b><span id="candidateService"></span></div><div><b>ID кандидата</b><span id="candidateId"></span></div><div><b>BAT-источник</b><span id="candidateSource"></span></div><div><b>Семейство</b><span id="candidateFamily"></span></div></div><pre id="candidateArgs" class="args"></pre><p class="warning">Применение создаёт отдельный snapshot, меняет только nfqws2 и перезапускает только nfqws2. Xkeen не останавливается и не перезапускается.</p><button id="applyImport" class="apply">Применить профиль nfqws2</button></div>
+    <div id="candidate" class="candidate"><div class="meta"><div><b>Сервис</b><span id="candidateService"></span></div><div><b>ID кандидата</b><span id="candidateId"></span></div><div><b>BAT-источник</b><span id="candidateSource"></span></div><div><b>Семейство</b><span id="candidateFamily"></span></div></div><pre id="candidateArgs" class="args"></pre><p class="warning">Применение создаёт отдельный snapshot, меняет только nfqws2 и перезапускает только nfqws2. Xkeen не останавливается и не перезапускается.</p><button id="applyImport" class="apply" disabled>Применить профиль nfqws2</button></div>
   </section>
   <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-layers"/></svg><h2>Постоянные профили</h2></div><div class="hint">Они сохраняются при следующих обычных apply.</div></div><button id="rollbackImport" class="rollback">Откатить последнее изменение</button></div><div id="profiles" class="profiles"></div></section>
   <section class="card"><div class="profile-head"><div><h2>Версии профилей по дате</h2><div class="hint">Старые версии можно убрать в корзину; активная защищена.</div></div><button id="refreshVersions" class="clear">Обновить</button></div><div id="profileVersions" class="version-list" tabindex="0" aria-label="Прокручиваемые версии профилей"><div class="empty">Сохранённых версий пока нет.</div></div></section>
@@ -399,11 +399,11 @@ const logEl=document.getElementById("log"),dot=document.getElementById("dot"),st
 const controlHeaders={"X-XKeen-Control":"1","Content-Type":"application/json"};
 const label={direct:"DIRECT",zapret:"ZAPRET",vless:"VPN",vpn:"VPN",ws:"WS",unmanaged:"ВЫКЛ",unknown:"НЕИЗВЕСТНО"};
 const serviceLabel={youtube:"YouTube",discord:"Discord",telegram:"Telegram",rollback:"Откат",vpn:"Общий VPN","discord-tcp":"Discord TCP","discord-voice":"Discord Voice"};
-let selectedReport=null,validatedDescriptor=null,tunerPoll=null,tunerRequest=null,tunerWasActive=false,routeWatch=null,diagnosticWatch=null,operationStarting=false;
+let validatedImport=null,importGeneration=0,controlsBusy=false,tunerPoll=null,tunerRequest=null,tunerWasActive=false,routeWatch=null,diagnosticWatch=null,operationStarting=false;
 function stamp(){return new Date().toLocaleTimeString("ru-RU",{hour12:false})}
 function log(text,replace=false){const line="["+stamp()+"] "+text;logEl.textContent=replace?line:(logEl.textContent?logEl.textContent+"\n"+line:line);logEl.scrollTop=logEl.scrollHeight}
 let tunerRunning=false,diagnosticRunning=false;
-function busy(value){value=!!value||!!routeWatch||operationStarting;document.querySelectorAll("button:not(.tab)").forEach(b=>b.disabled=value);if(!value){tunerControls(tunerRunning);diagnosticControls(diagnosticRunning);if(dnsModeState)renderDnsMode(dnsModeState);else document.querySelectorAll("[data-dns-mode]").forEach(b=>b.disabled=true)}}
+function busy(value){value=!!value||!!routeWatch||operationStarting;controlsBusy=value;document.querySelectorAll("button:not(.tab)").forEach(b=>b.disabled=value);if(!value){tunerControls(tunerRunning);diagnosticControls(diagnosticRunning);if(dnsModeState)renderDnsMode(dnsModeState);else document.querySelectorAll("[data-dns-mode]").forEach(b=>b.disabled=true)}syncImportControls()}
 // Success first, then plain words for known harmless lines, then the raw output.
 function resultText(title,output){const out=output||"",notes=[];if(/no usable IPv6 WAN route/.test(out))notes.push("Предупреждение IPv6 безвредно: у провайдера нет IPv6-маршрута, nfqws2 работает по IPv4.");if(/seccomp: Invalid argument/.test(out))notes.push("Строка seccomp безвредна: ядро Keenetic его не поддерживает, nfqws2 продолжает работу.");return "Готово: "+title+(notes.length?"\n"+notes.join("\n"):"")+(out?"\n\nПолный вывод:\n"+out:"")}
 function modeForUi(value){return value==="vless"?"vpn":value}
@@ -671,8 +671,41 @@ async function refreshDiagnostic(){try{const d=await api("/api/diagnostics/statu
 async function watchDiagnostic(jobId){const deadline=Date.now()+12*60*1000;while(Date.now()<deadline){const d=await api("/api/diagnostics/status");if(d.job_id&&d.job_id!==jobId)throw new Error("ID диагностического задания изменился");renderDiagnostic(d);if(d.active){await delay(1200);continue}if(d.status==="completed")return d;throw new Error(d.error||"диагностика завершилась: "+d.status)}throw new Error("превышено время ожидания диагностики")}
 async function startDiagnostic(kind){if(kind!=="health"){await runBrowserDiagnostic(kind);return}if(browserDiagnosticRun||diagnosticWatch)return;diagnosticControls(true);log("проверка роутера",true);try{const d=await api("/api/diagnostics/start/health",{method:"POST",headers:controlHeaders,body:"{}"});renderDiagnostic(d);diagnosticWatch=watchDiagnostic(d.job_id);await diagnosticWatch;log("проверка роутера завершена")}catch(e){log("ошибка диагностики: "+e)}finally{diagnosticWatch=null;await refreshDiagnostic()}}
 async function cancelDiagnostic(){if(browserDiagnosticRun){browserDiagnosticRun.controller.abort();return}try{renderDiagnostic(await api("/api/diagnostics/cancel",{method:"POST",headers:controlHeaders,body:"{}"}))}catch(e){log("ошибка остановки диагностики: "+e)}}
-async function validateReport(){const file=document.getElementById("reportFile").files[0];if(!file){log("выберите JSON-отчёт");return}try{selectedReport=JSON.parse(await file.text());const d=await api("/api/import/validate",{method:"POST",headers:controlHeaders,body:JSON.stringify(selectedReport)});validatedDescriptor=d.profile;document.getElementById("candidateService").textContent=serviceLabel[d.profile.service];document.getElementById("candidateId").textContent=d.profile.candidate_id;document.getElementById("candidateSource").textContent=d.profile.source_name;document.getElementById("candidateFamily").textContent=d.profile.family;document.getElementById("candidateArgs").textContent=d.profile.args.join("\n");document.getElementById("candidate").classList.add("visible");log("отчёт проверен: "+d.profile.service+" / "+d.profile.candidate_id,true)}catch(e){selectedReport=null;validatedDescriptor=null;document.getElementById("candidate").classList.remove("visible");log("отчёт отклонён: "+e,true)}}
-async function applyImport(){if(!selectedReport||!validatedDescriptor)return;if(!confirm("Применить "+serviceLabel[validatedDescriptor.service]+" / "+validatedDescriptor.candidate_id+"?\n\nБудет перезапущен только nfqws2. Xkeen останется запущен без перезапуска."))return;busy(true);log("применение профиля "+validatedDescriptor.candidate_id,true);let done=null;try{const d=await operation("/api/import/apply","Применение профиля",JSON.stringify(selectedReport));log(resultText(serviceLabel[validatedDescriptor.service]+": профиль "+validatedDescriptor.candidate_id+" применён",d.output));done=d}catch(e){log("ошибка применения: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}if(done)await postChecksAfter(done)}
+function importReady(){return validatedImport&&validatedImport.generation===importGeneration&&validatedImport.file===document.getElementById("reportFile").files[0]}
+function syncImportControls(){document.getElementById("applyImport").disabled=controlsBusy||!importReady()}
+function invalidateImport(){importGeneration++;validatedImport=null;document.getElementById("candidate").classList.remove("visible");syncImportControls()}
+async function validateReport(){
+  invalidateImport();
+  const generation=importGeneration,file=document.getElementById("reportFile").files[0];
+  const current=()=>generation===importGeneration&&file===document.getElementById("reportFile").files[0];
+  if(!file){log("выберите JSON-отчёт");return}
+  try{
+    const report=JSON.parse(await file.text());
+    if(!current())return;
+    const body=JSON.stringify(report),d=await api("/api/import/validate",{method:"POST",headers:controlHeaders,body});
+    if(!current())return;
+    const descriptor=d.profile;
+    document.getElementById("candidateService").textContent=serviceLabel[descriptor.service];
+    document.getElementById("candidateId").textContent=descriptor.candidate_id;
+    document.getElementById("candidateSource").textContent=descriptor.source_name;
+    document.getElementById("candidateFamily").textContent=descriptor.family;
+    document.getElementById("candidateArgs").textContent=descriptor.args.join("\n");
+    validatedImport={body,descriptor,file,generation};
+    document.getElementById("candidate").classList.add("visible");syncImportControls();
+    log("отчёт проверен: "+descriptor.service+" / "+descriptor.candidate_id,true);
+  }catch(e){if(!current())return;invalidateImport();log("отчёт отклонён: "+e,true)}
+}
+async function applyImport(){
+  if(!importReady())return;
+  const selection=validatedImport,descriptor=selection.descriptor;
+  if(!confirm("Применить "+serviceLabel[descriptor.service]+" / "+descriptor.candidate_id+"?\n\nБудет перезапущен только nfqws2. Xkeen останется запущен без перезапуска."))return;
+  if(!importReady()||selection!==validatedImport)return;
+  busy(true);log("применение профиля "+descriptor.candidate_id,true);let done=null;
+  try{const d=await operation("/api/import/apply","Применение профиля",selection.body);log(resultText(serviceLabel[descriptor.service]+": профиль "+descriptor.candidate_id+" применён",d.output));done=d}
+  catch(e){log("ошибка применения: "+e)}
+  finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}
+  if(done)await postChecksAfter(done)
+}
 async function clearImport(service){if(!confirm("Вернуть встроенный профиль для "+serviceLabel[service]+"?\n\nБудет перезапущен только nfqws2."))return;busy(true);log("встроенный профиль: "+service,true);let done=null;try{const d=await operation("/api/import/clear/"+service,"Встроенный профиль "+service);log(resultText(serviceLabel[service]+": встроенный профиль восстановлен",d.output));done=d}catch(e){log("ошибка: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}if(done)await postChecksAfter(done)}
 async function rollbackImport(){if(!confirm("Откатить последнее применение/удаление профиля?\n\nБудет перезапущен только nfqws2."))return;busy(true);log("откат профиля nfqws2",true);let done=null;try{const d=await operation("/api/import/rollback","Откат профиля");log(resultText("профиль nfqws2 откатан",d.output));done=d}catch(e){log("ошибка отката: "+e)}finally{busy(false);await refresh();await refreshProfiles();await refreshVersions()}if(done)await postChecksAfter(done)}
 async function deleteVersion(service,id,date){if(!confirm("Убрать версию "+serviceLabel[service]+" от "+fmtDate(date)+" в корзину?\n\nАктивный профиль не изменится; файл можно восстановить через SSH."))return;try{await api("/api/profile-versions/delete/"+encodeURIComponent(service)+"/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:"{}"});log("версия перемещена в корзину: "+service+" / "+id);await refreshVersions()}catch(e){log("не удалось удалить версию: "+e)}}
@@ -757,6 +790,7 @@ document.addEventListener("visibilitychange",()=>{
   if(!document.hidden){if(!tabVisible("control"))refresh();if(!tabVisible("autotune"))refreshTuner();refreshActiveTab()}
 });
 document.querySelectorAll("[data-action]").forEach(b=>b.addEventListener("click",()=>xkeenAction(b.dataset.action)));document.querySelectorAll(".service").forEach(box=>box.querySelectorAll(".mode").forEach(b=>b.addEventListener("click",()=>routeAction(box.dataset.service,b.dataset.mode))));
+document.getElementById("reportFile").addEventListener("change",invalidateImport);
 document.getElementById("validate").addEventListener("click",validateReport);document.getElementById("applyImport").addEventListener("click",applyImport);document.getElementById("rollbackImport").addEventListener("click",rollbackImport);document.getElementById("clear").addEventListener("click",()=>log("журнал очищен",true));
 document.getElementById("tunerService").addEventListener("change",tunerServiceChanged);document.getElementById("tunerVoiceCheck").addEventListener("change",updateVoiceHint);document.getElementById("startTuner").addEventListener("click",startTuner);document.getElementById("cancelTuner").addEventListener("click",cancelTuner);document.getElementById("voiceYes").addEventListener("click",()=>voiceVerdict(true));document.getElementById("voiceNo").addEventListener("click",()=>voiceVerdict(false));document.getElementById("applyTunerResult").addEventListener("click",applyTunerResult);
 document.getElementById("refreshHistory").addEventListener("click",refreshHistory);document.getElementById("refreshVersions").addEventListener("click",refreshVersions);document.getElementById("checkUpdates").addEventListener("click",checkUpdates);

@@ -25,6 +25,7 @@ import time
 from typing import Any
 
 from kdn.common import fsutil, proc, timeutil
+from kdn.common.lock import ProjectLock
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 WINDOWS_DIR = PROJECT_DIR / "tools" / "windows"
@@ -80,40 +81,18 @@ def read_pid(path: Path) -> int | None:
     return proc.read_job_pid(path)
 
 
-def acquire_project_lock() -> Path:
-    lock = root_path(LOCK_LOGICAL)
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        lock.mkdir(mode=0o700)
-    except FileExistsError:
-        existing_pid = read_pid(lock / "pid")
-        if existing_pid and process_alive(existing_pid):
-            raise RuntimeError(
-                f"another project operation is active (PID {existing_pid})"
-            ) from None
-        try:
-            (lock / "pid").unlink()
-        except FileNotFoundError:
-            pass
-        try:
-            lock.rmdir()
-        except OSError as error:
-            raise RuntimeError(f"stale project lock is not empty: {lock}") from error
-        lock.mkdir(mode=0o700)
-    (lock / "pid").write_text(f"{os.getpid()}\n", encoding="ascii")
-    os.chmod(lock / "pid", 0o600)
+def acquire_project_lock() -> ProjectLock:
+    lock = ProjectLock(root_path(LOCK_LOGICAL))
+    lock.acquire()
     return lock
 
 
-def release_project_lock(lock: Path | None) -> None:
-    if lock is None:
-        return
-    try:
-        if read_pid(lock / "pid") == os.getpid():
-            (lock / "pid").unlink(missing_ok=True)
-            lock.rmdir()
-    except OSError:
-        pass
+def release_project_lock(lock: ProjectLock | None) -> None:
+    if lock is not None:
+        try:
+            lock.release()
+        except OSError:
+            pass
 
 
 ROUTE_VALUES = {"direct", "zapret", "vless"}
@@ -793,7 +772,7 @@ def main() -> int:
             "result_available": False,
         },
     )
-    lock: Path | None = None
+    lock: ProjectLock | None = None
     runner_process: subprocess.Popen[str] | None = None
     candidates: list[tuner.Candidate] = []
     xkeen_before = core_pids()
@@ -1029,6 +1008,17 @@ def main() -> int:
                     "XKeen core PID changed unexpectedly during cancellation: "
                     f"{xkeen_before} -> {xkeen_after}"
                 ),
+                needs_voice_verdict=False,
+                xkeen_pids_after=xkeen_after,
+            )
+            return 1
+        if writer.payload.get("restore_error"):
+            error = "nfqws2 restoration failed during cancellation: " + str(writer.payload["restore_error"])
+            writer.log("ERROR|RuntimeError|" + error)
+            writer.write(
+                status="error",
+                finished_utc=utc_now(),
+                error=error[:1000],
                 needs_voice_verdict=False,
                 xkeen_pids_after=xkeen_after,
             )

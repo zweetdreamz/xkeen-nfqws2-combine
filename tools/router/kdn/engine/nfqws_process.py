@@ -27,15 +27,17 @@ def run(argv, environ, *, timeout=20, output_limit=65536, cwd=None):
 
     if not 0 < timeout <= 120 or not 1024 <= output_limit <= 1048576:
         raise ValueError('invalid validation process budget')
-    try:
-        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, env=dict(environ), cwd=cwd)
-    except OSError:
-        return ProcessResult(127, '')
-    lifecycle.register_child(process)
+    process = None
     capture, timed_out, limited = bytearray(), False, False
     deadline = time.monotonic() + timeout
     try:
+        try:
+            with lifecycle.ChildSpawn():
+                process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                           stderr=subprocess.STDOUT, env=dict(environ), cwd=cwd)
+                lifecycle.register_child(process)
+        except OSError:
+            return ProcessResult(127, '')
         os.set_blocking(process.stdout.fileno(), False)
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
@@ -62,21 +64,22 @@ def run(argv, environ, *, timeout=20, output_limit=65536, cwd=None):
         # it exits. Do not race it with TERM and report a false -15. The same
         # original deadline still bounds a child that closes its pipe then hangs.
         try:
-            if process.poll() is None and not (timed_out or limited):
+            if process is not None and process.poll() is None and not (timed_out or limited):
                 try:
                     process.wait(timeout=max(0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     timed_out = True
         finally:
-            if process.poll() is None:
+            if process is not None and process.poll() is None:
                 process.terminate()
                 try:
                     process.wait(timeout=1)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=1)
-            process.stdout.close()
-            lifecycle.unregister_child(process)
+            if process is not None:
+                process.stdout.close()
+                lifecycle.unregister_child(process)
     return ProcessResult(124 if timed_out else process.returncode,
                          capture.decode('utf-8', 'replace'), timed_out, limited)
 

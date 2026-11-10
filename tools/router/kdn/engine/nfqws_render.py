@@ -4,6 +4,7 @@ No shell sourcing, domain-list/blob writes, service calls or CLI wiring. Resolve
 inputs belong to the caller; generated artifacts still require strict validation.
 """
 import re
+import shlex
 
 from kdn.engine import config, confvalues, profile_descriptor
 
@@ -58,11 +59,11 @@ class RenderInput:
     """
     __slots__ = ('config', 'routes', 'udp_strategy', 'wide_udp', 'standalone',
                  'wan_interfaces', 'ipv6_enabled', 'proxy_outbound', 'imported_profiles',
-                 'telegram_header_route')
+                 'telegram_header_route', 'custom_ports')
 
     def __init__(self, config_bytes, routes, *, udp_strategy='flowseal', wide_udp=False,
                  standalone=False, wan_interfaces='', ipv6_enabled=False, proxy_outbound='',
-                 imported_profiles=None, telegram_header_route=''):
+                 imported_profiles=None, telegram_header_route='', custom_ports=None):
         if not isinstance(config_bytes, bytes) or not isinstance(routes, (tuple, list)):
             raise TypeError('configuration must be bytes and routes a sequence')
         if len(routes) != 4 or any(route not in ('direct', 'zapret', 'vless') for route in routes[:3]):
@@ -82,6 +83,14 @@ class RenderInput:
         if telegram_header_route and telegram_header_route not in ('direct', 'vless', 'ws', 'unmanaged'):
             raise ValueError('unsupported Telegram header route')
         self.telegram_header_route = telegram_header_route
+        if custom_ports is not None:
+            if (not isinstance(custom_ports, (tuple, list)) or len(custom_ports) != 2
+                    or any(not isinstance(value, str) or (value and not re.fullmatch(
+                        r'[0-9]+(?:[-:][0-9]+)?(?:,[0-9]+(?:[-:][0-9]+)?)*', value))
+                           for value in custom_ports)):
+                raise ValueError('invalid resolved custom ports')
+            custom_ports = tuple(custom_ports)
+        self.custom_ports = custom_ports
         imported_profiles = {} if imported_profiles is None else imported_profiles
         if not isinstance(imported_profiles, dict) or set(imported_profiles) - set(profile_descriptor.SERVICES):
             raise ValueError('unsupported imported profile mapping')
@@ -111,20 +120,56 @@ class RenderOutput:
         self.required_blobs = tuple(required_blobs)
 
 
-def _custom_ports(source, option):
-    inside, value, last = False, b'', b''
-    for line in source.split(b'\n'):
-        if not inside:
-            found = re.match(rb'^[ \t]*NFQWS_ARGS_CUSTOM="', line)
-            if found is None:
-                continue
-            line, inside, value = line[found.end():], True, b''
-        before, quote, _ = line.partition(b'"')
-        value += b' ' + before
-        if quote:
-            inside, last = False, value
+def _static_custom_args(source):
+    """Resolve only straight quoted assignments; shell programs need compose.
+
+    This fallback never executes config. Production apply supplies the effective
+    user-only ports from its bounded composer, including dynamic shell forms.
+    """
+    error = 'custom ports require resolved composition for this shell syntax'
+    assignment = re.compile(rb'''^[ \t]*NFQWS_ARGS_CUSTOM=('([^']*)'|"([^"\\]*)")[ \t]*(?:\#[^\n]*)?(?:\n|$)''', re.M)
+    value = b''
+
+    def resolve(found):
+        nonlocal value
+        if found.group(2) is not None:
+            value = found.group(2)
+        else:
+            raw = found.group(3)
+            # Expand exactly the two supported self references, simultaneously.
+            reference = rb'\$(?:NFQWS_ARGS_CUSTOM\b|\{NFQWS_ARGS_CUSTOM\})'
+            if b'$' in re.sub(reference, b'', raw) or b'`' in raw:
+                raise ValueError(error)
+            value = re.sub(reference, lambda _: value, raw)
+        return b'\n'
+
+    def tokens(raw):
+        lexer = shlex.shlex(raw.decode('utf-8', 'surrogateescape'), posix=True, punctuation_chars=';&|()<>\n')
+        lexer.whitespace = ' \t\r'
+        lexer.whitespace_split = True
+        return list(lexer)
+
+    try:
+        # Do not mistake assignment-looking lines inside another quoted value
+        # or a comment for actual shell assignments.
+        mentions = [token for token in tokens(source) if 'NFQWS_ARGS_CUSTOM' in token]
+        if (len(mentions) != len(list(assignment.finditer(source)))
+                or any(not token.startswith('NFQWS_ARGS_CUSTOM=') for token in mentions)):
+            raise ValueError(error)
+        for token in tokens(assignment.sub(resolve, source)):
+            if ('NFQWS_ARGS_CUSTOM' in token or token in (
+                    'if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'while',
+                    'until', 'do', 'done', '.', 'source', 'eval', 'trap', '{', '}')
+                    or token.strip('\n') and all(char in ';|&()<>\n' for char in token)):
+                raise ValueError(error)
+    except ValueError as exc:
+        raise ValueError(error) from exc
+    return value
+
+
+def _custom_ports(value, option):
     selected = []
-    for word in re.split(rb'[ \t]+', last):
+    for word in value.split():
         if word.startswith(option + b'='):
             for item in word[len(option) + 1:].split(b','):
                 if re.fullmatch(rb'[0-9]+(?:[-:][0-9]+)?', item):
@@ -228,8 +273,12 @@ def render(request):
         udp_ports = config.UDP_PORTS_WIDE if request.wide_udp else config.UDP_PORTS_FLOWSEAL
     else:
         udp_filter = udp_ports = '443'
-    tcp_ports = _ports_union(tcp_ports, _custom_ports(source, b'--filter-tcp'))
-    udp_ports = _ports_union(udp_ports, _custom_ports(source, b'--filter-udp'))
+    custom_ports = request.custom_ports
+    if custom_ports is None:
+        custom = _static_custom_args(source)
+        custom_ports = (_custom_ports(custom, b'--filter-tcp'), _custom_ports(custom, b'--filter-udp'))
+    tcp_ports = _ports_union(tcp_ports, custom_ports[0])
+    udp_ports = _ports_union(udp_ports, custom_ports[1])
     warnings, blobs = [], []
     udp_base = udp_desync = ''
     if voice_route == 'zapret':

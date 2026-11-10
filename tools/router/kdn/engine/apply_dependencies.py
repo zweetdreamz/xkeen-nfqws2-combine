@@ -11,6 +11,7 @@ FEED_PATH = '/opt/etc/opkg/nfqws2-keenetic.conf'
 FEED = b'src/gz nfqws2-keenetic https://nfqws.github.io/nfqws2-keenetic/all\n'
 INSTALL = ('ca-certificates', 'wget-ssl', 'nfqws2-keenetic')
 REMOVE = ('wget-nossl',)
+PACKAGE_TIMEOUT = 120
 
 
 def render_ports(current, excluded=b'', *, voice_high=50100, telegram='unmanaged'):
@@ -98,7 +99,7 @@ def _run(ctx, argv, timeout):
 def update_feeds(tx):
     """Bounded update. One failed feed may use existing lists, as in legacy."""
     _armed(tx)
-    done = _run(tx.ctx, ['opkg', 'update'], 180)
+    done = _run(tx.ctx, ['opkg', 'update'], PACKAGE_TIMEOUT)
     if not (done.returncode or done.timed_out or done.output_limited):
         return
     if done.output_limited:
@@ -144,11 +145,11 @@ def install_packages(tx, actions):
     for verb, name in actions:
         if name == 'nfqws2-keenetic':
             try:
-                done = _run(tx.ctx, ['opkg', verb, name], 180)
+                done = _run(tx.ctx, ['opkg', verb, name], PACKAGE_TIMEOUT)
             finally:
                 nfqws_service.action(tx.ctx, 'stop')
         else:
-            done = _run(tx.ctx, ['opkg', verb, name], 180)
+            done = _run(tx.ctx, ['opkg', verb, name], PACKAGE_TIMEOUT)
         if done.returncode or done.timed_out or done.output_limited:
             raise RuntimeError('opkg ' + verb + ' failed for owned package')
         installed = rollback_ops.package_version(tx.ctx, name)

@@ -75,6 +75,65 @@ fi
 PATH="$ROOT/opt/bin:$ROOT/opt/sbin:$PATH"
 export PATH
 
+# Bootstrap from this script: never depend on the installed project while it
+# may be replaced. Keep this kernel-lock protocol identical in rollback and
+# deploy. The inode stays in place; process exit/reboot releases stale locks.
+if [ "${KDN_SOFTWARE_LOCKED:-}" != 1 ]; then
+  mkdir -p "$ROOT/opt/tmp"
+  exec python3 - "$0" "$ROOT/opt/tmp/kdn-software.lock" "$@" <<'PYLOCK'
+import fcntl
+import os
+import signal
+import stat
+import subprocess
+import sys
+
+fd = None
+child = None
+interrupted = None
+
+def forward(signum, _frame):
+    global interrupted
+    if interrupted is not None:
+        return  # allow the child's cleanup to finish after the first signal
+    interrupted = signum
+    if child is not None and child.poll() is None:
+        try:
+            os.killpg(child.pid, signum)
+        except ProcessLookupError:
+            pass
+
+try:
+    fd = os.open(sys.argv[2], os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        raise OSError("unsafe software lock")
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, forward)
+    if interrupted is not None:
+        raise SystemExit(130)
+    child = subprocess.Popen(["sh", sys.argv[1], *sys.argv[3:]],
+                             env={**os.environ, "KDN_SOFTWARE_LOCKED": "1"},
+                             start_new_session=True, close_fds=True)
+    if interrupted is not None:
+        os.killpg(child.pid, interrupted)
+    code = child.wait()
+    raise SystemExit(code if code >= 0 else 128 - code)
+except BlockingIOError:
+    print("software delivery busy (deploy/rollback already in progress)", file=sys.stderr)
+    raise SystemExit(3)
+except OSError as exc:
+    print("software delivery lock failed: " + str(exc), file=sys.stderr)
+    raise SystemExit(2)
+finally:
+    if child is not None and child.poll() is None:
+        child.wait()  # the lock covers error/signal rollback as well
+    if fd is not None:
+        os.close(fd)
+PYLOCK
+fi
+unset KDN_SOFTWARE_LOCKED
+
 PANEL="${KDN_PANEL:-192.168.2.1:8088}"
 PROJECT_DIR=/opt/root/keenetic-discord-nfqws2
 stage=""
@@ -127,6 +186,37 @@ BACKUP_ROOT="$ROOT/opt/etc/xkeen-web-backups"
 ARCHIVE="$stage/upload.tar.gz"
 TREE="$stage/tree"
 FILES="$stage/files.list"
+
+# A successful init exit alone is not evidence that importing processes exited.
+# Exact argv matching avoids unrelated Python processes and fixture instances.
+panel_stopped() {
+  python3 -I - "$APP_PY" "$WEB_INIT" <<'PYSTOP'
+import errno
+import os
+from pathlib import Path
+import sys
+
+app, init = (os.fsencode(value) for value in sys.argv[1:])
+try:
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            args = (entry / 'cmdline').read_bytes().split(b'\0')
+        except OSError as exc:
+            # A process can exit after enumeration or after cmdline is opened.
+            # Ignore only kernel evidence of disappearance; unreadable live
+            # processes and other I/O failures leave absence unconfirmed.
+            if exc.errno in (errno.ENOENT, errno.ESRCH):
+                continue
+            raise
+        if app in args or (init in args and b'supervise' in args):
+            raise RuntimeError('panel or supervisor is still running')
+except (OSError, RuntimeError) as exc:
+    print('cannot confirm panel stopped: ' + str(exc), file=sys.stderr)
+    raise SystemExit(1)
+PYSTOP
+}
 
 state=""
 backup=""
@@ -328,7 +418,19 @@ install_all() {
     mkdir -p "$(dirname "$PROJECT/$file")"
     install_file "$TREE/$file" "$PROJECT/$file" "$mode"
   done < "$FILES"
-  install_file "$TREE/generated/app.py" "$APP_PY" 700
+  # Persist the logical router path in the launcher, without the fixture root.
+  # setdefault preserves the documented environment override after reboot.
+  if [ "$PROJECT_DIR" = /opt/root/keenetic-discord-nfqws2 ]; then
+    install_file "$TREE/generated/app.py" "$APP_PY" 700
+    return
+  fi
+  python3 -I - "$TREE/generated/app.py" "$stage/app-installed.py" "$PROJECT_DIR" <<'PYSHIM'
+import pathlib
+import sys
+source, target, project = sys.argv[1:]
+pathlib.Path(target).write_text("import os\nos.environ.setdefault('XKEEN_PROJECT_DIR', " + repr(project) + ")\n" + pathlib.Path(source).read_text())
+PYSHIM
+  install_file "$stage/app-installed.py" "$APP_PY" 700
 }
 
 panel_ready() {
@@ -412,6 +514,10 @@ rollback() {
   set +e
   umask "$deploy_umask"
   rb_failed=0
+  if ! panel_step stop || ! panel_stopped; then
+    err "ROLLBACK INCOMPLETE: panel stop unconfirmed; files unchanged, backup retained at $backup"
+    return 1
+  fi
   if [ -n "$cur_tmp" ]; then
     rm -f "$cur_tmp" || rb_failed=1
   fi
@@ -507,7 +613,13 @@ fi
 make_backup
 say "backup $backup"
 say "stopping the panel"
-panel_step stop || die 1 "panel stop failed"
+if ! panel_step stop || ! panel_stopped; then
+  # Stop was not confirmed: restoring even identical files could race a live
+  # panel. Only discard this unused backup and restore its previous pointer.
+  state=""
+  restore_latest_pointer && rm -rf "$backup"
+  die 1 "panel stop failed; no software files changed"
+fi
 if busy_pidfile="$(find_live_job)"; then
   # Nothing was copied: start the panel again and leave as if the deploy had
   # not begun, without its backup.

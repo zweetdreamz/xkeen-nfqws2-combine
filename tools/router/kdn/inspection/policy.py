@@ -60,6 +60,13 @@ def expected(config, identity):
     return node.get('expected', {}) if node.get('source_digest') == identity.get('source_digest') else {}
 
 
+def prune_removed_nodes(config, registry_ids):
+    """Free deleted IDs; existing source bindings remain subject to explicit approval."""
+    result = validate_monitor_config(config)
+    result['nodes'] = {key: node for key, node in result['nodes'].items() if key in registry_ids}
+    return result
+
+
 def configure(config, identity, changes):
     result = validate_monitor_config(config)
     if not isinstance(changes, dict) or set(changes) - {'enabled', 'interval_minutes', 'families', 'expected'}:

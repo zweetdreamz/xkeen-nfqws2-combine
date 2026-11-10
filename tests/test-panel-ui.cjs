@@ -305,6 +305,84 @@ async function inspectionChecks(browser, errors) {
   console.log("inspection-ui-tests-ok (route context and dirty node/IP binding)");
 }
 
+async function importValidationChecks(browser, errors) {
+  const page = await openPanel(browser, errors);
+  await page.click('.tab[data-tab="import"]');
+  const pending = [];
+  const applied = [];
+  const confirmations = [];
+  page.on('dialog', dialog => confirmations.push(dialog.message()));
+  await page.route('**/api/import/validate', route => { pending.push(route); });
+  await page.route('**/api/import/apply', async route => {
+    applied.push(route.request().postDataJSON());
+    await route.fulfill({ json: { ok: false, error: 'offline apply captured' }, status: 400 });
+  });
+  const report = id => ({ service: 'youtube', found: { service: 'youtube', candidate_id: id,
+    source_name: 'fixture.bat', family: 'fixture', args: ['--filter-tcp=443'] } });
+  async function select(value) {
+    await page.locator('#reportFile').setInputFiles({ name: 'report.json', mimeType: 'application/json',
+      buffer: Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)) });
+  }
+  async function start(name) {
+    await page.evaluate(name => { window[name] = validateReport(); }, name);
+    while (!pending.length) await new Promise(resolve => setTimeout(resolve, 10));
+    return pending.shift();
+  }
+  async function answer(route, value, name, failed = false) {
+    await route.fulfill({ json: failed ? { ok: false, error: 'stale rejection' } : { ok: true, profile: value.found },
+      status: failed ? 400 : 200 });
+    await page.evaluate(name => window[name], name);
+  }
+  const a = report('aaaaaaaaaaaa'), b = report('bbbbbbbbbbbb');
+  await select(a);
+  await answer(await start('validationA'), a, 'validationA');
+  assert.equal(await page.locator('#candidateId').textContent(), a.found.candidate_id);
+  // Selection alone invalidates the old preview, before another validation starts.
+  await select(b);
+  assert.equal(await page.locator('#applyImport').isDisabled(), true, 'changed file may still apply A');
+  assert.equal(await page.locator('#candidate').evaluate(x => x.classList.contains('visible')), false);
+  const pendingB = await start('validationB');
+  await page.evaluate(() => { busy(false); return applyImport(); });
+  assert.equal(applied.length, 0, 'pending B must not submit B using the descriptor for A');
+  assert.equal(await page.locator('#applyImport').isDisabled(), true, 'busy(false) reopened pending apply');
+  await answer(pendingB, b, 'validationB');
+  await page.click('#applyImport');
+  await page.waitForFunction(() => document.getElementById('log').textContent.includes('offline apply captured'));
+  assert.deepEqual(applied, [b], 'apply payload must match the displayed descriptor');
+  assert.match(confirmations.at(-1), /bbbbbbbbbbbb/, 'confirmation must identify the submitted report');
+  await page.waitForFunction(() => !document.getElementById('validate').disabled);
+
+  // Both stale success and stale failure must leave the newest validated pair intact.
+  for (const [failed, sameFile] of [[false, false], [true, false], [true, true]]) {
+    await select(sameFile ? b : a);
+    const old = await start('olderValidation');
+    if (!sameFile) await select(b);
+    const current = await start('currentValidation');
+    await answer(current, b, 'currentValidation');
+    await answer(old, a, 'olderValidation', failed);
+    assert.equal(await page.locator('#candidateId').textContent(), b.found.candidate_id);
+    assert.equal(await page.locator('#candidate').evaluate(x => x.classList.contains('visible')), true);
+    assert.equal(await page.locator('#applyImport').isEnabled(), true);
+    await page.evaluate(() => applyImport());
+    assert.deepEqual(applied.at(-1), b, 'late validation replaced the submitted report');
+  }
+  // A late response must not resurrect a preview after a file change or parse error.
+  for (const parse of [false, true]) {
+    await select(a);
+    const old = await start('beforeInvalidation');
+    await select('{broken-json');
+    if (parse) await page.evaluate(() => validateReport());
+    await answer(old, a, 'beforeInvalidation');
+    assert.equal(await page.locator('#candidate').evaluate(x => x.classList.contains('visible')), false);
+    assert.equal(await page.locator('#applyImport').isDisabled(), true);
+    const before = applied.length;
+    await page.evaluate(() => applyImport());
+    assert.equal(applied.length, before);
+  }
+  await page.close();
+  console.log('import-validation-ui-tests-ok (file changes, pending checks, reverse responses and payload)');
+}
+
 async function main() {
   setTimeout(()=>{console.error("panel UI test timeout");process.exit(1)},120000).unref();
   const server = await startServer();
@@ -315,6 +393,7 @@ async function main() {
   const browser = await playwright.chromium.launch(launchOptions);
   const errors = [];
   try {
+    await importValidationChecks(browser, errors);
     await pollingChecks(browser, errors);
     await inspectionChecks(browser, errors);
     // Four independent route cards with their current modes.
@@ -467,11 +546,20 @@ async function main() {
       found: { candidate_id: "aaaaaaaaaaaa", family: "fixture", source_name: "general.bat", args: ["--filter-tcp=443"] },
     });
     page = await openPanel(browser, errors);
+    await page.route('**/api/import/validate', route => route.fulfill({
+      json: { ok: true, profile: route.request().postDataJSON().found },
+    }));
     const versionId = "20261020T100000Z-aaaaaaaaaaaa-applied-1";
     const operations = [
-      ["applyImport", "/api/import/apply", () => {
-        selectedReport = { service: "youtube" };
-        validatedDescriptor = { service: "youtube", candidate_id: "aaaaaaaaaaaa" };
+      ["applyImport", "/api/import/apply", async () => {
+        const report = { service: "youtube", found: { service: "youtube", candidate_id: "aaaaaaaaaaaa",
+          source_name: "fixture.bat", family: "fixture", args: ["--filter-tcp=443"] } };
+        const files = new DataTransfer();
+        files.items.add(new File([JSON.stringify(report)], 'report.json', { type: 'application/json' }));
+        const input = document.getElementById('reportFile');
+        input.files = files.files;
+        input.dispatchEvent(new Event('change'));
+        await validateReport();
         return applyImport();
       }],
       ["clearImport", "/api/import/clear/youtube", () => clearImport("youtube")],

@@ -6,7 +6,6 @@ explicit reconciliation or the next launch persist a dead job's failure and its 
 """
 
 import json
-import os
 from pathlib import Path
 import re
 import secrets
@@ -340,7 +339,9 @@ def run_route_command(command, job_id, operation, timeout=900):
     started = time.monotonic()
     timed_out = False
     last_stage = None
-    with cfg.ROUTE_APPLY_LOG.open("w+b") as capture:
+    # The child's stdout shares capture's open file description, including its
+    # offset. A separately opened reader must own every progress/final read.
+    with cfg.ROUTE_APPLY_LOG.open("w+b") as capture, cfg.ROUTE_APPLY_LOG.open("rb") as reader:
         process = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
@@ -355,9 +356,8 @@ def run_route_command(command, job_id, operation, timeout=900):
                 break
             except subprocess.TimeoutExpired:
                 capture.flush()
-                capture.seek(0)
-                preview = capture.read().decode("utf-8", errors="replace")
-                capture.seek(0, os.SEEK_END)
+                reader.seek(0)
+                preview = reader.read().decode("utf-8", errors="replace")
                 stage = engine.route_stage(preview, operation)
                 if stage[0] != last_stage:
                     last_stage = stage[0]
@@ -373,8 +373,8 @@ def run_route_command(command, job_id, operation, timeout=900):
                 proc.stop_process_group(process, 120)
                 break
         capture.flush()
-        capture.seek(0)
-        output = capture.read().decode("utf-8", errors="replace").strip()
+        reader.seek(0)
+        output = reader.read().decode("utf-8", errors="replace").strip()
     if len(output) > 200000:
         output = "[...начало вывода сокращено...]\n" + output[-200000:]
     if timed_out:

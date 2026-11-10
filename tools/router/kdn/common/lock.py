@@ -9,8 +9,9 @@ a holder of this one except in the short windows described at the end.
 
 Protocol v2:
 
-1. Acquire with mkdir(LOCK, 0o700). Right after it the pid is published atomically and
-   exclusively: written to `pid.tmp-<pid>` (mode 600), hard-linked to `pid` (os.link fails
+1. Acquire with mkdir(LOCK, 0o700). Right after it the pid is published under the
+   same mutex as stale takeover, atomically and exclusively: written to `pid.tmp-<pid>`
+   (mode 600), hard-linked to `pid` (os.link fails
    if a pid exists; a filesystem without hard links falls back to os.replace) and the
    temporary file removed. No reader sees a half-written pid file, and a process that was
    suspended between its mkdir and the publication cannot overwrite the pid of the process
@@ -40,21 +41,21 @@ Protocol v2:
    directory are not ours to delete: the lock is then refused with "stale lock directory
    is not empty", as the engine does; a live pid or a live writer's `pid.tmp-<pid>` that
    shows up there makes it busy with that pid. Where flock is not supported (ENOLCK,
-   EOPNOTSUPP, ENOSYS, EINVAL) the takeover goes without the mutex: two takers that read
-   the same stale pid may then both remove it and both become owners.
+   EOPNOTSUPP, ENOSYS, EINVAL), a fresh mkdir acquisition can still publish its PID,
+   but stale takeover is refused: deleting a PID without synchronization is unsafe.
 4. Release removes `pid` and the directory only if the pid in the file is our own.
 
 A pid in the file is alive unless kill(pid, 0) says "no such process" (PermissionError
 means alive) or the process is a zombie.
 
-Copies of the old protocol that have not moved here yet (zapret_autotune_job.py,
-an engine or runner of an older release) do not wait for a pid and
+Copies of the old protocol that have not moved here yet (an engine, tuner or
+runner of an older release) may publish without this mutex, or do not wait for a pid and
 take a stale lock over without the mutex (`rm pid; rmdir; mkdir`). While they are around,
 a lock can be mistaken for a stale one by them in the microseconds between its mkdir and
 its pid, and between the unlink of the pid and the rmdir at release; and a takeover by
 such a copy that meets one by this module in the same microseconds can end with two
-owners. This module waits for the pid of such writers, so its own acquire is safe against
-them.
+owners. This module waits for such writers' PIDs, but older copies that publish
+without the mutex cannot provide the same publication/takeover guarantee.
 """
 
 import contextlib
@@ -132,6 +133,7 @@ class ProjectLock:
         self.pid_wait = pid_wait
         self.poll = poll
         self._held = False
+        self._mutex_supported = None
 
     @property
     def held(self):
@@ -199,10 +201,17 @@ class ProjectLock:
             time.sleep(min(self.poll, remaining))
 
     def _publish_pid(self):
+        """Serialize publication against stale cleanup, including its invalid-pid branch."""
+        with self._takeover_mutex():
+            return self._write_pid()
+
+    def _write_pid(self):
         """Create `pid` with our pid in one step, never over another pid; False if the race was lost."""
         pid_file = self.path / PID_FILE
         temporary = self.path / f"{PID_FILE}.tmp-{os.getpid()}"
         try:
+            if pid_file.exists():
+                return False
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(descriptor, "w", encoding="ascii") as stream:
                 stream.write(f"{os.getpid()}\n")
@@ -224,7 +233,11 @@ class ProjectLock:
 
     def _take_over(self, observed):
         """Take the stale lock we saw (pid `observed`, or None) over: True if held, False to start again."""
-        with self._takeover_mutex():
+        with self._takeover_mutex() as synchronized:
+            if not synchronized:
+                # Without flock no observation can authorize deleting a PID:
+                # a publisher or another taker may replace it before unlink.
+                raise LockBusy("stale lock takeover requires flock support")
             current = self._pid()
             if current != observed:
                 if self.path.exists() and (current is None or proc.process_alive(current)):
@@ -240,13 +253,17 @@ class ProjectLock:
 
     @contextlib.contextmanager
     def _takeover_mutex(self):
-        """Hold flock on the permanent file beside the lock directory; no mutex where flock is unsupported."""
+        """Serialize publication and takeover; nested publication reuses this handle's mutex."""
+        if self._mutex_supported is not None:
+            yield self._mutex_supported
+            return
         mutex = self.path.with_name(self.path.name + TAKEOVER_SUFFIX)
         descriptor = os.open(mutex, os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            self._flock(descriptor)
-            yield
+            self._mutex_supported = self._flock(descriptor)
+            yield self._mutex_supported
         finally:
+            self._mutex_supported = None
             os.close(descriptor)
 
     def _flock(self, descriptor):
@@ -262,9 +279,9 @@ class ProjectLock:
             except OSError as exc:
                 if exc.errno not in _NO_FLOCK:
                     raise
-                return
+                return False
             else:
-                return
+                return True
 
     def _remove_directory(self):
         """Remove the stale directory; False if a pid showed up in it that is dead as well (start again)."""
