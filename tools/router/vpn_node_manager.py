@@ -343,7 +343,16 @@ class VpnNodeManager:
 
     def load(self) -> dict:
         if self.state_file.exists() or self.state_file.is_symlink():
-            return self._checked_state(private_json(self.state_file))
+            state = self._checked_state(private_json(self.state_file))
+            _, current = self._current_file()
+            current = normalize_outbound(current)
+            active = state['nodes'][state['active']]
+            # The file is authoritative for the selected outbound on every
+            # read. Overlay only in memory: GET never writes the registry.
+            if normalize_outbound(active['outbound']) != current:
+                active['outbound'] = current
+                active['health'] = None
+            return state
         _, current = self._current_file()
         current = normalize_outbound(current)
         return {"version": 1, "active": "current", "nodes": {
@@ -376,7 +385,7 @@ class VpnNodeManager:
         health = node.get('health')
         if isinstance(health, dict):
             health = {field: value for field, value in health.items()
-                      if field in {'ok', 'checked_utc', 'checked_at', 'latency_ms', 'http_code', 'target', 'detail'}
+                      if field in {'ok', 'checked_utc', 'checked_at', 'latency_ms', 'latency_kind', 'total_ms', 'http_code', 'target', 'detail'}
                       and isinstance(value, (str, int, float, bool)) and (not isinstance(value, str) or len(value) <= 500)}
         else:
             health = None
@@ -417,8 +426,7 @@ class VpnNodeManager:
         except ValueError as exc:
             warning = str(exc)
         return {"ok": True, "active": active, "drift": drift,
-                "nodes": [self._public_node(key, node, active)
-                          for key, node in state["nodes"].items()],
+                "nodes": [self._public_node(key, node, active) for key, node in state['nodes'].items()],
                 "canonical_tag": ACTIVE_TAG, "warning": warning,
                 "recovery_needed": recovery}
 
@@ -491,9 +499,8 @@ class VpnNodeManager:
         if key in state['nodes']:
             raise ValueError('ID ноды уже существует')
         outbound = safe_normalize_outbound(source)
-        health = self.probe(outbound)
         state["nodes"][key] = {"name": name, "outbound": outbound,
-                                "created_utc": utc_now(), "health": health}
+                                "created_utc": utc_now(), "health": None}
         self._save_state(state)
         return {"ok": True, "node": self._public_node(key, state["nodes"][key], state["active"])}
 
@@ -546,6 +553,10 @@ class VpnNodeManager:
         state = self.load()
         if name not in state["nodes"]:
             raise ValueError("нода не найдена")
+        if name == state['active']:
+            _, current = self._current_file()
+            if normalize_outbound(state['nodes'][name]['outbound']) != normalize_outbound(current):
+                raise ValueError('Конфиг Xray изменился во время чтения; обновите список и повторите проверку')
         health = self.probe(state["nodes"][name]["outbound"])
         state["nodes"][name]["health"] = health
         self._save_state(state)
@@ -642,6 +653,7 @@ class VpnNodeManager:
                 if not ready:
                     return {**base, "ok": False, "detail": "тестовый SOCKS Xray не открылся"}
                 last_code = 0
+                first_bytes = []
                 for url in PROBE_URLS:
                     if exceeded.is_set() or process.poll() is not None:
                         return {**base, "ok": False, "detail": "тестовый Xray остановлен или превысил лимит памяти"}
@@ -650,20 +662,26 @@ class VpnNodeManager:
                             [self.curl, "--disable", "--silent", "--show-error", "--noproxy", "",
                              "--socks5-hostname", f"127.0.0.1:{port}",
                              "--proto", "=https", "--connect-timeout", "4", "--max-time", "8",
-                             "--output", "/dev/null", "--write-out", "%{http_code}", url],
+                             "--output", "/dev/null", "--write-out", "%{http_code}|%{time_starttransfer}", url],
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             text=True, timeout=10, check=False, env=env)
                     except (OSError, subprocess.TimeoutExpired):
                         return {**base, "ok": False, "detail": "таймаут HTTPS через эту ноду"}
-                    text = result.stdout.strip()
+                    if exceeded.is_set() or process.poll() is not None:
+                        return {**base, 'ok': False, 'detail': 'тестовый Xray остановлен или превысил лимит памяти'}
+                    text, separator, elapsed = result.stdout.strip().partition('|')
                     last_code = int(text) if re.fullmatch(r"[0-9]{3}", text) else 0
                     expected = 204 if url.endswith("/generate_204") else 200
                     if result.returncode != 0 or last_code != expected:
                         return {**base, "ok": False, "http_code": last_code,
                                 "detail": "HTTPS через ноду не вернул ожидаемый ответ"}
+                    if not separator or not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', elapsed):
+                        return {**base, 'ok': False, 'detail': 'curl не вернул время ответа HTTPS'}
+                    first_bytes.append(float(elapsed))
                 if exceeded.is_set() or process.poll() is not None:
                     return {**base, "ok": False, "detail": "тестовый Xray завершился"}
-                return {**base, "ok": True, "latency_ms": round((time.monotonic() - started) * 1000),
+                return {**base, "ok": True, "latency_ms": round(min(first_bytes) * 1000),
+                        "latency_kind": "https_ttfb", "total_ms": round((time.monotonic() - started) * 1000),
                         "http_code": last_code, "target": urlsplit(PROBE_URLS[-1]).hostname}
             finally:
                 stop.set()

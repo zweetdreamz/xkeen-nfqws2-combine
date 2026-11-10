@@ -66,7 +66,8 @@ class VpnLinks26Tests(unittest.TestCase):
             self.link(type='tcp', security='none', sni='unused.example'),
             self.link(type='tcp') + '&type=ws', self.link(type='xhttp', extra='[]'),
             self.link(type='xhttp', extra='{"x":1,"x":2}'), self.link(type='ws', path='ok') + '&fp=%FF',
-            'hy2://secret@hy.example?obfs=salamander&obfs-password=secret',
+            'hy2://secret@hy.example?obfs=salamander',
+            'hy2://secret@hy.example?obfs=unknown&obfs-password=secret',
             'hy2://secret@hy.example?mport=10000-20000', self.link(pbk='key', password='different', security='reality', sni='x'),
         ):
             with self.subTest(source=source), self.assertRaises(ValueError):
@@ -83,6 +84,30 @@ class VpnLinks26Tests(unittest.TestCase):
         parsed['streamSettings']['xhttpSettings'] = {'extra': {'downloadSettings': {'sockopt': {'dialerProxy': 'other'}}}}
         with self.assertRaises(ValueError):
             nodes.normalize_outbound(parsed)
+
+    def test_standard_hysteria_salamander_link_preserves_both_passwords(self):
+        for scheme in ('hy2', 'hysteria2'):
+            uri = scheme + '://login%3Apassword@vpn.example:8443?' + urlencode({
+                'alpn': 'h3', 'security': 'tls', 'sni': 'front.example',
+                'obfs': 'salamander', 'obfs-password': 'mask+/=% secret',
+            }) + '#test-node'
+            parsed = nodes.safe_normalize_outbound(uri)
+            stream = parsed['streamSettings']
+            self.assertEqual(stream['hysteriaSettings']['auth'], 'login:password')
+            self.assertEqual(stream['finalmask']['udp'], [
+                {'type': 'salamander', 'settings': {'password': 'mask+/=% secret'}}])
+            self.assertEqual(stream['tlsSettings']['alpn'], ['h3'])
+            self.assertEqual(stream['tlsSettings']['serverName'], 'front.example')
+            self.assertEqual(nodes.normalize_outbound(json.dumps(parsed)), parsed)
+
+    def test_salamander_rejects_missing_obfs_or_conflicting_udp_mask(self):
+        for query in ({'obfs-password': 'mask'}, {'obfs': 'salamander'},
+                      {'obfs': 'salamander', 'obfs-password': 'mask',
+                       'finalmask': json.dumps({'udp': [{'type': 'noise'}]})}):
+            with self.assertRaises(ValueError):
+                nodes.safe_normalize_outbound('hy2://secret@vpn.example?' + urlencode(query))
+        with self.assertRaises(ValueError):
+            nodes.safe_normalize_outbound(self.link(obfs='salamander', **{'obfs-password':'mask'}))
 
 
 class VpnStorePhase7Tests(unittest.TestCase):
@@ -308,7 +333,7 @@ class VpnProbeTests(unittest.TestCase):
                 manager = nodes.VpnNodeManager(state_file=Path(folder) / 'nodes.json')
                 process = mock.Mock(pid=99999999)
                 process.poll.return_value = None
-                answers = [mock.Mock(returncode=0), *(mock.Mock(returncode=0, stdout=code) for code in codes)]
+                answers = [mock.Mock(returncode=0), *(mock.Mock(returncode=0, stdout=code+'|0.125000') for code in codes)]
                 with mock.patch.object(manager, '_require_supported_xkeen'), \
                         mock.patch.object(nodes.subprocess, 'run', side_effect=answers) as run, \
                         mock.patch.object(nodes.subprocess, 'Popen', return_value=process), \
@@ -318,6 +343,10 @@ class VpnProbeTests(unittest.TestCase):
                     result = manager.probe(outbound())
                 self.assertEqual(result['ok'], ok)
                 self.assertIn('checked_at', result)
+                if ok:
+                    self.assertEqual(result['latency_ms'], 125)
+                    self.assertEqual(result['latency_kind'], 'https_ttfb')
+                    self.assertGreaterEqual(result['total_ms'], 0)
                 process.terminate.assert_called_once()
                 curls = [call.args[0] for call in run.call_args_list if call.args[0][0] == manager.curl]
                 self.assertTrue(all('--socks5-hostname' in args and '--noproxy' in args and '--disable' in args for args in curls))

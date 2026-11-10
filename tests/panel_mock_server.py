@@ -141,6 +141,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, BROWSER_JS, "application/javascript")
         elif path == '/assets/inspection.js':
             self.reply(200, INSPECTION_JS, 'application/javascript')
+        elif path == '/assets/xkeen-ui-generator.js':
+            self.reply(200, (REPO / 'tools/router/kdn/web/assets/xkeen-ui-generator.js').read_bytes(), 'application/javascript')
         elif path == "/__mock/stats":
             with STATS_LOCK:
                 body = json.dumps(STATS).encode()

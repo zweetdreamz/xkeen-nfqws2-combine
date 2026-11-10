@@ -251,10 +251,10 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
     <div id="vpnProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="vpnStage">Подготовка</b><span id="vpnPercent">0%</span></div><div class="bar"><span id="vpnBar"></span></div></div>
     <div class="warning">«Проверить» запускает отдельный временный Xray через выбранную ноду и не меняет рабочий VPN. Только кнопка «Сделать активной» после вашего подтверждения перезапустит XKeen/Xray; перед этим создаётся backup и при ошибке выполняется откат. nfqws2 не перезапускается.</div>
   </section>
-  <section class="card"><h2>Добавить VPN-ноду</h2><p class="hint">Поддерживаются VLESS, Trojan и Hysteria2: ссылка или один JSON outbound Xray. Сложные параметры Hysteria2 (обфускация, port-hopping) вводите через JSON. Секреты сохраняются на роутере с правами 0600 и не возвращаются в список.</p>
+  <section class="card"><h2>Добавить VPN-ноду</h2><p class="hint">VLESS, Trojan и Hysteria2: ссылка или один JSON outbound Xray. Hysteria2 с Salamander поддерживается в ссылках; port-hopping задаётся через JSON. Добавление не запускает проверку соединения. Секреты сохраняются на роутере с правами 0600 и не возвращаются в список.</p>
     <div class="field"><label for="vpnNodeName">Имя ноды</label><input id="vpnNodeName" placeholder="Европа — резерв" maxlength="64" autocomplete="off"></div>
     <div class="field"><label for="vpnNodeSource">VLESS / Trojan / Hysteria2 ссылка или JSON outbound</label><textarea id="vpnNodeSource" rows="6" placeholder="vless://… / trojan://… / hy2://… или { &quot;protocol&quot;: &quot;hysteria&quot;, … }" spellcheck="false" autocomplete="off"></textarea></div>
-    <div class="tuner-actions"><button id="addVpnNode" class="apply">Добавить и проверить</button><button id="checkAllVpnNodes">Проверить все</button></div>
+    <div class="tuner-actions"><button id="addVpnNode" class="apply">Добавить</button><button id="checkAllVpnNodes">Проверить все</button></div>
   </section>
   <section class="card" id="vpnMonitorCard"><h2>Контроль активной VPN-ноды и IP</h2>
     <p class="hint">Проверяется работающий Xray и выбранная вами нода. Новый IP требует вашего одобрения. Контроль сообщает результат и сохраняет историю.</p>
@@ -394,6 +394,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
 <footer>XKeen + nfqws2 · локальная панель, доступна только из LAN</footer>
 </main>
 <script src="/assets/browser-diagnostics.js"></script>
+<script src="/assets/xkeen-ui-generator.js"></script>
 <script>
 const logEl=document.getElementById("log"),dot=document.getElementById("dot"),statusText=document.getElementById("statusText");
 const controlHeaders={"X-XKeen-Control":"1","Content-Type":"application/json"};
@@ -409,6 +410,14 @@ function resultText(title,output){const out=output||"",notes=[];if(/no usable IP
 function modeForUi(value){return value==="vless"?"vpn":value}
 function updateService(service,value){const box=document.querySelector('[data-service="'+service+'"]');box.querySelector(".current").textContent=label[value]||value;box.querySelectorAll(".mode").forEach(b=>b.classList.toggle("active",b.dataset.mode===modeForUi(value)))}
 function fmtDate(value){if(!value)return "—";const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString("ru-RU",{hour12:false})}
+function vpnHealthText(health){
+  if(!health)return "Проверка не запускалась";
+  if(!health.ok)return "Не прошла проверку: "+(health.detail||"нет ответа")+" · "+fmtDate(health.checked_utc);
+  const measured=health.latency_kind==="https_ttfb"&&Number.isFinite(health.latency_ms);
+  const timing=measured?"HTTPS, первый байт: "+health.latency_ms+" мс":"";
+  const total=measured?health.total_ms:health.latency_ms;
+  return ["Соединение работает",timing,Number.isFinite(total)?"Вся проверка: "+(total/1000).toFixed(1)+" с":"","HTTP "+health.http_code,fmtDate(health.checked_utc)].filter(Boolean).join(" · ");
+}
 function routeName(value){return label[value]||value||"?"}
 function routesText(routes){if(!routes)return "—";if(routes.discord&&!routes["discord-tcp"])return "Discord "+routeName(routes.discord)+" · YouTube "+routeName(routes.youtube);return "Discord TCP "+routeName(routes["discord-tcp"])+" · Voice "+routeName(routes["discord-voice"])+" · YouTube "+routeName(routes.youtube)+(routes.telegram&&routes.telegram!=="unmanaged"?" · Telegram "+routeName(routes.telegram):"")}
 function setRouteProgress(d){const progress=Math.max(0,Math.min(100,Number(d.progress||0))),vpnJob=String(d.operation||"").startsWith("vpn-");for(const [prefix,show] of [["route",!vpnJob],["vpn",vpnJob]]){const box=document.getElementById(prefix+"Progress");box.classList.toggle("visible",!!d.active&&show);document.getElementById(prefix+"Stage").textContent=d.stage_label||d.status||"Подготовка";document.getElementById(prefix+"Percent").textContent=progress+"%";document.getElementById(prefix+"Bar").style.width=progress+"%"}}
@@ -457,6 +466,15 @@ function scheduleAutomationPoll(active){
 }
 async function refresh(){const latest=latestView("status");try{const d=await api("/api/status");if(!latest())return;updateService("discord-tcp",d.discord_tcp_route||"unknown");updateService("discord-voice",d.discord_voice_route||"unknown");updateService("youtube",d.youtube_route||"unknown");updateService("telegram",d.telegram_route||"unknown");const running=d.xkeen_runtime==="running";dot.className="dot "+(running?"ok":"bad");statusText.textContent=running?"XKeen работает":"XKeen остановлен"}catch(e){if(!latest())return;dot.className="dot bad";statusText.textContent="ошибка статуса";log("status: "+e)}}
 function vpnMessage(message,tone=""){const box=document.getElementById("vpnActionStatus");box.className="automation-save-status"+(tone?" "+tone:"");box.textContent=message}
+function vpnImportSource(source){
+  if(!/^(vless|trojan|hy2|hysteria2):\/\//i.test(source))return source;
+  if(typeof window.generateConfigForCore!=="function")throw new Error("Генератор XKeen-UI не загрузился. Обновите страницу.");
+  try{
+    const result=window.generateConfigForCore(source,"xray");
+    if(result.type!=="outbound")throw new Error("outbound required");
+    return JSON.stringify(JSON.parse(result.content));
+  }catch(_error){throw new Error("Генератор XKeen-UI не смог разобрать ссылку. Проверьте формат ссылки.")}
+}
 async function refreshVpnNodes(){
   if(!tabVisible("vpn-nodes"))return;
   const latest=latestView("vpn-nodes");
@@ -466,9 +484,9 @@ async function refreshVpnNodes(){
     if(!latest())return;
     document.getElementById("recoverVpnNode").hidden=!d.recovery_needed;
     const activeNode=d.nodes.find(node=>node.active);
-    summary.textContent="Активна: "+(activeNode?activeNode.name:d.active)+" · "+d.nodes.length+" нод"+
+    summary.textContent="В конфиге: "+(activeNode?activeNode.name:d.active)+" · "+d.nodes.length+" нод"+
       (d.recovery_needed?" · ВНИМАНИЕ: прежнее переключение прервалось, требуется восстановление":"")+
-      (d.drift?" · Конфиг Xray изменён вне панели":"")+(d.warning?" · "+d.warning:"")+
+      (d.warning?" · "+d.warning:"")+
       ". Все VPN-правила продолжают использовать тег "+d.canonical_tag+".";
     root.textContent="";
     d.nodes.forEach(node=>{
@@ -477,7 +495,7 @@ async function refreshVpnNodes(){
       const title=document.createElement("b");title.textContent=node.name;
       const heading=document.createElement("div");heading.className="vpn-node-title";heading.append(title);
       const endpoint=document.createElement("code");endpoint.className="vpn-node-endpoint";endpoint.textContent=node.endpoint;heading.append(endpoint);
-      const badge=document.createElement("span");badge.className=node.active?"good":"current";badge.textContent=node.active?"АКТИВНА":"РЕЗЕРВ";head.append(heading,badge);
+      const badge=document.createElement("span");badge.className=node.active?"good":"current";badge.textContent=node.active?"В КОНФИГЕ":"РЕЗЕРВ";head.append(heading,badge);
       const meta=document.createElement("div");meta.className="vpn-node-meta vpn-node-tags";
       for(const [value,kind,label] of [[node.protocol,"protocol","Протокол"],[node.network,"transport","Транспорт"],[node.security==="none"?null:node.security,"security","Защита"],[node.flow,"flow","Flow"],[node.fingerprint,"fingerprint","TLS fingerprint"],[node.sni,"sni","SNI"]]){
         if(!value)continue;
@@ -485,7 +503,7 @@ async function refreshVpnNodes(){
         tag.textContent=["protocol","transport","security"].includes(kind)?value.toUpperCase():value;meta.append(tag);
       }
       const health=document.createElement("div");health.className="vpn-node-health"+(node.health?(node.health.ok?" good":" bad"):"");
-      health.textContent=!node.health?"Проверка не запускалась":node.health.ok?"Соединение работает · "+node.health.latency_ms+" мс · HTTP "+node.health.http_code+" · "+fmtDate(node.health.checked_utc):"Не прошла проверку: "+(node.health.detail||"нет ответа")+" · "+fmtDate(node.health.checked_utc);
+      health.textContent=vpnHealthText(node.health);
       const actions=document.createElement("div");actions.className="vpn-node-actions";
       const edit=document.createElement("button");edit.textContent="Редактировать";edit.disabled=!!d.recovery_needed;edit.addEventListener("click",()=>editVpnNode(node));actions.append(edit);
       const check=document.createElement("button");check.textContent="Проверить";check.addEventListener("click",()=>checkVpnNode(node.id));actions.append(check);
@@ -493,8 +511,6 @@ async function refreshVpnNodes(){
         const activate=document.createElement("button");activate.className="apply";activate.textContent="Сделать активной";
         activate.disabled=!!d.drift||!!d.warning||!!d.recovery_needed;activate.addEventListener("click",()=>selectVpnNode(node.id));
         actions.append(activate,trashButton("Убрать ноду в корзину",()=>deleteVpnNode(node.id)));
-      }else if(d.drift&&!d.recovery_needed){
-        const sync=document.createElement("button");sync.textContent="Принять текущий конфиг";sync.addEventListener("click",syncVpnCurrent);actions.append(sync);
       }
       card.append(head,meta,health,actions);root.append(card);
     });
@@ -503,14 +519,13 @@ async function refreshVpnNodes(){
 }
 async function checkVpnNode(id){busy(true);vpnMessage("Проверяю "+id+" через отдельный Xray…");try{const d=await operation("/api/vpn-nodes/check/"+encodeURIComponent(id),"Проверка VPN-ноды "+id);vpnMessage(d.health.ok?"Соединение "+id+" работает.":"Нода "+id+" не прошла проверку: "+d.health.detail,d.health.ok?"good":"bad");await refreshVpnNodes()}catch(e){vpnMessage("Ошибка проверки: "+e,"bad");log("ошибка проверки VPN: "+e)}finally{busy(false)}}
 async function checkAllVpnNodes(){try{const d=await api("/api/vpn-nodes");for(const node of d.nodes)await checkVpnNode(node.id)}catch(e){vpnMessage("Ошибка проверки нод: "+e,"bad")}}
-async function addVpnNode(){const name=document.getElementById("vpnNodeName").value.trim(),source=document.getElementById("vpnNodeSource").value.trim();if(!name||!source){vpnMessage("Укажите имя и ссылку или JSON outbound.","bad");return}busy(true);vpnMessage("Проверяю и добавляю ноду "+name+"…");try{const d=await operation("/api/vpn-nodes/add","Добавление VPN-ноды "+name,JSON.stringify({name,source}));document.getElementById("vpnNodeSource").value="";document.getElementById("vpnNodeName").value="";vpnMessage(d.node.health.ok?"Нода добавлена и соединение работает.":"Нода сохранена, но проверка не прошла: "+d.node.health.detail,d.node.health.ok?"good":"bad");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось добавить ноду: "+e,"bad");log("ошибка добавления VPN: "+e)}finally{busy(false)}}
+async function addVpnNode(){const name=document.getElementById("vpnNodeName").value.trim(),raw=document.getElementById("vpnNodeSource").value.trim();if(!name||!raw){vpnMessage("Укажите имя и ссылку или JSON outbound.","bad");return}busy(true);vpnMessage("Добавляю ноду "+name+"…");try{const source=vpnImportSource(raw);await operation("/api/vpn-nodes/add","Добавление VPN-ноды "+name,JSON.stringify({name,source}));document.getElementById("vpnNodeSource").value="";document.getElementById("vpnNodeName").value="";vpnMessage("Нода добавлена. Для проверки соединения нажмите «Проверить» в её карточке.","good");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось добавить ноду: "+e,"bad");log("ошибка добавления VPN: "+e)}finally{busy(false)}}
 function editVpnNode(node){document.getElementById("vpnEditId").value=node.id;document.getElementById("vpnEditName").value=node.name;document.getElementById("vpnEditSource").value="";document.getElementById("vpnEditSource").disabled=!!node.active;document.getElementById("vpnEditHint").textContent=node.active?"Активную ноду можно переименовать. Для изменения подключения сначала выберите резервную ноду.":"Параметры сохраняются только в реестре. Рабочий outbound не изменится.";document.getElementById("vpnEditCard").hidden=false}
 function cancelVpnEdit(){document.getElementById("vpnEditCard").hidden=true;document.getElementById("vpnEditSource").value="";document.getElementById("vpnEditId").value=""}
-async function saveVpnEdit(){const id=document.getElementById("vpnEditId").value,body={name:document.getElementById("vpnEditName").value.trim()},source=document.getElementById("vpnEditSource").value.trim();if(!id||!body.name)return;if(source&&!document.getElementById("vpnEditSource").disabled)body.source=source;busy(true);try{await api("/api/vpn-nodes/update/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:JSON.stringify(body)});cancelVpnEdit();vpnMessage("Нода сохранена. Рабочий VPN не переключался; новые параметры требуют отдельной проверки.","good");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось сохранить ноду: "+e,"bad")}finally{busy(false)}}
+async function saveVpnEdit(){const id=document.getElementById("vpnEditId").value,body={name:document.getElementById("vpnEditName").value.trim()},source=document.getElementById("vpnEditSource").value.trim();if(!id||!body.name)return;busy(true);try{if(source&&!document.getElementById("vpnEditSource").disabled)body.source=vpnImportSource(source);await api("/api/vpn-nodes/update/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:JSON.stringify(body)});cancelVpnEdit();vpnMessage("Нода сохранена. Рабочий VPN не переключался; новые параметры требуют отдельной проверки.","good");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось сохранить ноду: "+e,"bad")}finally{busy(false)}}
 async function selectVpnNode(id){if(!confirm("Сделать VPN-ноду «"+id+"» активной для ВСЕХ правил Xray с тегом vless-reality?\n\nСначала пройдёт проверка соединения и будет создан backup. Затем XKeen/Xray перезапустится; панель не запускает перезапуск nfqws2. При ошибке старый VPN автоматически восстановится."))return;busy(true);vpnMessage("Переключаю общий VPN на "+id+"…");try{const d=await api("/api/vpn-nodes/activate/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:"{}"});await watchRouteJob(d.job_id,"VPN-нода "+id,{post:true,refreshVpn:false});vpnMessage("Общий VPN переключён на "+id+".","good")}catch(e){vpnMessage("Переключение не удалось: "+e,"bad");busy(false)}finally{await refreshVpnNodes()}}
 async function recoverVpnNode(){if(!confirm("Восстановить прежнюю VPN-ноду после прерванного переключения?\n\nПанель вернёт сохранённый outbound и при необходимости перезапустит XKeen/Xray. nfqws2 не перезапускается скриптом."))return;busy(true);vpnMessage("Восстанавливаю прежнюю VPN-ноду…");try{const d=await api("/api/vpn-nodes/recover",{method:"POST",headers:controlHeaders,body:"{}"});await watchRouteJob(d.job_id,"Восстановление VPN",{post:true,refreshVpn:false});vpnMessage("Прежняя VPN-нода восстановлена.","good")}catch(e){vpnMessage("Восстановление не удалось: "+e,"bad");busy(false)}finally{await refreshVpnNodes()}}
 async function deleteVpnNode(id){if(!confirm("Убрать резервную VPN-ноду «"+id+"» в корзину? Активный VPN и маршруты не изменятся."))return;try{await api("/api/vpn-nodes/delete/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:"{}"});vpnMessage("Нода "+id+" убрана в корзину.","good");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось убрать ноду: "+e,"bad")}}
-async function syncVpnCurrent(){if(!confirm("Принять текущий outbound vless-reality из Xray как активную ноду? Это не перезапускает службы, но заменит сохранённый вариант этой ноды."))return;try{await api("/api/vpn-nodes/sync-current",{method:"POST",headers:controlHeaders,body:"{}"});vpnMessage("Текущий outbound сохранён в реестре.","good");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось синхронизировать: "+e,"bad")}}
 async function refreshProfiles(){if(!tabVisible("import"))return;const latest=latestView("profiles");const root=document.getElementById("profiles");try{const d=await api("/api/imported");if(!latest())return;root.textContent="";d.profiles.forEach(p=>{const box=document.createElement("article");box.className="profile";const h=document.createElement("h3");h.textContent=serviceLabel[p.service];const family=document.createElement("div");family.className="family";family.textContent=p.installed?(p.family+" · "+p.candidate_id+" · "+fmtDate(p.installed_utc)):(p.error||"Встроенный профиль");box.append(h,family);if(p.installed){const b=document.createElement("button");b.textContent="Вернуть встроенный";b.addEventListener("click",()=>clearImport(p.service));box.append(b)}root.append(box)});document.getElementById("rollbackImport").disabled=!d.rollback_available||!!routeWatch||operationStarting}catch(e){if(!latest())return;root.textContent="Ошибка: "+e;log("профили: "+e)}}
 async function xkeenAction(action){busy(true);log("xkeen -"+action,true);try{const d=await operation("/api/xkeen/"+action,"xkeen -"+action);log(resultText("xkeen -"+action,d.output))}catch(e){log("ошибка: "+e)}finally{busy(false);await refresh();await refreshProfiles()}}
 function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms))}

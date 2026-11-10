@@ -49,7 +49,6 @@ PAGE_READERS = (
     ("applyVersion", "d", "GET /api/route/result"),
     ("applyTunerResult", "d", "GET /api/route/result"),
     ("checkVpnNode", "d", "GET /api/route/result"),
-    ("addVpnNode", "d", "GET /api/route/result"),
     ("postChecksAfter", "d", "GET /api/route/result"),
 )
 JS_METHODS = frozenset({"length", "map", "forEach", "slice", "join", "filter", "some", "includes"})

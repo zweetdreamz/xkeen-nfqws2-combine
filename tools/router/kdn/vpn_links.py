@@ -132,8 +132,17 @@ def parse_link(source, tag='vless-reality'):
         stream['xhttpSettings' if network == 'xhttp' else 'splithttpSettings'] = xhttp
     if get('finalmask'):
         stream['finalmask'] = _object(get('finalmask'))
-    # Hopping/obfs subscription dialects are not interchangeable. Full Xray
-    # finalmask JSON is supported; unknown URI dialects are explicit rejection.
+    if is_hy:
+        obfs, obfs_password = get('obfs'), get('obfs-password')
+        if obfs or obfs_password:
+            if obfs != 'salamander' or not obfs_password:
+                raise ValueError('Hysteria2 URI requires obfs=salamander and obfs-password')
+            mask = stream.setdefault('finalmask', {})
+            if mask.get('udp'):
+                raise ValueError('conflicting obfs and finalmask UDP masks; use one representation')
+            mask['udp'] = [{'type': 'salamander', 'settings': {'password': obfs_password}}]
+    # Port-hopping dialects are not interchangeable; keep explicit rejection
+    # rather than silently losing a transport option.
     if set(query) - used:
         raise ValueError('неподдерживаемые параметры URI или транспорта; используйте JSON outbound')
     return {'tag': tag, 'protocol': 'hysteria' if is_hy else protocol,

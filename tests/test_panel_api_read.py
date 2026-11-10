@@ -87,7 +87,7 @@ class ReadTests(panel_harness.PanelTestCase):
                     self.assertEqual((response.status, json.loads(response.body)), (200 if ok else 500, value))
         self.assertEqual({r.pattern for r in self.read.READ_ROUTES if r.heavy}, {"/api/status", "/api/checks/config"})
         self.assertTrue(all(r.method == "GET" for r in self.read.READ_ROUTES))
-        self.assertEqual(len(self.read.READ_ROUTES), 15)
+        self.assertEqual(len(self.read.READ_ROUTES), 16)
 
     def test_domain_wrappers(self):
         cases = [("/api/tuner/sources", self.read.flowseal, "tuner_sources", {"ok": True, "sources": []}, None),

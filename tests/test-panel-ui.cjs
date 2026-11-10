@@ -383,6 +383,37 @@ async function importValidationChecks(browser, errors) {
   console.log('import-validation-ui-tests-ok (file changes, pending checks, reverse responses and payload)');
 }
 
+async function vpnCurrentFileViewChecks(browser, errors) {
+  const original = await (await fetch(BASE+'/api/vpn-nodes')).json();
+  const current = {id:'current',name:'Current node',active:true,endpoint:'changed.example:9443',protocol:'vless',network:'tcp',security:'reality',health:null};
+  await setMock({path:'/api/vpn-nodes',body:{...original,nodes:[current],drift:false}});
+  const page = await openPanel(browser, errors);
+  try {
+    await page.click('.tab[data-tab="vpn-nodes"]');
+    await page.waitForFunction(()=>document.getElementById('vpnNodesList').textContent.includes('changed.example:9443'));
+    const cards=page.locator('#vpnNodesList .vpn-node-card');
+    assert.equal(await cards.count(), 1);
+    assert.match(await cards.first().textContent(), /В КОНФИГЕ/);
+    assert.doesNotMatch(await cards.first().textContent(), /РАСХОЖДЕНИЕ|Принять текущий конфиг/);
+    assert.equal(await cards.first().getByRole('button',{name:'Проверить',exact:true}).isDisabled(),false);
+    const parsed=await page.evaluate(()=>{
+      const encryption='mlkem768x25519plus.native.0rtt.'+'A'.repeat(43);
+      const source='vless://6f1c7e0a-6b1a-4c35-9a52-7a3f2b8e9c10@vpn.example:443?'+new URLSearchParams({encryption,flow:'xtls-rprx-vision',fp:'firefox',pbk:'A'.repeat(43),security:'reality',sid:'aabb',sni:'front.example',spx:'%2Fonce','support-x25519mlkem768':'true',type:'tcp'});
+      const vless=JSON.parse(vpnImportSource(source));
+      const hy=JSON.parse(vpnImportSource('hysteria2://fixture-auth@vpn.example:8443?alpn=h3&obfs=salamander&obfs-password=fixture-mask&security=tls&sni=vpn.example'));
+      return {vless,hy,encryption};
+    });
+    assert.equal(parsed.vless.settings.encryption, parsed.encryption);
+    assert.equal(parsed.vless.streamSettings.realitySettings.fingerprint,'firefox');
+    assert.equal(parsed.vless.streamSettings.realitySettings.spiderX,'%2Fonce');
+    assert.equal(parsed.hy.streamSettings.finalmask.udp[0].settings.password,'fixture-mask');
+    assert.equal(parsed.hy.streamSettings.hysteriaSettings.auth,'fixture-auth');
+  } finally {
+    await page.close();
+    await setMock({path:'/api/vpn-nodes',body:original});
+  }
+}
+
 async function main() {
   setTimeout(()=>{console.error("panel UI test timeout");process.exit(1)},120000).unref();
   const server = await startServer();
@@ -396,8 +427,20 @@ async function main() {
     await importValidationChecks(browser, errors);
     await pollingChecks(browser, errors);
     await inspectionChecks(browser, errors);
+    await vpnCurrentFileViewChecks(browser, errors);
     // Four independent route cards with their current modes.
     let page = await openPanel(browser, errors);
+    assert.equal(await page.locator('#addVpnNode').textContent(), 'Добавить');
+    const healthText = await page.evaluate(() => [
+      vpnHealthText(null),
+      vpnHealthText({ok:true,latency_ms:14463,http_code:200}),
+      vpnHealthText({ok:true,latency_ms:125,latency_kind:'https_ttfb',total_ms:14463,http_code:200}),
+    ]);
+    assert.equal(healthText[0], 'Проверка не запускалась');
+    assert.match(healthText[1], /Вся проверка: 14\.5 с/);
+    assert.doesNotMatch(healthText[1], /14463 мс/);
+    assert.match(healthText[2], /HTTPS, первый байт: 125 мс/);
+    assert.match(healthText[2], /Вся проверка: 14\.5 с/);
     const cards = await page.$$eval(".service", (items) =>
       items.map((item) => [item.dataset.service, item.querySelector(".current").textContent])
     );
@@ -581,7 +624,7 @@ async function main() {
         const queued={ok:true,job_id:jobId,operation:kind,status:"queued",active:true,output:"",service:"youtube"};
         const done={...queued,status:fails?"failed":"completed",active:false,result_ok:!fails,code:fails?1:0,output:fails?"engine failed":"full result output"};
         if(name==="checkVpnNode")done.health={ok:true,latency_ms:1,http_code:204};
-        if(name==="addVpnNode")done.node={id:"node1",health:{ok:true}};
+        if(name==="addVpnNode")done.node={id:"node1",health:null};
         await setMock({method:"POST",path:apiPath,status:202,body:queued});
         await setMock({path:"/api/route/status",sequence:[queued,{...done,output:"short status"}]});
         await setResponse("/api/route/result",done);

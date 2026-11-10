@@ -76,7 +76,8 @@ def main(binary):
                     count += 1
         mask = {'udp': [{'type': 'udphop', 'settings': {'mode': 'intervalremote',
                 'remotePorts': '10000-20000', 'interval': '30'}}], 'quicParams': {'congestion': 'bbr'}}
-        for extra in ({}, {'finalmask': json.dumps(mask)}, {'pinSHA256': 'ab' * 32}):
+        for extra in ({}, {'finalmask': json.dumps(mask)}, {'pinSHA256': 'ab' * 32},
+                      {'obfs': 'salamander', 'obfs-password': 'fixture-mask-password'}):
             uri = 'hy2://test-password@127.0.0.1:443?' + urlencode({'sni': 'example.com', **extra})
             nodes.atomic_json(root / 'matrix.json', manager._probe_config(nodes.normalize_outbound(uri), free_port()))
             done = subprocess.run([binary, 'run', '-test', '-c', str(root / 'matrix.json')],

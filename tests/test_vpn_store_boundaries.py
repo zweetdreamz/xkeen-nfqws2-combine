@@ -46,9 +46,10 @@ def test_oversized_publication_keeps_registry_live_config_and_artifacts(store, m
         # Compact imports can fit although indentation of the surviving node cannot.
         state['nodes']['current']['outbound']['settings']['headers'] = {f'X-{i}': '' for i in range(100)}
         store.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
+        store.outbound_file.write_bytes(encoded({'outbounds': [state['nodes']['current']['outbound']]}))
     candidate = copy.deepcopy(state)
     if operation == 'add':
-        candidate['nodes']['extra'] = {'name': 'extra', 'outbound': outbound(), 'created_utc': NOW, 'health': HEALTH}
+        candidate['nodes']['extra'] = {'name': 'extra', 'outbound': outbound(), 'created_utc': NOW, 'health': None}
         perform = lambda: store.add('extra', json.dumps(outbound()))
     elif operation == 'update':
         candidate['nodes']['reserve'].update(name='Новое имя', updated_utc=NOW)

@@ -90,6 +90,10 @@ def get_inspection_script(request):
     return router.text_response(200, _load_asset('inspection.js'), 'application/javascript; charset=utf-8')
 
 
+def get_vpn_generator_script(request):
+    return router.text_response(200, _load_asset('xkeen-ui-generator.js'), 'application/javascript; charset=utf-8')
+
+
 def get_diagnostic_targets(request):
     module = toolmods.diagnostics_module()
     return router.json_response(200, {"ok": True,
@@ -160,6 +164,7 @@ READ_ROUTES = tuple(router.Route("GET", path, handler, errors=exceptions, heavy=
     ("/tools/reset-discord-cache.ps1", get_cache_helper, (), False),
     ("/assets/browser-diagnostics.js", get_browser_script, (), False),
     ("/assets/inspection.js", get_inspection_script, (), False),
+    ("/assets/xkeen-ui-generator.js", get_vpn_generator_script, (), False),
     ("/api/diagnostics/targets", get_diagnostic_targets, (), False),
     ("/api/status", get_status, (), True),
     ("/api/service-configs", get_service_configs, ((OSError, 500), (ValueError, 500), (RuntimeError, 500)), False),

@@ -23,6 +23,26 @@ def outbound(address="vpn.example"):
 
 
 class VpnNodeTests(unittest.TestCase):
+    def test_external_config_is_authoritative_without_registry_write_or_stale_health(self):
+        self.manager.add('reserve', json.dumps(outbound('reserve.example')))
+        state = self.manager.load()
+        state['nodes']['current']['health'] = {'ok': True, 'latency_ms': 100}
+        self.manager._save_state(state)
+        before = self.manager.state_file.read_bytes()
+        live = outbound('changed.example')
+        live['settings']['port'] = 8443
+        self.outbounds.write_text(json.dumps({'outbounds': [live]}))
+        public = self.manager.status()
+        self.assertFalse(public['drift'])
+        active = next(row for row in public['nodes'] if row['active'])
+        self.assertEqual(active['endpoint'], 'changed.example:8443')
+        self.assertIsNone(active['health'])
+        self.assertEqual(self.manager.state_file.read_bytes(), before)
+        self.assertNotIn(UUID, json.dumps(public))
+        with mock.patch.object(self.manager, 'probe', return_value={'ok': True}) as probe:
+            self.manager.check('current')
+        self.assertEqual(probe.call_args.args[0]['settings']['port'], 8443)
+
     def test_public_connection_metadata_excludes_credentials(self):
         value = outbound()
         value['settings']['flow'] = 'xtls-rprx-vision'
@@ -118,12 +138,12 @@ class VpnNodeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_outbound(hy)
 
-    def test_add_checks_immediately_without_changing_live_config(self):
+    def test_add_saves_without_network_probe_or_changing_live_config(self):
         before = self.outbounds.read_bytes()
         with mock.patch.object(self.manager, "probe", return_value={"ok": True, "checked_utc": "now"}) as probe:
             result = self.manager.add("vless_2", json.dumps(outbound("other.example")))
-        probe.assert_called_once()
-        self.assertTrue(result["node"]["health"]["ok"])
+        probe.assert_not_called()
+        self.assertIsNone(result["node"]["health"])
         self.assertEqual(before, self.outbounds.read_bytes())
         public = self.manager.status()
         self.assertEqual(public["active"], "current")
