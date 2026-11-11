@@ -141,7 +141,11 @@ class HttpLayerTests(panel_harness.PanelTestCase):
         self.assertNotIn("__SERVICE_CONFIG_", page)
         self.assertIn('data-tab="automation"', page)
         self.assertIn('id="automationSaveStatus"', page)
-        self.assertIn('class="auto-toggle"', page)
+        self.assertRegex(
+            page,
+            r'<input(?=[^>]*\bid="autoEnabled")(?=[^>]*\btype="checkbox")'
+            r'(?=[^>]*\brole="switch")[^>]*>',
+        )
         self.assertIn('Сохранено. Расписание выключено.', page)
 
     def test_automation_api_starts_disabled_and_validates_saved_schedule(self):

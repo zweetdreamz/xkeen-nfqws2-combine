@@ -15,7 +15,7 @@ try{if(localStorage.getItem('xkeen-theme')==='dark'){document.documentElement.da
 --bg:#f6f8fb;--surface:#fff;--surface-2:#f8fafc;--sunken:#f0f3f8;--line:#e5eaf1;--line-strong:#cbd3df;
 --text:#182230;--muted:#5d6b7e;--faint:#606f82;
 --accent:#2563eb;--accent-strong:#1d4ed8;--accent-soft:#eaf1ff;--on-accent:#fff;
---green:#0d7851;--green-soft:#e6f5ee;--red:#d1343f;--red-soft:#fdecee;--amber:#a85b00;--amber-soft:#fff4e0;
+--green:#0d7851;--green-soft:#e6f5ee;--red:#c42b36;--red-soft:#fdecee;--amber:#a85b00;--amber-soft:#fff4e0;
 --direct:#52657d;--zapret:#0d7452;--vpn:#1d4ed8;
 --shadow:0 1px 3px rgba(16,24,40,.035);--ring:0 0 0 3px rgba(37,99,235,.24);
 --radius:16px;--radius-sm:10px;--mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace}
@@ -249,11 +249,43 @@ pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);bo
 @media(min-width:1600px){.page{margin-left:calc(232px + (100vw - 1512px)/2)}}
 @media(max-width:1100px) and (min-width:761px){.sidebar{width:200px;padding-inline:12px}.page{margin-left:200px;width:calc(100% - 200px);padding-inline:24px}.brand{padding-inline:10px}.brand-name{font-size:16px}.service{padding:16px}.service-head{gap:8px}.service-title{gap:8px}.service-icon{width:30px;height:30px}.mode{gap:4px;padding-inline:3px}.legend{gap:12px}.profile-head{flex-wrap:wrap}.skip-link{left:216px}}
 @media(max-width:760px){.sidebar{display:none}.page{width:100%;margin:0;padding:0 20px 28px}.topbar{height:64px;padding:0;flex-direction:row;align-items:center;gap:8px}.breadcrumb{font-size:13px;font-weight:650;color:var(--text)}.breadcrumb .i,.breadcrumb span:last-child{display:none}.header-tools{gap:12px}.status{font-size:11px}.theme-toggle{width:34px;height:34px;min-height:34px}.mobile-navigation{display:block;margin-top:18px}.mobile-navigation label{display:block;color:var(--faint);font-size:11px;margin-bottom:6px}.mobile-navigation select{width:100%;min-height:44px;padding:10px 12px;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;color:var(--text);font:600 14px system-ui}.page-heading{padding:22px 0}.page-heading h1{font-size:27px}.page-heading p{font-size:13px}.page-heading .eyebrow{display:none}.card{padding:20px;margin-top:16px}.routes-card{padding:0}.services{gap:12px}.service{padding:18px}.service-head{margin-bottom:16px}.service .modes{max-width:none}.mode{min-height:42px;font-size:13px}.legend{grid-template-columns:1fr;gap:6px}.legend>div{line-height:1.6}.warning{padding:12px;font-size:12px}.xkeen-card{gap:14px}.xkeen-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;gap:6px}.xkeen-actions button{padding:10px 6px;gap:5px;font-size:11px}.xkeen-actions .i{width:14px;height:14px}.xkeen-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.xkeen-actions .restart{grid-column:1/-1}.profile-head{flex-wrap:wrap;gap:10px}.profile-head>.tuner-actions{flex:auto}.vpn-node-head{flex-wrap:wrap}.vpn-node-actions button{min-height:40px}.tuner-actions>button,.toolbar>button{min-height:42px}.console-card{padding:18px 0 0}.skip-link{left:12px}.field input,.field select,.field textarea{font-size:16px}.automation-grid,.tuner-grid{gap:16px}footer{font-size:10px}}
-@media(max-width:380px){.page{padding-inline:14px}.card{padding:16px}.routes-card{padding:0}.service{padding:14px}.service-head{gap:8px}.service-title{gap:8px}.service-icon{width:30px;height:30px}.service h3{font-size:14px}.current{font-size:9px;padding-inline:6px}.breadcrumb{font-size:12px}.status{font-size:10px;gap:6px}.header-tools{gap:8px}.xkeen-actions{grid-template-columns:1fr}.dns-options{grid-template-columns:1fr}.console-card{padding:16px 0 0}.notify-enable{font-size:13px}}
+@media(max-width:380px){.page{padding-inline:14px}.card{padding:16px}.routes-card{padding:0}.service{padding:14px}.service-head{gap:8px}.service-title{gap:8px}.service-icon{width:30px;height:30px}.service h3{font-size:14px}.current{font-size:10px;padding-inline:6px}.breadcrumb{font-size:12px}.status{font-size:10px;gap:6px}.header-tools{gap:8px}.xkeen-actions{grid-template-columns:1fr}.dns-options{grid-template-columns:1fr}.console-card{padding:16px 0 0}.notify-enable{font-size:13px}}
 .vpn-node-actions{display:flex;flex-wrap:nowrap;flex:none;gap:6px;margin:0;padding:0;border:0;justify-content:flex-end}
 .vpn-node-actions button{display:inline-flex;align-items:center;justify-content:center;flex:none;width:34px;height:34px;min-height:34px;padding:0;font-size:0;border-radius:8px}
 .vpn-node-actions .i{width:16px;height:16px}.vpn-node-title{flex:1;min-width:0}.vpn-node-head{gap:14px;flex-wrap:nowrap}
 @media(max-width:760px){.vpn-node-head{flex-wrap:wrap}.vpn-node-head>.vpn-node-title{flex-basis:100%}.vpn-node-actions{margin-left:auto}.vpn-node-actions button{width:38px;height:38px;min-height:38px}}
+
+/* Refined controls, check results and activity surfaces. */
+:root{--radius:18px;--control-track:#8190a4;--log-bg:#f2f5f9;--log-text:#344256;--log-time:#596b82}
+:root[data-theme="dark"]{--control-track:#536278;--log-bg:#111821;--log-text:#c3d0e1;--log-time:#8a9db6}
+.card{border-radius:16px;padding:24px}.card h2{font-size:16px;letter-spacing:-.35px}.service{padding:22px;border-radius:16px}.service h3{font-size:16px}.service-head{margin-bottom:22px}.service-icon{width:40px;height:40px;border-radius:12px}.modes{padding:5px;border-radius:11px}.mode{border-radius:7px;min-height:40px}.service .current{letter-spacing:.02em;font-size:10px;padding:4px 9px}
+.routes-card{padding:0;border:0;border-radius:0}.page-heading{padding-block:32px 26px}.page-heading h1{font-size:32px;font-weight:650}.routes-card>.hint{margin-bottom:20px}.section-head{gap:10px}.card>.section-head{margin-bottom:10px}
+.legend{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;margin:20px 0 0;padding:18px 0 0;border-top:1px solid var(--line)}
+.legend>div{padding:0;border:0;background:none}.legend dt{display:flex;align-items:center;gap:8px;color:var(--text);font-size:12px;font-weight:650;line-height:1.4}.legend dt::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--c);flex:none}.legend dd{margin:5px 0 0 14px;color:var(--muted);font-size:12px;line-height:1.6}
+.route-notice{display:flex;gap:9px;align-items:flex-start;padding:13px 0 0;margin:0;color:var(--muted);font-size:12px;line-height:1.6}.route-notice .i{width:15px;height:15px;margin-top:2px;color:var(--faint)}
+.switch-control{position:relative;display:inline-flex;flex:none;width:44px;height:26px;vertical-align:middle}
+.switch-control input[type=checkbox]{position:absolute;inset:0;z-index:1;opacity:0;appearance:none;width:44px!important;height:26px!important;min-width:44px!important;min-height:26px!important;margin:0!important;padding:0!important;cursor:pointer}
+.switch-track{display:block;width:44px;height:26px;border:1px solid var(--control-track);border-radius:999px;background:var(--control-track);transition:background .18s ease,border-color .18s ease;pointer-events:none}
+.switch-track::after{content:"";position:absolute;top:4px;left:4px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #0002;transition:transform .18s cubic-bezier(.2,.8,.2,1)}
+.switch-control input:checked+.switch-track{background:var(--accent);border-color:var(--accent)}.switch-control input:checked+.switch-track::after{transform:translateX(18px);background:var(--on-accent)}
+.switch-control input:focus-visible+.switch-track{outline:2px solid var(--accent);outline-offset:4px}.switch-control input:disabled{cursor:not-allowed}.switch-control:has(input:disabled){opacity:.45}
+.setting-switch{display:flex;align-items:center;justify-content:space-between;gap:20px;cursor:pointer;min-height:60px}.setting-copy{display:grid;gap:5px;min-width:0}.setting-copy strong{font-size:14px;font-weight:600;line-height:1.35;color:var(--text)}.setting-copy small{font-size:12px;font-weight:400;line-height:1.5;color:var(--muted)}
+.schedule-enable{margin:16px 0 22px;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2)}
+.automation-scenario{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px}.automation-scenario .scenario-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;min-height:30px}.automation-scenario h3{margin:0;font-size:15px}.automation-scenario .field+.field{margin-top:16px}.automation-scenario:has(.auto-service-enabled:not(:checked)){background:var(--surface-2)}
+.field .setting-switch{font-weight:400;font-size:14px}.notify-enable{gap:12px;font-size:13px}.notify-header{padding-bottom:20px;margin-bottom:22px;border-bottom:1px solid var(--line)}.notify-heading h2{font-size:17px}.notify-event{min-height:38px;padding-block:8px}.notify-event-group{background:var(--surface);padding:14px 16px;border-radius:12px}
+.form-note{margin:10px 0 0;font-size:12px;line-height:1.5;color:var(--muted)}.tuner-actions{align-items:center}.automation-grid{margin-top:22px}.notify-statusline{margin-top:22px;padding-top:16px}
+.vpn-node-card{border-radius:14px;padding:20px}.vpn-node-card.active{padding-left:18px;border-left-color:var(--accent)}.vpn-node-title{gap:8px 12px}.vpn-node-title>b{font-size:16px;letter-spacing:-.2px}.vpn-node-endpoint{flex-basis:100%;font-size:12px}.vpn-node-head{align-items:center}.vpn-node-head .good{font-size:10px;letter-spacing:.03em;background:var(--accent-soft);color:var(--accent);padding:3px 7px;border-radius:5px;white-space:nowrap}
+.vpn-node-tags{margin:14px 0 18px}.vpn-checks{border-top:1px solid var(--line);padding-top:4px}.vpn-check{min-width:0}.vpn-check-row{display:flex;align-items:center;flex-wrap:wrap;gap:10px;min-height:42px;font-size:12px;line-height:1.45}.vpn-check-label{flex:none;width:110px;color:var(--muted)}.vpn-check-state{justify-self:start;white-space:nowrap;font-weight:600;color:var(--muted);font-size:11px;border-radius:5px;padding:3px 7px;background:var(--surface-2)}.vpn-check-state.good{background:var(--green-soft);color:var(--green)}.vpn-check-state.bad{background:var(--red-soft);color:var(--red)}.vpn-check-latency{min-width:52px;font-variant-numeric:tabular-nums;color:var(--text);font-size:14px;text-align:left;white-space:nowrap}.vpn-check-row time{font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted);white-space:nowrap}.vpn-check-error{grid-column:1/-1;margin:0 0 8px;color:var(--red);overflow-wrap:anywhere;font-size:12px}
+.vpn-check-details{margin:0}.vpn-check-details>summary.vpn-check-row{list-style:none;font-size:12px;padding:10px 0;color:var(--text)}.vpn-check-details>summary::-webkit-details-marker{display:none}.vpn-check-details[open]>summary{margin-bottom:8px}.check-chevron{width:13px;height:13px;margin-left:auto;color:var(--faint);transition:transform .18s ease}.vpn-check-details[open] .check-chevron{transform:rotate(90deg)}.vpn-check+.vpn-check{border-top:1px solid var(--line)}.check-detail-metrics{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12px;color:var(--muted);padding:10px 12px;background:var(--surface-2);border-radius:7px}.vpn-check-details pre{margin-top:8px;min-height:0;font-size:11px}
+.tuner-run-head{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:20px}.tuner-run-head .current{max-width:50%;overflow-wrap:anywhere;white-space:normal}.run-summary{display:flex;align-items:flex-start;gap:14px;padding:18px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);margin-bottom:20px}.run-icon{display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:9px;background:var(--surface);color:var(--muted)}.run-icon .i{width:19px;height:19px}.run-title{font-size:15px;font-weight:600;letter-spacing:-.15px;line-height:1.45;color:var(--text)}.run-summary:has([data-tone=good]) .run-icon{background:var(--green-soft);color:var(--green)}.run-summary:has([data-tone=bad]) .run-icon{background:var(--red-soft);color:var(--red)}.run-summary:has([data-tone=active]) .run-icon{background:var(--accent-soft);color:var(--accent)}
+#tunerVerification{margin:5px 0 0;font-size:12px;line-height:1.65;color:var(--muted)}.progress-line{font-size:12px;font-variant-numeric:tabular-nums;margin:0 0 14px}.progress-line:has(#tunerProgress:empty):has(#tunerProbe:empty){display:none}
+.probe-table{width:100%;table-layout:fixed;border-collapse:collapse;margin:0;font-size:13px}.probe-table th{text-align:left;padding:0 12px 10px;color:var(--muted);font-size:11px;font-weight:500;border-bottom:1px solid var(--line)}.probe-table th:first-child{padding-left:0}.probe-table th:nth-child(2){width:86px}.probe-table th:last-child{width:88px;text-align:right;padding-right:0}.probe-row td{padding:12px;border-bottom:1px solid var(--line);vertical-align:middle}.probe-row td:first-child{padding-left:0;overflow-wrap:anywhere}.probe-row td:last-child{padding-right:0;text-align:right;white-space:nowrap;font-size:12px;font-variant-numeric:tabular-nums}.probe-row small{display:block;color:var(--muted);font-size:11px;margin-top:3px;line-height:1.4}.probe-row .vpn-check-state{display:inline-block}.probe-table .empty{padding:22px 12px;text-align:center;border-radius:0;background:none;font-size:12px}.probe-table .empty .i{display:block;margin:0 auto 10px;color:var(--faint)}
+.log-details{margin-top:18px;border:1px solid var(--line);border-radius:10px;overflow:hidden}.log-details>summary{display:flex;align-items:center;gap:9px;list-style:none;padding:12px 14px;background:var(--surface-2);color:var(--muted);font-size:12px;margin:0!important}.log-details>summary::-webkit-details-marker{display:none}.log-details>summary::after{content:"+";font-size:18px;font-weight:400;margin-left:4px;line-height:1}.log-details[open]>summary::after{content:"−"}.log-details>summary .i{width:15px;height:15px}.log-count{margin-left:auto;font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}.log-details>pre{white-space:pre;overflow-wrap:normal;word-break:normal;border:0;border-top:1px solid var(--line);border-radius:0;min-height:0;max-height:300px}
+pre{background:var(--log-bg);color:var(--log-text);padding:16px 18px;line-height:1.8;font-size:12px;scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent;tab-size:2}pre::-webkit-scrollbar{width:7px;height:7px}pre::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px}.log-shell{overflow:hidden;border:1px solid var(--line);border-radius:11px;background:var(--log-bg)}.log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted);background:var(--surface-2)}.log-shell pre{border:0;border-radius:0;min-height:84px;margin:0;background:var(--log-bg);color:var(--log-text)}.log-time{color:var(--log-time)}.log-entry.is-error{color:var(--red)}.console-card{padding:22px 0 0;border-radius:0}.console-card .console-head{margin-bottom:14px}.console-card h2{font-size:13px}.console-card pre{font-size:12px}.log-scope{font-size:12px;line-height:1.6;color:var(--muted);margin:12px 0 0}
+@media(max-width:760px){.page-heading h1{font-size:28px}.card{padding:20px}.routes-card{padding:0}.service{padding:18px}.service-head{margin-bottom:18px}.legend{grid-template-columns:1fr;gap:10px;padding-top:16px;margin-top:16px}.legend>div{display:grid;grid-template-columns:74px minmax(0,1fr);gap:8px;align-items:baseline}.legend dd{margin:0}.route-notice{padding-top:16px;font-size:12px}.setting-switch{gap:12px}.schedule-enable{padding:14px;margin-top:14px}.setting-copy strong{font-size:14px}.setting-copy small{font-size:12px}.automation-scenario{padding:18px}.notify-header{align-items:center}.notify-enable{font-size:12px}.vpn-node-card{padding:16px}.vpn-node-card.active{padding-left:14px}.vpn-node-head{gap:12px}.vpn-node-title>b{font-size:15px}.vpn-node-tags{margin-block:12px}.vpn-checks{grid-template-columns:1fr;gap:6px}.vpn-check-row{gap:8px;min-height:42px}.vpn-check-label{width:76px;font-size:11px}.vpn-check-row time{font-size:10px}.vpn-check-latency{min-width:46px;font-size:12px}.vpn-check-details summary{padding-top:2px}.run-summary{padding:14px;gap:10px}.run-title{font-size:14px}.run-icon{width:30px;height:30px}.probe-table th:nth-child(2){width:62px}.probe-table th:last-child{width:66px}.probe-row td{padding:12px 6px;font-size:12px}.probe-row td:first-child{padding-left:0}.probe-row td:last-child{padding-right:0}.log-details>summary{padding:12px}.log-count{font-size:10px}.console-card{padding:20px 0 0}pre{padding:14px;font-size:11px}.log-toolbar{padding:10px 14px}}
+@media(max-width:380px){.card{padding:16px}.routes-card{padding:0}.service{padding:15px}.service-icon{width:34px;height:34px}.service h3{font-size:14px}.service .current{font-size:10px;padding-inline:6px}.console-card{padding:18px 0 0}.schedule-enable{padding:12px}.notify-header{align-items:flex-start}.vpn-node-card{padding:14px}.vpn-node-card.active{padding-left:12px}.run-summary{padding:12px}.run-icon{display:none}.vpn-check-row time{flex-basis:calc(100% - 84px);order:5;margin-left:84px}}
+@media(forced-colors:active){.switch-track{border:1px solid ButtonText;background:Canvas}.switch-track::after{background:ButtonText}.switch-control input:checked+.switch-track{background:Highlight}.switch-control input:checked+.switch-track::after{background:HighlightText}}
+.telegram-help{margin-top:12px}.telegram-help summary{font-size:11px;padding:0;color:var(--muted)}.telegram-help p{font-size:12px;line-height:1.6;color:var(--muted);margin:8px 0 0}
 </style>
 </head>
 <body>
@@ -351,8 +383,8 @@ pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);bo
     <article class="service" data-service="discord-tcp"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-discord"/></svg></span><div><h3 id="service-discord-tcp">Discord TCP</h3><div class="service-scope">Сайт, API, CDN, QUIC</div></div></div><span class="current">—</span></div><div class="modes" role="group" aria-labelledby="service-discord-tcp"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
     <article class="service" data-service="discord-voice"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><use href="#i-headphones"/></svg></span><div><h3 id="service-discord-voice">Discord Voice</h3><div class="service-scope">Голос и STUN по UDP</div></div></div><span class="current">—</span></div><div class="modes" role="group" aria-labelledby="service-discord-voice"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
     <article class="service" data-service="youtube"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-youtube"/></svg></span><div><h3 id="service-youtube">YouTube</h3><div class="service-scope">Сайт, видео, QUIC</div></div></div><span class="current">—</span></div><div class="modes" role="group" aria-labelledby="service-youtube"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
-    <article class="service" data-service="telegram"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-telegram"/></svg></span><div><h3 id="service-telegram">Telegram</h3><div class="service-scope">Сайт, CDN и MTProto · звонки только через VPN</div></div></div><span class="current">—</span></div><div class="modes" role="group" aria-labelledby="service-telegram"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="vpn">VPN</button><button class="mode" data-mode="ws" title="MTProto через WebSocket-ретранслятор на роутере (как Telegram Web)">WS</button><button class="mode" data-mode="unmanaged" title="Убрать правила проекта; Telegram идёт по вашим правилам XKeen">Выкл</button></div></article>
-  </div><div class="legend"><div><b>Direct</b>Напрямую через WAN, без nfqws2.</div><div><b>Zapret</b>Через WAN с обработкой nfqws2.</div><div><b>VPN</b>Через одну общую активную ноду Xray.</div></div><div class="warning">Смена маршрута перезапустит XKeen и nfqws2. Соединение может ненадолго прерваться.</div><div id="routeProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="routeStage">Подготовка</b><span id="routePercent">0%</span></div><div class="bar"><span id="routeBar"></span></div></div></section>
+    <article class="service" data-service="telegram"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-telegram"/></svg></span><div><h3 id="service-telegram">Telegram</h3><div class="service-scope">Сайт, CDN и MTProto · звонки только через VPN</div></div></div><span class="current">—</span></div><div class="modes" role="group" aria-labelledby="service-telegram"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="vpn">VPN</button><button class="mode" data-mode="ws" title="MTProto через WebSocket-ретранслятор на роутере (как Telegram Web)">WS</button><button class="mode" data-mode="unmanaged" title="Убрать правила проекта; Telegram идёт по вашим правилам XKeen">Выкл</button></div><details class="telegram-help"><summary>О режимах WS и «Выкл»</summary><p>WS — MTProto через WebSocket-ретранслятор на роутере. «Выкл» убирает правила проекта: используются ваши правила XKeen.</p></details></article>
+  </div><dl class="legend"><div><dt>Direct</dt><dd>Напрямую, без обработки nfqws2</dd></div><div><dt>Zapret</dt><dd>Через провайдера с обработкой nfqws2</dd></div><div><dt>VPN</dt><dd>Через общую активную ноду Xray</dd></div></dl><p class="route-notice"><svg class="i" aria-hidden="true"><use href="#i-restart"/></svg><span>Смена режима перезапустит XKeen и nfqws2. Возможен короткий перерыв в соединении.</span></p><div id="routeProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="routeStage">Подготовка</b><span id="routePercent">0%</span></div><div class="bar"><span id="routeBar"></span></div></div></section>
   <section class="card dns-card"><div class="profile-head"><h2>DNS домашней сети</h2><button id="refreshDnsMode">Обновить</button></div>
     <div id="dnsModeStatus" class="hint" role="status">Загрузка…</div>
     <div class="dns-options"><button class="dns-option" data-dns-mode="vless" disabled>DNS over VLESS</button><button class="dns-option" data-dns-mode="doh" disabled>DoH на роутере</button></div>
@@ -363,11 +395,11 @@ pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);bo
 </div>
 
 <div id="vpn-nodes" class="tab-page" role="tabpanel" aria-labelledby="tab-vpn-nodes">
-  <section class="card"><div class="profile-head"><div><h2>VPN-ноды Xray</h2><p class="hint">Все сервисы в режиме VPN используют одну активную ноду. Переключение применяется ко всем VPN-правилам Xray.</p></div><div class="tuner-actions"><button id="recoverVpnNode" class="rollback vpn-recover" hidden>Восстановить прошлую ноду</button><button id="checkAllVpnNodes">Пинг всех нод</button><button id="refreshVpnNodes" class="clear">Обновить</button></div></div>
+  <section class="card"><div class="profile-head"><div><h2>VPN-ноды Xray</h2><p class="hint">Все VPN-правила Xray используют одну общую активную ноду.</p></div><div class="tuner-actions"><button id="recoverVpnNode" class="rollback vpn-recover" hidden>Восстановить прошлую ноду</button><button id="checkAllVpnNodes">Пинг всех нод</button><button id="refreshVpnNodes" class="clear">Обновить</button></div></div>
     <div id="vpnSummary" class="hint">Загрузка нод…</div><div id="vpnNodesList" class="vpn-node-list"></div>
     <div id="vpnActionStatus" class="automation-save-status" role="status" aria-live="polite"></div>
     <div id="vpnProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="vpnStage">Подготовка</b><span id="vpnPercent">0%</span></div><div class="bar"><span id="vpnBar"></span></div></div>
-    <div class="warning">«Пинг» и «Диагностика» используют временный Xray и не меняют рабочий VPN. HTTP-пинг — быстрый замер, не проверка всех приложений. Только «Сделать активной» после подтверждения перезапускает XKeen/Xray с резервной копией и откатом.</div>
+    <p class="route-notice"><svg class="i" aria-hidden="true"><use href="#i-restart"/></svg><span>Пинг и диагностика не меняют активную ноду. Пинг не проверяет работу приложений. При переключении ноды XKeen/Xray перезапускается.</span></p>
   </section>
   <section class="card"><h2>Добавить VPN-ноду</h2><p class="hint">VLESS, Trojan и Hysteria2: ссылка или один JSON outbound Xray. Hysteria2 с Salamander поддерживается в ссылках; port-hopping задаётся через JSON. Добавление не запускает проверку соединения. Секреты сохраняются на роутере с правами 0600 и не возвращаются в список.</p>
     <div class="field"><label for="vpnNodeSource">VLESS / Trojan / Hysteria2 ссылка или JSON outbound</label><textarea id="vpnNodeSource" rows="6" placeholder="vless://… / trojan://… / hy2://… или { &quot;protocol&quot;: &quot;hysteria&quot;, … }" spellcheck="false" autocomplete="off"></textarea></div>
@@ -378,7 +410,7 @@ pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);bo
     <div class="diagnostic-grid">
       <div class="field"><label for="vpnMonitorFamily">Контролируемые адреса</label><select id="vpnMonitorFamily"><option value="both">IPv4 и IPv6</option><option value="ipv4">Только IPv4</option><option value="ipv6">Только IPv6</option></select></div>
       <div class="field"><label for="vpnMonitorInterval">Интервал, минуты</label><input id="vpnMonitorInterval" type="number" min="1" max="1440" value="5"></div>
-      <div class="field"><label><input id="vpnMonitorEnabled" type="checkbox"> Регулярный контроль выбранной ноды</label></div>
+      <div class="field"><label class="setting-switch"><span class="setting-copy"><strong id="vpnMonitorEnabledLabel">Регулярный контроль</strong><small>Проверять доступность и выходной IP</small></span><span class="switch-control"><input id="vpnMonitorEnabled" aria-labelledby="vpnMonitorEnabledLabel" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span></span></label></div>
       <div class="field"><label for="vpnExpected4">Разрешённые IPv4 (через запятую)</label><input id="vpnExpected4" autocomplete="off" placeholder="Утверждаются вручную"></div>
       <div class="field"><label for="vpnExpected6">Разрешённые IPv6 (через запятую)</label><input id="vpnExpected6" autocomplete="off" placeholder="Утверждаются вручную"></div>
     </div>
@@ -458,10 +490,12 @@ pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);bo
     <div class="warning">Safe отдельно меняет repeats, out-range, TCP pos/seq и QUIC repeats. Extended добавляет ограниченные сочетания и смешивание BAT-компонентов. С выбранным BAT-файлом вариации строятся от его профиля, а сам профиль проверяется первым. Порядок остальных кандидатов каждый раз новый. Подбор временно перезапускает только nfqws2; Xkeen не вызывается. Сервис должен заранее находиться в режиме Zapret.</div>
   </section>
   <section class="card">
-    <div class="profile-head"><div><h2>Ход подбора</h2><div id="tunerStatus" class="hint">Задание не запускалось</div></div><span id="tunerCommit" class="current"></span></div>
-    <div class="progress-line"><span id="tunerProgress">—</span><span id="tunerProbe"></span></div>
-    <pre id="tunerLog"></pre>
-    <div id="tunerVerification" class="hint"></div>
+    <div class="tuner-run-head"><h2>Ход подбора</h2><span id="tunerCommit" class="current"></span></div>
+    <div class="run-summary"><span class="run-icon" aria-hidden="true"><svg class="i"><use id="tunerStateIcon" href="#i-pulse"/></svg></span><div><div id="tunerStatus" class="run-title" role="status">Задание не запускалось</div><p id="tunerVerification"></p></div></div>
+    <div class="progress-line"><span id="tunerProgress"></span><span id="tunerProbe"></span></div>
+    <table class="probe-table" aria-label="Последние проверки"><thead><tr><th scope="col">Проверка</th><th scope="col">Результат</th><th scope="col">Время</th></tr></thead><tbody id="tunerChecks"></tbody></table>
+    <p id="tunerScope" class="log-scope"></p>
+    <details id="tunerLogDetails" class="log-details"><summary><svg class="i" aria-hidden="true"><use href="#i-terminal"/></svg>Технический журнал<span id="tunerLogCount" class="log-count"></span></summary><pre id="tunerLog" tabindex="0" aria-label="Технический журнал подбора"></pre></details>
     <div id="voiceVerdict" class="verdict" role="alert"><b>Проверьте Discord Voice</b><div>Переподключитесь к голосовому каналу и подтвердите, появился ли звук в обе стороны.</div><div class="verdict-actions"><button id="voiceYes" class="apply">Да, работает</button><button id="voiceNo" class="cancel">Нет</button></div></div>
   </section>
   <section id="tunerFound" class="card found-card">
@@ -478,7 +512,7 @@ pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);bo
   <section class="card notify-card">
     <div class="notify-header">
       <div class="notify-heading"><h2>Уведомления</h2><span class="notify-server">ntfy.sh</span></div>
-      <label class="notify-enable"><input id="notifyEnabled" type="checkbox"><span>Включить уведомления</span></label>
+      <label class="notify-enable"><span>Уведомления</span><span class="switch-control"><input id="notifyEnabled" aria-label="Уведомления" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span></span></label>
     </div>
     <div class="notify-connection">
       <div class="field"><label for="notifyTopic">Тема</label><div class="notify-topic-row"><input id="notifyTopic" maxlength="128" autocomplete="off"><button id="notifyGenerate" type="button">Новая тема</button></div>
@@ -489,22 +523,24 @@ pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);bo
     <div id="notifyEvents" class="notify-event-grid"></div>
     <div class="notify-actions"><div class="notify-primary-actions"><button id="notifySave" class="apply">Сохранить</button><button id="notifyTest">Отправить тест</button></div>
       <a id="notifyLink" class="notify-link" target="_blank" rel="noopener noreferrer" hidden>Открыть канал ↗</a></div>
+    <p class="form-note">Изменения вступят в силу после сохранения настроек.</p>
     <div id="notifyMessage" role="status" aria-live="polite"></div>
     <div class="notify-statusline"><div id="notifyDelivery" class="hint"></div><button id="notifyRefresh" class="clear">Обновить</button></div>
   </section>
 </div>
 <div id="automation" class="tab-page" role="tabpanel" aria-labelledby="tab-automation">
   <section class="card"><div class="section-head"><svg class="i"><use href="#i-history"/></svg><h2>Автоматическая проверка</h2></div>
-    <div class="field"><label class="auto-toggle"><input id="autoEnabled" type="checkbox"><span>Включить расписание</span></label></div>
+    <label class="setting-switch schedule-enable" for="autoEnabled"><span class="setting-copy"><strong id="autoEnabledLabel">Расписание</strong><small id="autoEnabledHint">Проверять сервисы в выбранное время</small></span><span class="switch-control"><input id="autoEnabled" aria-labelledby="autoEnabledLabel" aria-describedby="autoEnabledHint" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span></span></label>
     <div class="field"><label for="autoTimes">Время запуска (Москва)</label><input id="autoTimes" placeholder="03:00, 15:00"></div>
     <div class="automation-grid">
-      <div class="automation-scenario" data-auto-service="youtube"><h3>YouTube</h3><label><input class="auto-service-enabled" type="checkbox"> Проверять по расписанию</label><div class="field"><label for="auto-mix-youtube">Сценарий перебора</label><select id="auto-mix-youtube" class="auto-mix"><option value="off">Прямой перевод BAT</option><option value="safe">Safe</option><option value="extended">Extended</option></select></div><div class="field"><label for="auto-max-youtube">Максимум кандидатов</label><input id="auto-max-youtube" class="auto-max" type="number" min="1" max="64" value="32"></div><div class="field"><label for="auto-source-youtube">BAT-файл</label><select id="auto-source-youtube" class="auto-source"><option value="">Все файлы + профиль</option></select></div></div>
-      <div class="automation-scenario" data-auto-service="discord-tcp"><h3>Discord TCP</h3><label><input class="auto-service-enabled" type="checkbox"> Проверять по расписанию</label><div class="field"><label for="auto-mix-discord-tcp">Сценарий перебора</label><select id="auto-mix-discord-tcp" class="auto-mix"><option value="off">Прямой перевод BAT</option><option value="safe">Safe</option><option value="extended">Extended</option></select></div><div class="field"><label for="auto-max-discord-tcp">Максимум кандидатов</label><input id="auto-max-discord-tcp" class="auto-max" type="number" min="1" max="64" value="32"></div><div class="field"><label for="auto-source-discord-tcp">BAT-файл</label><select id="auto-source-discord-tcp" class="auto-source"><option value="">Все файлы + профиль</option></select></div></div>
+      <div class="automation-scenario" data-auto-service="youtube"><div class="scenario-head"><h3 id="auto-youtube-label">YouTube</h3><label><span class="switch-control"><input class="auto-service-enabled" aria-label="Проверять YouTube по расписанию" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span></span></label></div><div class="field"><label for="auto-mix-youtube">Сценарий перебора</label><select id="auto-mix-youtube" class="auto-mix"><option value="off">Прямой перевод BAT</option><option value="safe">Safe</option><option value="extended">Extended</option></select></div><div class="field"><label for="auto-max-youtube">Максимум кандидатов</label><input id="auto-max-youtube" class="auto-max" type="number" min="1" max="64" value="32"></div><div class="field"><label for="auto-source-youtube">BAT-файл</label><select id="auto-source-youtube" class="auto-source"><option value="">Все файлы + профиль</option></select></div></div>
+      <div class="automation-scenario" data-auto-service="discord-tcp"><div class="scenario-head"><h3 id="auto-discord-tcp-label">Discord TCP</h3><label><span class="switch-control"><input class="auto-service-enabled" aria-label="Проверять Discord TCP по расписанию" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span></span></label></div><div class="field"><label for="auto-mix-discord-tcp">Сценарий перебора</label><select id="auto-mix-discord-tcp" class="auto-mix"><option value="off">Прямой перевод BAT</option><option value="safe">Safe</option><option value="extended">Extended</option></select></div><div class="field"><label for="auto-max-discord-tcp">Максимум кандидатов</label><input id="auto-max-discord-tcp" class="auto-max" type="number" min="1" max="64" value="32"></div><div class="field"><label for="auto-source-discord-tcp">BAT-файл</label><select id="auto-source-discord-tcp" class="auto-source"><option value="">Все файлы + профиль</option></select></div></div>
     </div>
     <div class="tuner-actions"><button id="saveAutomation" class="apply">Сохранить расписание</button><button id="cancelAutomation" class="cancel" disabled>Остановить текущий запуск</button></div>
+    <p class="form-note">Изменения вступят в силу после сохранения расписания.</p>
     <div id="automationSaveStatus" class="automation-save-status" role="status" aria-live="polite"></div>
   </section>
-  <section class="card"><div class="profile-head"><div><h2>Последний запуск</h2><div id="automationSummary" class="hint">Данные загружаются…</div></div><span id="automationNext" class="current"></span></div><pre id="automationEvents">Запусков пока не было.</pre></section>
+  <section class="card"><div class="profile-head"><div><h2>Последний запуск</h2><div id="automationSummary" class="hint">Данные загружаются…</div></div><span id="automationNext" class="current"></span></div><div class="log-shell"><div class="log-toolbar"><span>История запусков</span><span>События расписания</span></div><pre id="automationEvents" tabindex="0" aria-label="История запусков расписания">Запусков пока не было.</pre></div></section>
 </div>
 
 <div id="import" class="tab-page" role="tabpanel" aria-labelledby="tab-import">
@@ -515,7 +551,7 @@ pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);bo
   <section class="card"><div class="profile-head"><div><h2>Версии профилей по дате</h2><div class="hint">Старые версии можно убрать в корзину; активная защищена.</div></div><button id="refreshVersions" class="clear">Обновить</button></div><div id="profileVersions" class="version-list" tabindex="0" aria-label="Прокручиваемые версии профилей"><div class="empty">Сохранённых версий пока нет.</div></div></section>
 </div>
 
-<section class="card console-card"><div class="console-head"><div class="section-head"><svg class="i"><use href="#i-terminal"/></svg><h2>Журнал</h2></div><button class="clear" id="clear">Очистить</button></div><pre id="log" aria-live="polite"></pre></section>
+<section class="card console-card"><div class="console-head"><div class="section-head"><svg class="i"><use href="#i-terminal"/></svg><h2>Журнал</h2></div><button class="clear" id="clear">Очистить</button></div><div class="log-shell"><div class="log-toolbar"><span>События панели</span><span id="logLineCount">0 строк</span></div><pre id="log" tabindex="0" aria-label="Журнал событий панели" aria-live="polite"></pre></div></section>
 <footer>XKeen + nfqws2 · локальная панель, доступна только из LAN</footer>
 </main>
 <script src="/assets/browser-diagnostics.js"></script>
@@ -527,7 +563,14 @@ const label={direct:"DIRECT",zapret:"ZAPRET",vless:"VPN",vpn:"VPN",ws:"WS",unman
 const serviceLabel={youtube:"YouTube",discord:"Discord",telegram:"Telegram",rollback:"Откат",vpn:"Общий VPN","discord-tcp":"Discord TCP","discord-voice":"Discord Voice"};
 let validatedImport=null,importGeneration=0,controlsBusy=false,tunerPoll=null,tunerRequest=null,tunerWasActive=false,routeWatch=null,diagnosticWatch=null,operationStarting=false;
 function stamp(){return new Date().toLocaleTimeString("ru-RU",{hour12:false})}
-function log(text,replace=false){const line="["+stamp()+"] "+text;logEl.textContent=replace?line:(logEl.textContent?logEl.textContent+"\n"+line:line);logEl.scrollTop=logEl.scrollHeight}
+function log(text,replace=false){
+  if(replace)logEl.textContent="";
+  if(logEl.textContent)logEl.append(document.createTextNode("\n"));
+  const row=document.createElement("span"),time=document.createElement("span");
+  row.className="log-entry"+(/^(ошибка|не удалось)/i.test(text)?" is-error":"");time.className="log-time";time.textContent="["+stamp()+"] ";
+  row.append(time,document.createTextNode(String(text)));logEl.append(row);logEl.scrollTop=logEl.scrollHeight;
+  document.getElementById("logLineCount").textContent="Строк: "+logEl.textContent.split("\n").length;
+}
 let tunerRunning=false,diagnosticRunning=false;
 function busy(value){value=!!value||!!routeWatch||operationStarting;controlsBusy=value;document.querySelectorAll("button:not(.tab):not([data-ui-control])").forEach(b=>b.disabled=value);if(!value){tunerControls(tunerRunning);diagnosticControls(diagnosticRunning);if(dnsModeState)renderDnsMode(dnsModeState);else document.querySelectorAll("[data-dns-mode]").forEach(b=>b.disabled=true)}syncImportControls()}
 // Success first, then plain words for known harmless lines, then the raw output.
@@ -535,18 +578,41 @@ function resultText(title,output){const out=output||"",notes=[];if(/no usable IP
 function modeForUi(value){return value==="vless"?"vpn":value}
 function updateService(service,value){const box=document.querySelector('[data-service="'+service+'"]');box.querySelector(".current").textContent=label[value]||value;box.querySelectorAll(".mode").forEach(b=>{const active=b.dataset.mode===modeForUi(value);b.classList.toggle("active",active);b.setAttribute("aria-pressed",String(active))})}
 function fmtDate(value){if(!value)return "—";const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString("ru-RU",{hour12:false})}
-function vpnHealthText(health){
-  if(!health)return "Проверка не запускалась";
-  if(!health.ok)return "Не прошла проверку: "+(health.detail||"нет ответа")+" · "+fmtDate(health.checked_utc);
-  const measured=health.latency_kind==="https_ttfb"&&Number.isFinite(health.latency_ms);
-  const timing=measured?"HTTPS, первый байт: "+health.latency_ms+" мс":"";
-  const total=measured?health.total_ms:health.latency_ms;
-  return ["Соединение работает",timing,Number.isFinite(total)?"Вся проверка: "+(total/1000).toFixed(1)+" с":"","HTTP "+health.http_code,fmtDate(health.checked_utc)].filter(Boolean).join(" · ");
+function checkDate(value){
+  if(!value)return "";const date=new Date(value);
+  return Number.isNaN(date.getTime())?"Дата неизвестна":date.toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
 }
-function vpnPingText(ping){
-  if(!ping)return 'HTTP-пинг не запускался';
-  if(!ping.ok)return 'HTTP-пинг: '+(ping.detail||'нет ответа');
-  return 'HTTP-пинг: '+ping.latency_ms+' мс · HTTP '+ping.http_code+' · '+fmtDate(ping.checked_utc);
+function checkTiming(result,kind){
+  if(!result)return "";
+  const value=result.latency_ms,measured=kind==="ping"||result.latency_kind==="https_ttfb";
+  if(!Number.isFinite(value)||value<0)return "";
+  return measured?Math.round(value)+" ms":(value/1000).toFixed(1)+" s всего";
+}
+function vpnCheckText(result,kind){
+  if(!result)return "Не проверено";
+  return [result.ok?"OK":"Ошибка",result.ok?checkTiming(result,kind):(result.detail||"Нет ответа"),checkDate(result.checked_utc)].filter(Boolean).join(" · ");
+}
+function vpnHealthText(health){return vpnCheckText(health,"health")}
+function vpnPingText(ping){return vpnCheckText(ping,"ping")}
+function vpnCheckRow(title,result,kind,disclosure=false){
+  const row=document.createElement(disclosure?"summary":"div");row.className="vpn-check-row";
+  const label=document.createElement("span"),state=document.createElement("span"),latency=document.createElement("span");
+  label.className="vpn-check-label";label.textContent=title;state.className="vpn-check-state"+(result?(result.ok?" good":" bad"):"");state.textContent=result?(result.ok?"OK":"Ошибка"):"Не проверено";
+  latency.className="vpn-check-latency";latency.textContent=result&&result.ok?checkTiming(result,kind):"";row.append(label,state,latency);
+  if(result&&result.checked_utc){const time=document.createElement("time");time.textContent=checkDate(result.checked_utc);const date=new Date(result.checked_utc);if(!Number.isNaN(date.getTime())){time.dateTime=date.toISOString();time.title=fmtDate(result.checked_utc)}row.append(time)}
+  if(disclosure){const arrow=document.createElementNS("http://www.w3.org/2000/svg","svg"),use=document.createElementNS("http://www.w3.org/2000/svg","use");arrow.setAttribute("class","i check-chevron");arrow.setAttribute("aria-hidden","true");use.setAttribute("href","#i-chevron-right");arrow.append(use);row.append(arrow)}
+  return row;
+}
+function vpnCheckDetails(result,kind,title){
+  const details=document.createElement(result?"details":"div");details.className="vpn-check-details";
+  if(!result){details.append(vpnCheckRow(title,null,kind));return details}
+  const summary=vpnCheckRow(title,result,kind,true),metrics=document.createElement("div");summary.title=kind==="ping"?"Подробности пинга":"Подробности проверки";metrics.className="check-detail-metrics";
+  const total=Number.isFinite(result.total_ms)?result.total_ms:kind==="health"&&result.latency_kind!=="https_ttfb"?result.latency_ms:null;
+  const values=[result.http_code?"HTTP "+result.http_code:"",Number.isFinite(total)&&total>=0?"Вся проверка: "+(total/1000).toFixed(1)+" s":"",result.latency_kind==="https_ttfb"?"Время до первого байта HTTPS":"",result.checked_utc?fmtDate(result.checked_utc):""];
+  for(const text of values.filter(Boolean)){const item=document.createElement("span");item.textContent=text;metrics.append(item)}
+  details.append(summary);if(!result.ok){const error=document.createElement("p");error.className="vpn-check-error";error.textContent=result.detail||"Нет ответа";details.append(error)}if(metrics.childNodes.length)details.append(metrics);
+  if(result.log){const output=document.createElement("pre");output.textContent=result.log;output.tabIndex=0;output.setAttribute("aria-label",summary.title);details.append(output)}
+  return details;
 }
 function routeName(value){return label[value]||value||"?"}
 function routesText(routes){if(!routes)return "—";if(routes.discord&&!routes["discord-tcp"])return "Discord "+routeName(routes.discord)+" · YouTube "+routeName(routes.youtube);return "Discord TCP "+routeName(routes["discord-tcp"])+" · Voice "+routeName(routes["discord-voice"])+" · YouTube "+routeName(routes.youtube)+(routes.telegram&&routes.telegram!=="unmanaged"?" · Telegram "+routeName(routes.telegram):"")}
@@ -618,7 +684,7 @@ async function refreshVpnNodes(){
     summary.textContent="В конфиге: "+(activeNode?activeNode.name:d.active)+" · "+d.nodes.length+" нод"+
       (d.recovery_needed?" · ВНИМАНИЕ: прежнее переключение прервалось, требуется восстановление":"")+
       (d.warning?" · "+d.warning:"")+
-      ". Все VPN-правила продолжают использовать тег "+d.canonical_tag+".";
+      ".";
     root.textContent="";
     d.nodes.forEach(node=>{
       const card=document.createElement("article");card.className="vpn-node-card"+(node.active?" active":"");
@@ -633,17 +699,10 @@ async function refreshVpnNodes(){
         const tag=document.createElement("span");tag.className="vpn-node-tag "+kind;tag.title=label+": "+value;
         tag.textContent=["protocol","transport","security"].includes(kind)?value.toUpperCase():value;meta.append(tag);
       }
-      const health=document.createElement("div");health.className="vpn-node-health"+(node.health?(node.health.ok?" good":" bad"):"");
-      health.textContent=node.health?'Диагностика: '+vpnHealthText(node.health):'Расширенная диагностика не запускалась';
-      const ping=document.createElement('div');ping.className='vpn-node-health'+(node.ping?(node.ping.ok?' good':' bad'):'');ping.textContent=vpnPingText(node.ping);
-      const diagnostics=document.createElement('details');
-      if(node.health&&typeof node.health.log==='string'&&node.health.log){
-        const summary=document.createElement('summary'),output=document.createElement('pre');
-        summary.textContent='Подробности проверки';output.textContent=node.health.log;
-        diagnostics.append(summary,output);
-      }else diagnostics.hidden=true;
-      const pingDetails=document.createElement('details');
-      if(node.ping&&node.ping.log){const summary=document.createElement('summary'),output=document.createElement('pre');summary.textContent='Подробности пинга';output.textContent=node.ping.log;pingDetails.append(summary,output)}else pingDetails.hidden=true;
+      const checks=document.createElement("div");checks.className="vpn-checks";
+      for(const [title,result,kind] of [["HTTP-пинг",node.ping,"ping"],["Диагностика",node.health,"health"]]){
+        const group=document.createElement("div");group.className="vpn-check";group.append(vpnCheckDetails(result,kind,title));checks.append(group);
+      }
       const actions=document.createElement("div");actions.className="vpn-node-actions";
       const edit=vpnIconButton('Редактировать','i-pencil',()=>editVpnNode(node));edit.disabled=!!d.recovery_needed;actions.append(edit);
       actions.append(vpnIconButton('Пинг','i-pulse',()=>checkVpnNode(node.id)));
@@ -654,7 +713,7 @@ async function refreshVpnNodes(){
         actions.append(activate,trashButton("Убрать ноду в корзину",()=>deleteVpnNode(node.id)));
       }
       heading.insertBefore(badge,endpoint);head.append(actions);
-      card.append(head,meta,ping,pingDetails,health,diagnostics);root.append(card);
+      card.append(head,meta,checks);root.append(card);
     });
     if(routeWatch||operationStarting)busy(true);
   }catch(e){if(!latest())return;summary.textContent="Ошибка списка VPN-нод: "+e;root.textContent="";log("VPN-ноды: "+e)}
@@ -916,18 +975,55 @@ let voiceEndpoint=null;
 function updateVoiceHint(){const mode=document.getElementById("tunerVoiceCheck").value,e=voiceEndpoint;document.getElementById("voiceAutoHint").textContent=mode==="traffic"?"Зайдите в голосовой канал до старта и оставайтесь в нём. Пока голос не подключён, Discord сам переподключается, и каждая попытка идёт через текущего кандидата; роутер смотрит на трафик и позовёт вас только подтвердить звук найденного профиля.":mode==="probe"?(e?"Сервер "+e.ip+":"+e.port+" из проверки "+fmtDate(e.learned_utc)+". Кандидаты проверяются пакетом с роутера; работает, только если без обхода сервер не отвечает.":"Голосовой сервер ещё не сохранён: один раз пройдите ручную проверку с ответом «Да»."):"Под каждого кандидата переподключитесь к голосовому каналу и ответьте, есть ли звук."}
 async function refreshVoiceEndpoint(){if(!tabVisible("autotune"))return;const latest=latestView("voice-endpoint");const select=document.getElementById("tunerVoiceCheck"),probe=select.querySelector('option[value="probe"]');try{const d=await api("/api/tuner/voice-endpoint");if(!latest())return;voiceEndpoint=d.endpoint||null}catch(e){if(!latest())return;voiceEndpoint=null}probe.disabled=!voiceEndpoint;if(probe.disabled&&select.value==="probe")select.value="traffic";updateVoiceHint()}
 function tunerControls(active){tunerRunning=active;const blocked=active||!!routeWatch||operationStarting;document.getElementById("startTuner").disabled=blocked;document.getElementById("cancelTuner").disabled=!active||!!routeWatch||operationStarting;document.querySelectorAll("[data-action],.mode").forEach(b=>b.disabled=blocked)}
-function tunerStateLabel(state){return ({queued:"Запуск задания…",starting:"Запуск задания…",idle:"Задание не запускалось",preparing:"Получение и разбор стратегий…",running:"Проверка кандидатов…",voice_window:"Окно проверки Discord Voice…",voice_watch:"Слежу за голосовым трафиком Discord…",awaiting_voice:"Ожидается ваш ответ",cancelling:"Остановка и восстановление nfqws2…",found:"Найден проходной профиль",none:"Проходной профиль не найден",cancelled:"Подбор остановлен, nfqws2 восстановлен",error:"Ошибка подбора"})[state]||state}
+function tunerStateLabel(state){return ({queued:"Запуск задания…",starting:"Запуск задания…",idle:"Задание не запускалось",healthy:"Текущий профиль работает",unhealthy:"Текущий профиль не прошёл проверку",unstable:"Результат проверки нестабилен",preparing:"Получение и разбор стратегий…",running:"Проверка кандидатов…",voice_window:"Окно проверки Discord Voice…",voice_watch:"Слежу за голосовым трафиком Discord…",awaiting_voice:"Ожидается ваш ответ",cancelling:"Остановка и восстановление nfqws2…",found:"Найден проходной профиль",none:"Проходной профиль не найден",cancelled:"Подбор остановлен, nfqws2 восстановлен",error:"Ошибка подбора"})[state]||state}
 const voiceTrafficText={connected:"голос подключился и держится",attempts:"Discord пытается подключиться, но соединение не держится",established:"голос уже подключён — новых попыток нет",idle:"голосового трафика нет — зайдите в голосовой канал",unavailable:"диагностика недоступна"};
 function voiceSummary(d){const parts=[];if(d.voice_traffic_baseline)parts.push("Проверка по трафику. Текущий профиль: "+(voiceTrafficText[d.voice_traffic_baseline]||d.voice_traffic_baseline)+".");if(d.voice_traffic_baseline==="established"||d.voice_traffic_baseline==="connected")parts.push("Голос уже работает с текущим профилем: подбор не нужен, либо выйдите из канала и зайдите снова.");const t=d.last_voice_traffic;if(t&&t.candidate>0)parts.push("Кандидат "+t.candidate+": "+(voiceTrafficText[t.state]||t.state)+".");if(d.voice_auto_mode==="auto")parts.push("Автопроверка: без обхода сервер не отвечает, кандидаты оцениваются пакетом с роутера.");else if(d.voice_auto_mode==="manual")parts.push("Автопроверка невозможна: сохранённый голосовой сервер отвечает даже без обхода (провайдер не блокирует пробный пакет), поэтому пакетом с роутера рабочую стратегию не отличить — каждый кандидат проверяется вручную.");if(d.last_voice_auto)parts.push("Кандидат "+d.last_voice_auto.candidate+": "+(d.last_voice_auto.result==="pass"?"сервер ответил":"нет ответа")+".");if(d.voice_unconfirmed)parts.push("Звук не подтверждён: перед применением проверьте голос вручную.");const active=(d.voice_calibration||{}).active;if(d.status==="none"&&d.voice_auto_mode==="auto"&&!(active&&active.valid>0))parts.push("Сохранённый голосовой сервер не ответил ни с одной стратегией, в том числе с текущей: адрес мог устареть. Повторите подбор без автопроверки.");parts.push(d.voice_auto_mode==="auto"?"Найденный профиль подтверждается звуком в конце.":"Voice: требуется подтверждение звука; UDP-пакеты сами по себе не доказывают качество голоса.");return parts.join(" ")}
+const probeNames={metadata:"Метаданные",web:"Сайт",gateway:"API Discord",image:"Изображение",ws:"WebSocket",transport:"Транспорт",quic:"QUIC",https:"HTTPS",video:"Видео"};
+const probePhases={baseline:"Текущий профиль",confirm:"Повторная проверка",raw:"Без обхода",candidate:"Проверка"};
+function probeTime(seconds){if(seconds===""||seconds==null)return "—";const value=Number(seconds);return Number.isFinite(value)&&value>=0?Math.round(value*1000)+" ms":"—"}
+function probeEvent(line){
+  const p=String(line).split("|");if(p[0]!=="EVENT")return null;
+  if(p[1]==="PROBE_DETAIL"&&p.length>=12)return {candidate:p[2],role:p[5],phase:p[3],round:p[4],status:p[10],seconds:p[7]};
+  if(p[1]==="WS_RESULT"&&p.length>=8)return {candidate:p[2],role:"ws",phase:p[3],round:p[4],status:p[5],seconds:p[6]};
+  return null;
+}
+let lastProbeLines=null;
+function renderProbeRows(lines){
+  const key=JSON.stringify(lines);if(key===lastProbeLines)return;lastProbeLines=key;
+  const root=document.getElementById("tunerChecks");root.textContent="";
+  const probes=lines.map(probeEvent).filter(Boolean).slice(-6);
+  if(!probes.length){const row=document.createElement("tr"),cell=document.createElement("td");cell.colSpan=3;cell.className="empty";cell.textContent=lines.length?"Подробности текущего этапа — в техническом журнале.":"Здесь появятся результаты проверок.";row.append(cell);root.append(row);return}
+  for(const probe of probes){
+    const row=document.createElement("tr"),name=document.createElement("td"),result=document.createElement("td"),timing=document.createElement("td"),phase=document.createElement("small"),badge=document.createElement("span");
+    row.className="probe-row";name.textContent=probeNames[probe.role]||probe.role;
+    phase.textContent=(Number(probe.candidate)>0?"Кандидат "+probe.candidate+" · ":"")+(probePhases[probe.phase]||probe.phase)+(probe.round?" · проход "+probe.round:"");name.append(phase);
+    const ok=probe.status==="ok"||probe.status==="pass",failed=["fail","failed","error","timeout","curl-error","http-error","dns-error","connect-error","tls-error","empty-reply","reset","network-error","freeze","stall","invalid-metadata","invalid-gateway","invalid-image"].includes(probe.status);
+    badge.className="vpn-check-state"+(ok?" good":failed?" bad":"");badge.textContent=ok?"OK":failed?"Ошибка":"—";badge.title=probe.status||"Нет результата";
+    result.append(badge);timing.textContent=probeTime(probe.seconds);row.append(name,result,timing);root.append(row);
+  }
+}
+function tunerVerification(d){
+  const base=d.baseline_result,suite=d.last_suite_result,parts=[];
+  if(base)parts.push("Текущий профиль: "+base.successes+" из "+base.total+" проверок.");
+  if(suite)parts.push((suite.candidate>0?"Кандидат "+suite.candidate:"Повторная проверка")+": "+suite.successes+" из "+suite.total+".");
+  if(!parts.length)parts.push(d.active?"Результаты будут появляться по мере проверки.":"Запустите подбор, чтобы увидеть результаты.");
+  return parts.join(" ");
+}
 function renderTuner(d){
   // Only the backend knows whether the job process lives; a stale state is reported as "error".
   const state=d.status||"idle",active=!!d.active;tunerControls(active);
-  document.getElementById("tunerStatus").textContent=tunerStateLabel(state)+(d.error?": "+d.error:"");
+  const status=document.getElementById("tunerStatus"),statusText=tunerStateLabel(state)+(d.error?": "+d.error:"");
+  if(status.textContent!==statusText)status.textContent=statusText;
+  const tone=["healthy","found"].includes(state)?"good":["error","unhealthy"].includes(state)?"bad":active?"active":"neutral";
+  status.dataset.tone=tone;document.getElementById("tunerStateIcon").setAttribute("href",tone==="good"?"#i-check":tone==="bad"?"#i-stop":"#i-pulse");
   document.getElementById("tunerCommit").textContent=[d.source_file||"",d.commit?d.commit.slice(0,12):""].filter(Boolean).join(" · ");
-  document.getElementById("tunerProgress").textContent=d.candidate_count?("кандидат "+(d.current_candidate||0)+" из "+d.candidate_count):"—";
-  const probe=d.last_probe_detail;document.getElementById("tunerProbe").textContent=probe?([probe.phase,"проход "+probe.round,probe.role,probe.http_code,probe.status,probe.seconds+" с",probe.bytes+" B"].join(" · ")):"";
-  const base=d.baseline_result,suite=d.last_suite_result;document.getElementById("tunerVerification").textContent=(base?"Исходный профиль: "+base.verdict+" ("+base.successes+"/"+base.total+"). ":"")+(suite?"Кандидат "+suite.candidate+": "+suite.phase+" · "+suite.verdict+". ":"")+(d.service==="discord-voice"?voiceSummary(d):d.service==="discord-tcp"?"Победитель проходит HTTPS и настоящий Gateway WebSocket в двух раундах.":"Победитель проходит HTTPS и транспорт в двух раундах; QUIC проверяется отдельно, воспроизведение на устройстве не подтверждается.");
-  document.getElementById("tunerLog").textContent=(d.log_tail||[]).join("\n");
+  document.getElementById("tunerProgress").textContent=d.candidate_count?("Кандидат "+(d.current_candidate||0)+" из "+d.candidate_count):"";
+  const probe=d.last_probe_detail;document.getElementById("tunerProbe").textContent=active&&probe?(probeNames[probe.role]||probe.role)+" · "+probeTime(probe.seconds):"";
+  document.getElementById("tunerVerification").textContent=tunerVerification(d);
+  document.getElementById("tunerScope").textContent=state==="idle"?"":d.service==="discord-voice"?voiceSummary(d):d.service==="discord-tcp"?"Проверка HTTPS и Gateway WebSocket. Качество голосового соединения проверяется отдельно.":"Проверка с роутера. Воспроизведение видео на устройстве и качество соединения в приложении не подтверждаются.";
+  const lines=d.log_tail||[];renderProbeRows(lines);
+  const output=document.getElementById("tunerLog"),text=lines.join("\n");if(output.textContent!==text)output.textContent=text;
+  document.getElementById("tunerLogCount").textContent="Строк: "+lines.length;
   document.getElementById("voiceVerdict").classList.toggle("visible",state==="awaiting_voice");
   const found=d.found;document.getElementById("tunerFound").classList.toggle("visible",state==="found"&&!!found);
   if(found){document.getElementById("tunerFoundId").textContent=found.candidate_id;document.getElementById("tunerFoundFamily").textContent=found.family;document.getElementById("tunerFoundSource").textContent=found.source_name;document.getElementById("tunerFoundArgs").textContent=(found.args||[]).join("\n")}

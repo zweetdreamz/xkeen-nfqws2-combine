@@ -60,7 +60,8 @@ async function main() {
         {id:'backup',name:'Резервная',protocol:'trojan',network:'tcp',security:'tls',active:false},
         {id:'mobile',name:'Мобильная',protocol:'hysteria2',network:'udp',security:'tls',active:false},
       ].map(node => ({...node,endpoint:'████████:████',sni:'Скрыт',
-        ping:{ok:true,latency_ms:85,http_code:204},health:null}));
+        ping:{ok:true,latency_ms:69,http_code:204,checked_utc:'2026-11-12T10:12:00Z',log:'HTTP HEAD: 204\nConnection reused: yes'},
+        health:{ok:true,latency_ms:622,latency_kind:'https_ttfb',total_ms:4300,http_code:200,checked_utc:'2026-11-12T10:13:00Z',log:'HTTPS: OK\nTLS: OK\nHTTP: 200'}}));
       window.fetch = async url => {
         if (url !== '/api/vpn-nodes') throw new Error('Network disabled in screenshot renderer');
         return {ok:true,json:async()=>({ok:true,nodes,active:'primary',canonical_tag:'vless-reality',recovery_needed:false})};
@@ -68,15 +69,31 @@ async function main() {
       syncNavigation('vpn-nodes');
       await refreshVpnNodes();
       window.fetch = async () => { throw new Error('Network disabled in screenshot renderer'); };
+      renderTuner({status:'healthy',active:false,service:'discord-tcp',
+        baseline_result:{verdict:'pass',successes:4,total:4},
+        last_suite_result:{candidate:0,phase:'confirm',round:2,verdict:'pass',successes:4,total:4},
+        log_tail:[
+          'EVENT|SESSION|discord-tcp|runtime-only',
+          'EVENT|BASELINE|started',
+          'EVENT|PROBE_DETAIL|0|confirm|2|web|200|0.383|77511|0|ok|https://example.invalid/',
+          'EVENT|PROBE_DETAIL|0|confirm|2|gateway|200|0.346|36|0|ok|https://example.invalid/api',
+          'EVENT|PROBE_DETAIL|0|confirm|2|image|200|0.353|1268|0|ok|https://example.invalid/image.png',
+          'EVENT|WS_RESULT|0|confirm|2|ok|0.678|upgrade',
+          'EVENT|SUITE_RESULT|0|confirm|2|pass|4|4',
+        ]});
+      log('Настройки расписания сохранены.', true);
+      log('Проверка текущего профиля завершена: 4 из 4.');
       syncNavigation('control');
     }, theme);
     await fs.mkdir(output, {recursive:true});
-    for (const [tab, filename, endSelector] of [
+    const captures = [
       ['control','control.png','#control > section:nth-of-type(3)'],
       ['vpn-nodes','vpn-nodes.png','#vpn-nodes > section:first-child'],
       ['automation','schedule.png','#automation > section:last-child'],
       ['notifications','notifications.png','#notifications > section:first-child'],
-    ]) {
+    ];
+    if (process.env.KDN_SCREENSHOT_EXTRA === '1') captures.push(['autotune','autotune.png','#autotune > section:nth-of-type(3)']);
+    for (const [tab, filename, endSelector] of captures) {
       await page.evaluate(id => syncNavigation(id), tab);
       const box = await page.locator(endSelector).boundingBox();
       if (!box) throw new Error('Missing screenshot boundary: '+endSelector);
@@ -87,9 +104,17 @@ async function main() {
         await new Promise(requestAnimationFrame);
       }, height);
       await page.screenshot({path:path.join(output,filename), animations:'disabled', clip:{x:0,y:0,width,height}});
+      if (tab === 'vpn-nodes' && process.env.KDN_SCREENSHOT_EXTRA === '1') {
+        await page.locator('.vpn-node-card').first().screenshot({path:path.join(output,'vpn-checks.png'),animations:'disabled'});
+      }
+      if (tab === 'autotune') {
+        await page.locator('#autotune > section:nth-of-type(3)').screenshot({path:path.join(output,'tuner-result.png'),animations:'disabled'});
+        await page.locator('#tunerLogDetails').evaluate(el => { el.open = true; });
+        await page.locator('#autotune > section:nth-of-type(3)').screenshot({path:path.join(output,'tuner-details.png'),animations:'disabled'});
+      }
     }
     if (errors.length) throw new Error(errors.join('\n'));
-    console.log(`Saved 4 offline screenshots (${theme}, ${width}px) to ${output}`);
+    console.log(`Saved ${captures.length} offline screens (${theme}, ${width}px) to ${output}`);
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error.message); process.exitCode=1; });

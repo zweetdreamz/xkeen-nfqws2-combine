@@ -396,7 +396,7 @@ async function vpnCurrentFileViewChecks(browser, errors) {
     assert.match(await cards.first().textContent(), /В КОНФИГЕ/);
     assert.doesNotMatch(await cards.first().textContent(), /РАСХОЖДЕНИЕ|Принять текущий конфиг/);
     assert.equal(await cards.first().getByRole('button',{name:'Пинг',exact:true}).isDisabled(),false);
-    await cards.first().locator('summary').filter({hasText:'Подробности проверки'}).click();
+    await cards.first().locator('summary[title="Подробности проверки"]').click();
     assert.match(await cards.first().locator('pre').textContent(),/curl=97/);
     assert.match(await cards.first().locator('pre').textContent(),/<not-html>/);
     assert.equal(await cards.first().locator('not-html').count(),0);
@@ -428,6 +428,78 @@ async function vpnCurrentFileViewChecks(browser, errors) {
     await page.close();
     await setMock({path:'/api/vpn-nodes',body:original});
   }
+}
+
+async function visualPolishChecks(browser, errors) {
+  const page = await openPanel(browser, errors);
+  await page.locator('.tab[data-tab="automation"]').click();
+  await page.waitForFunction(() => automationLoaded);
+  const schedule = page.locator('#autoEnabled');
+  assert.equal(await schedule.getAttribute('role'), 'switch');
+  const wasEnabled = await schedule.isChecked();
+  await setMock({reset_stats:true});
+  await schedule.focus();
+  await page.keyboard.press('Space');
+  assert.equal(await schedule.isChecked(), !wasEnabled);
+  assert.equal((await stats())['POST /api/automation/save']?.count || 0, 0, 'switch changes only the unsaved form');
+  assert.equal(await page.locator('.auto-service-enabled[role="switch"]').count(), 2);
+  await page.locator('.auto-service-enabled').first().uncheck();
+  const saveRequest = page.waitForRequest(r => new URL(r.url()).pathname === '/api/automation/save');
+  await page.locator('#saveAutomation').click();
+  const savedConfig = (await saveRequest).postDataJSON();
+  assert.equal(savedConfig.enabled, !wasEnabled);
+  assert.equal(savedConfig.services.youtube.enabled, false);
+  await page.locator('.tab[data-tab="notifications"]').click();
+  assert.equal(await page.locator('#notifyEnabled').getAttribute('role'), 'switch');
+  assert.equal(await page.locator('#notifyClearToken').getAttribute('role'), null, 'deletion remains a checkbox');
+  const originalNodes = await (await fetch(`${BASE}/api/vpn-nodes`)).json();
+  await setResponse('/api/vpn-nodes', {...originalNodes, nodes:[{
+    id:'visual-node', name:'Test connection', endpoint:'example.invalid:443', active:true,
+    protocol:'vless', network:'tcp', security:'tls',
+    ping:{ok:true,latency_ms:69,http_code:204,checked_utc:'2026-11-12T10:00:00Z',log:'fixture ping log'},
+    health:{ok:true,latency_ms:622,latency_kind:'https_ttfb',total_ms:4300,http_code:200,checked_utc:'2026-11-12T10:01:00Z',log:'fixture diagnostics log'},
+  }]});
+  await page.locator('.tab[data-tab="vpn-nodes"]').click();
+  await page.waitForFunction(() => document.getElementById('vpnNodesList').textContent.includes('Test connection'));
+  assert.equal(await page.locator('#vpnMonitorEnabled').getAttribute('role'), 'switch');
+  assert.equal(await page.locator('.vpn-check-row').count(), 2);
+  assert.deepEqual(await page.locator('.vpn-check-state').allTextContents(), ['OK','OK']);
+  assert.deepEqual(await page.locator('.vpn-check-latency').allTextContents(), ['69 ms','622 ms']);
+  assert.equal(await page.locator('.vpn-check-row time').count(), 2);
+  await page.locator('summary[title="Подробности проверки"]').click();
+  assert.match(await page.locator('.vpn-check-details').last().textContent(), /4\.3 s/);
+  assert.match(await page.locator('.vpn-check-details').last().textContent(), /fixture diagnostics log/);
+  await page.locator('.tab[data-tab="autotune"]').click();
+  await page.waitForFunction(() => !tunerRequest && pendingReads.size === 0);
+  await page.evaluate(() => renderTuner({status:'healthy',active:false,service:'discord-tcp',
+    baseline_result:{verdict:'pass',successes:4,total:4},
+    last_suite_result:{candidate:0,phase:'confirm',round:2,verdict:'pass',successes:4,total:4},
+    log_tail:['EVENT|PROBE_DETAIL|0|confirm|2|web|200|0.353|1268|0|ok|https://example.invalid/',
+      'EVENT|WS_RESULT|0|confirm|2|ok|0.678|upgrade', '<img src=x onerror=alert(1)>']
+  }));
+  assert.equal(await page.locator('#tunerStatus').textContent(), 'Текущий профиль работает');
+  assert.equal(await page.locator('#tunerChecks .probe-row').count(), 2);
+  assert.match(await page.locator('#tunerChecks').textContent(), /353 ms/);
+  assert.equal(await page.locator('#tunerLog').isVisible(), false);
+  await page.locator('#tunerLogDetails summary').click();
+  assert.match(await page.locator('#tunerLog').textContent(), /EVENT\|PROBE_DETAIL/);
+  assert.equal(await page.locator('#tunerLog img').count(), 0);
+  await page.evaluate(() => renderTuner({status:'running',active:false,service:'youtube',log_tail:[
+    'EVENT|PROBE_DETAIL|1|candidate|1|metadata|200|0.1|10|0|invalid-metadata|https://example.invalid/a',
+    'EVENT|PROBE_DETAIL|2|candidate|1|gateway|200|0.2|10|0|invalid-gateway|https://example.invalid/b',
+    'EVENT|PROBE_DETAIL|2|candidate|1|image|200|0.3|10|0|invalid-image|https://example.invalid/c',
+  ]}));
+  assert.deepEqual(await page.locator('#tunerChecks .vpn-check-state').allTextContents(), ['Ошибка','Ошибка','Ошибка']);
+  assert.match(await page.locator('#tunerChecks .probe-row').first().textContent(), /Метаданные/);
+  assert.match(await page.locator('#tunerChecks .probe-row small').first().textContent(), /Кандидат 1/);
+  assert.match(await page.locator('#tunerChecks .probe-row small').last().textContent(), /Кандидат 2/);
+  await page.evaluate(() => renderTuner({status:'unhealthy',active:false,service:'youtube',
+    baseline_result:{verdict:'fail',successes:1,total:4},log_tail:[]}));
+  assert.equal(await page.locator('#tunerStatus').textContent(), 'Текущий профиль не прошёл проверку');
+  assert.equal(await page.locator('#tunerStatus').getAttribute('data-tone'), 'bad');
+  assert.match(await page.locator('#tunerVerification').textContent(), /1 из 4/);
+  await page.close();
+  await setResponse('/api/vpn-nodes', originalNodes);
 }
 
 async function navigationAndThemeChecks(browser, errors) {
@@ -502,6 +574,7 @@ async function main() {
   const browser = await playwright.chromium.launch(launchOptions);
   const errors = [];
   try {
+    await visualPolishChecks(browser, errors);
     await navigationAndThemeChecks(browser, errors);
     await importValidationChecks(browser, errors);
     await pollingChecks(browser, errors);
@@ -519,11 +592,11 @@ async function main() {
       vpnHealthText({ok:true,latency_ms:14463,http_code:200}),
       vpnHealthText({ok:true,latency_ms:125,latency_kind:'https_ttfb',total_ms:14463,http_code:200}),
     ]);
-    assert.equal(healthText[0], 'Проверка не запускалась');
-    assert.match(healthText[1], /Вся проверка: 14\.5 с/);
-    assert.doesNotMatch(healthText[1], /14463 мс/);
-    assert.match(healthText[2], /HTTPS, первый байт: 125 мс/);
-    assert.match(healthText[2], /Вся проверка: 14\.5 с/);
+    assert.equal(healthText[0], 'Не проверено');
+    assert.match(healthText[1], /14\.5 s всего/);
+    assert.doesNotMatch(healthText[1], /14463 (?:мс|ms)/);
+    assert.match(healthText[2], /OK · 125 ms/);
+    assert.doesNotMatch(healthText[2], /14\.5|NaN|undefined/);
     const cards = await page.$$eval(".service", (items) =>
       items.map((item) => [item.dataset.service, item.querySelector(".current").textContent])
     );
