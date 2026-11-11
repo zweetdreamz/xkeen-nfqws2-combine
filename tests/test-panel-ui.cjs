@@ -35,7 +35,7 @@ const PORT = 18000 + (process.pid % 1000);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 function startServer() {
-  const server = spawn("python3", [path.join(__dirname, "panel_mock_server.py"), String(PORT)], {
+  const server = spawn(process.env.KDN_TEST_PYTHON || "python3", [path.join(__dirname, "panel_mock_server.py"), String(PORT)], {
     stdio: ["ignore", "pipe", "inherit"],
   });
   return new Promise((resolve, reject) => {
@@ -706,17 +706,39 @@ async function main() {
     // Editing never preloads credentials; blank source is omitted, active source is disabled.
     await page.locator('button[data-tab="vpn-nodes"]').click();
     await setResponse("/api/vpn-nodes/update/n2",{ok:true,node:{id:"n2",name:"Европа"}});
-    await page.evaluate(()=>editVpnNode({id:"n2",name:"Резерв",active:false}));
+    await page.evaluate(()=>refreshVpnNodes());
+    await page.locator('#vpnNodesList .vpn-node-card').filter({has:page.getByText('n2',{exact:true})}).getByRole('button',{name:'Редактировать',exact:true}).click();
+    const editBox=await page.locator('#vpnEditCard').boundingBox();
+    assert.ok(editBox&&editBox.y>=0&&editBox.y<900,'real edit click must reveal the form in the viewport');
+    assert.equal(await page.locator('#vpnEditName').evaluate(el=>document.activeElement===el),true);
+    assert.equal(await page.locator('#vpnEditId').inputValue(),'n2');
     assert.equal(await page.locator("#vpnEditSource").inputValue(),"");
     await page.locator("#vpnEditName").fill("Европа");
+    await page.locator('#vpnEditAddress').fill('203.0.113.25');
+    await page.locator('#vpnEditPort').fill('8443');
     const editRequest=page.waitForRequest(request=>new URL(request.url()).pathname==="/api/vpn-nodes/update/n2");
     await page.locator("#vpnEditSave").click();
-    assert.deepEqual((await editRequest).postDataJSON(),{name:"Европа"});
+    assert.deepEqual((await editRequest).postDataJSON(),{name:"Европа",fields:{address:'203.0.113.25',port:8443}});
     await page.waitForFunction(()=>document.getElementById("vpnEditCard").hidden);
-    await page.evaluate(()=>editVpnNode({id:"n1",name:"Основной",active:true}));
+    await page.locator('#vpnNodesList .vpn-node-card').filter({has:page.getByText('n1',{exact:true})}).getByRole('button',{name:'Редактировать',exact:true}).click();
     assert.equal(await page.locator("#vpnEditSource").isDisabled(),true);
+    assert.equal(await page.locator('[data-vpn-field="uuid"]').inputValue(),'');
+    assert.equal(await page.locator('[data-vpn-field="public_key"]').inputValue(),'');
     await page.locator("#vpnEditCancel").click();
     assert.equal(await page.locator("#vpnEditSource").inputValue(),"");
+    // An active field edit saves a reserve variant, never activates it as a
+    // side effect of clicking Save.
+    await page.locator('#vpnNodesList .vpn-node-card').filter({has:page.getByText('n1',{exact:true})}).getByRole('button',{name:'Редактировать',exact:true}).click();
+    await setMock({method:'POST',path:'/api/vpn-nodes/update/n1',body:{ok:true,draft:true,node:{id:'draft1',name:'Основной — правка'}}});
+    await page.locator('#vpnEditAddress').fill('203.0.113.99');
+    const beforeEditStats=await stats();
+    const activeEditRequest=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/vpn-nodes/update/n1');
+    await page.locator('#vpnEditSave').click();
+    assert.deepEqual((await activeEditRequest).postDataJSON(),{name:'n1',fields:{address:'203.0.113.99'}});
+    await page.waitForFunction(()=>document.getElementById('vpnEditCard').hidden);
+    assert.match(await page.locator('#vpnActionStatus').textContent(),/резервный вариант/);
+    const afterEditStats=await stats();
+    assert.equal(afterEditStats['POST /api/vpn-nodes/activate/draft1']?.count||0,beforeEditStats['POST /api/vpn-nodes/activate/draft1']?.count||0);
     // Selection/recovery refresh the visible node list once, not once in the
     // shared watcher plus again in their own finally. Post-checks stay intact.
     for (const action of [() => selectVpnNode("n2"), () => recoverVpnNode()]) {

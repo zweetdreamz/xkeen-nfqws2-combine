@@ -146,6 +146,18 @@ class VpnFacadeTests(panel_harness.PanelTestCase):
                 self.vpn.update_node('reserve', {'name': 'Европа'})
             manager.assert_not_called()
 
+    def test_partial_fields_reach_manager_without_full_source(self):
+        fields = {'address': '203.0.113.25', 'port': 8443}
+        with self.journal() as (_events, manager):
+            manager.update = mock.Mock(return_value={'ok': True})
+            self.assertEqual(self.vpn.update_node('reserve', {'fields': fields}), {'ok': True})
+            manager.update.assert_called_once_with('reserve', fields=fields)
+        with mock.patch.object(self.vpn, 'vpn_manager') as manager:
+            for body in ({'fields': []}, {'fields': 'SECRET'}, {'unexpected': {}}):
+                with self.assertRaises(ValueError):
+                    self.vpn.update_node('reserve', body)
+            manager.assert_not_called()
+
     @contextlib.contextmanager
     def journal(self, error=None, record_guard=True, record_check=True):
         """Patch the facade's collaborators with recording stand-ins; yields (events, manager).

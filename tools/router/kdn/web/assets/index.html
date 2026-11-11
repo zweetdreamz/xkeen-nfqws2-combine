@@ -82,6 +82,7 @@ button:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .automation-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .vpn-node-list{display:grid;gap:10px}.vpn-node-card{padding:14px 16px;border:1px solid var(--line);border-radius:13px;background:var(--surface-2)}.vpn-node-card.active{border-color:color-mix(in srgb,var(--green) 45%,var(--line))}.vpn-node-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.vpn-node-meta,.vpn-node-health{color:var(--muted);font-size:13px;margin-top:6px;overflow-wrap:anywhere}.vpn-node-health.good{color:var(--green)}.vpn-node-health.bad{color:var(--red)}.vpn-node-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.vpn-node-actions button{padding:7px 12px;font-size:13px}
 .vpn-recover[hidden]{display:none}
+#vpnEditCard{scroll-margin-top:16px}
 .automation-scenario{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--surface-2)}
 .automation-scenario h3{margin:0 0 12px;font-size:16px}.automation-scenario .field{margin-top:10px}
 .modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;border-radius:12px;background:var(--sunken);border:1px solid var(--line)}.modes:has(.mode[data-mode=unmanaged]){grid-template-columns:repeat(4,minmax(0,1fr))}
@@ -270,11 +271,30 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
     <pre id="vpnMonitorResult">Наблюдений пока нет.</pre><details><summary>История изменений</summary><pre id="vpnMonitorHistory">Событий пока нет.</pre></details>
     <p class="hint">Ноды и IP не переключаются автоматически. Недоступная family остаётся непроверенной. Монитор не закрепляет адрес у VPN-провайдера и не блокирует трафик.</p>
   </section>
-  <section id="vpnEditCard" class="card" hidden><h2 id="vpnEditTitle">Редактировать ноду</h2>
-    <p class="hint">Секреты не загружаются в браузер. Пустое поле подключения сохраняет прежние параметры. Сохранение не запускает проверку и не переключает VPN; после изменения параметров нажмите «Проверить».</p>
+  <section id="vpnEditCard" class="card" hidden aria-labelledby="vpnEditTitle"><h2 id="vpnEditTitle">Редактировать ноду</h2>
+    <p class="hint">Меняются только отредактированные поля. Секреты не загружаются в браузер: пустые дополнительные поля сохраняют прежние значения. Проверка и переключение запускаются отдельно.</p>
     <input id="vpnEditId" type="hidden">
     <div class="field"><label for="vpnEditName">Имя</label><input id="vpnEditName" maxlength="64" autocomplete="off"></div>
-    <div class="field"><label for="vpnEditSource">Полная новая ссылка или JSON outbound (необязательно)</label><textarea id="vpnEditSource" rows="5" autocomplete="off" spellcheck="false" placeholder="Оставьте пустым, чтобы сохранить параметры"></textarea></div>
+    <div class="diagnostic-grid">
+      <div class="field"><label for="vpnEditAddress">IP или домен сервера</label><input id="vpnEditAddress" data-vpn-field="address" autocomplete="off"></div>
+      <div class="field"><label for="vpnEditPort">Порт</label><input id="vpnEditPort" data-vpn-field="port" type="number" min="1" max="65535"></div>
+      <div class="field" data-security="tls reality"><label for="vpnEditSni">SNI</label><input id="vpnEditSni" data-vpn-field="sni" autocomplete="off"></div>
+      <div class="field" data-security="tls reality"><label for="vpnEditFingerprint">Fingerprint</label><select id="vpnEditFingerprint" data-vpn-field="fingerprint"><option value="">Не задан</option><option>chrome</option><option>firefox</option><option>safari</option><option>ios</option><option>android</option><option>edge</option><option>360</option><option>qq</option><option>random</option><option>randomized</option></select></div>
+      <div class="field" data-protocol="vless"><label for="vpnEditFlow">Flow</label><select id="vpnEditFlow" data-vpn-field="flow"><option value="">Не задан</option><option>xtls-rprx-vision</option><option>xtls-rprx-vision-udp443</option></select></div>
+    </div>
+    <details><summary>Дополнительные параметры · пустое поле сохраняет прежнее значение</summary><div class="diagnostic-grid">
+      <div class="field" data-protocol="vless"><label>Новый UUID<input data-vpn-field="uuid" data-vpn-keep-empty="1" autocomplete="off" placeholder="Сохранить прежний"></label></div>
+      <div class="field" data-protocol="vless"><label>Шифрование VLESS<input data-vpn-field="encryption" data-vpn-keep-empty="1" autocomplete="off" placeholder="Сохранить прежнее"></label></div>
+      <div class="field" data-protocol="trojan hysteria"><label>Новый пароль<input data-vpn-field="password" data-vpn-keep-empty="1" type="password" autocomplete="new-password" placeholder="Сохранить прежний"></label></div>
+      <div class="field" data-security="reality"><label>Новый публичный ключ Reality<input data-vpn-field="public_key" data-vpn-keep-empty="1" autocomplete="off" placeholder="Сохранить прежний"></label></div>
+      <div class="field" data-security="reality"><label>Новый Short ID<input data-vpn-field="short_id" data-vpn-keep-empty="1" autocomplete="off" placeholder="Сохранить прежний"></label></div>
+      <div class="field" data-security="tls"><label>ALPN, через запятую<input data-vpn-field="alpn" data-vpn-keep-empty="1" autocomplete="off" placeholder="Например h2,http/1.1"></label></div>
+      <div class="field" data-network="ws xhttp splithttp httpupgrade"><label>Path<input data-vpn-field="path" data-vpn-keep-empty="1" autocomplete="off" placeholder="Сохранить прежний"></label></div>
+      <div class="field" data-network="ws xhttp splithttp httpupgrade"><label>Host<input data-vpn-field="host" data-vpn-keep-empty="1" autocomplete="off" placeholder="Сохранить прежний"></label></div>
+      <div class="field" data-network="grpc"><label>gRPC service name<input data-vpn-field="service_name" data-vpn-keep-empty="1" autocomplete="off" placeholder="Сохранить прежний"></label></div>
+      <div class="field" data-protocol="hysteria"><label>Новый пароль Salamander/Gecko<input data-vpn-field="obfs_password" data-vpn-keep-empty="1" type="password" autocomplete="new-password" placeholder="Сохранить прежний"></label></div>
+    </div></details>
+    <details><summary>Полная замена подключения</summary><div class="field"><label for="vpnEditSource">Новая ссылка или JSON outbound</label><textarea id="vpnEditSource" rows="5" autocomplete="off" spellcheck="false" placeholder="Не заполняйте при редактировании отдельных полей"></textarea></div></details>
     <p id="vpnEditHint" class="hint"></p><div class="tuner-actions"><button id="vpnEditSave" class="apply">Сохранить</button><button id="vpnEditCancel" class="clear">Отмена</button></div>
   </section>
 </div>
@@ -520,9 +540,38 @@ async function refreshVpnNodes(){
 async function checkVpnNode(id){busy(true);vpnMessage("Проверяю "+id+" через отдельный Xray…");try{const d=await operation("/api/vpn-nodes/check/"+encodeURIComponent(id),"Проверка VPN-ноды "+id);vpnMessage(d.health.ok?"Соединение "+id+" работает.":"Нода "+id+" не прошла проверку: "+d.health.detail,d.health.ok?"good":"bad");await refreshVpnNodes()}catch(e){vpnMessage("Ошибка проверки: "+e,"bad");log("ошибка проверки VPN: "+e)}finally{busy(false)}}
 async function checkAllVpnNodes(){try{const d=await api("/api/vpn-nodes");for(const node of d.nodes)await checkVpnNode(node.id)}catch(e){vpnMessage("Ошибка проверки нод: "+e,"bad")}}
 async function addVpnNode(){const name=document.getElementById("vpnNodeName").value.trim(),raw=document.getElementById("vpnNodeSource").value.trim();if(!name||!raw){vpnMessage("Укажите имя и ссылку или JSON outbound.","bad");return}busy(true);vpnMessage("Добавляю ноду "+name+"…");try{const source=vpnImportSource(raw);await operation("/api/vpn-nodes/add","Добавление VPN-ноды "+name,JSON.stringify({name,source}));document.getElementById("vpnNodeSource").value="";document.getElementById("vpnNodeName").value="";vpnMessage("Нода добавлена. Для проверки соединения нажмите «Проверить» в её карточке.","good");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось добавить ноду: "+e,"bad");log("ошибка добавления VPN: "+e)}finally{busy(false)}}
-function editVpnNode(node){document.getElementById("vpnEditId").value=node.id;document.getElementById("vpnEditName").value=node.name;document.getElementById("vpnEditSource").value="";document.getElementById("vpnEditSource").disabled=!!node.active;document.getElementById("vpnEditHint").textContent=node.active?"Активную ноду можно переименовать. Для изменения подключения сначала выберите резервную ноду.":"Параметры сохраняются только в реестре. Рабочий outbound не изменится.";document.getElementById("vpnEditCard").hidden=false}
-function cancelVpnEdit(){document.getElementById("vpnEditCard").hidden=true;document.getElementById("vpnEditSource").value="";document.getElementById("vpnEditId").value=""}
-async function saveVpnEdit(){const id=document.getElementById("vpnEditId").value,body={name:document.getElementById("vpnEditName").value.trim()},source=document.getElementById("vpnEditSource").value.trim();if(!id||!body.name)return;busy(true);try{if(source&&!document.getElementById("vpnEditSource").disabled)body.source=vpnImportSource(source);await api("/api/vpn-nodes/update/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:JSON.stringify(body)});cancelVpnEdit();vpnMessage("Нода сохранена. Рабочий VPN не переключался; новые параметры требуют отдельной проверки.","good");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось сохранить ноду: "+e,"bad")}finally{busy(false)}}
+let vpnEditValues={};
+function editVpnNode(node){
+  const card=document.getElementById("vpnEditCard"),name=document.getElementById("vpnEditName");
+  document.getElementById("vpnEditId").value=node.id;name.value=node.name;
+  document.getElementById("vpnEditTitle").textContent="Редактировать — "+node.name;
+  const endpoint=String(node.endpoint||"").match(/^\[([^\]]+)\]:(\d+)$/)||String(node.endpoint||"").match(/^(.+):(\d+)$/);
+  const initial={address:endpoint?endpoint[1]:"",port:endpoint?endpoint[2]:"",sni:node.sni||"",fingerprint:node.fingerprint||"",flow:node.flow||""};
+  const protocol=String(node.protocol||"").toLowerCase().replace("hysteria2","hysteria");
+  vpnEditValues={};
+  card.querySelectorAll('[data-vpn-field]').forEach(input=>{
+    const field=input.closest('.field'),key=input.dataset.vpnField;
+    field.hidden=!!((field.dataset.protocol&&!field.dataset.protocol.split(' ').includes(protocol))||(field.dataset.security&&!field.dataset.security.split(' ').includes(node.security))||(field.dataset.network&&!field.dataset.network.split(' ').includes(node.network)));
+    input.value=initial[key]||"";vpnEditValues[key]=input.value;
+  });
+  document.getElementById("vpnEditSource").value="";document.getElementById("vpnEditSource").disabled=!!node.active;
+  document.getElementById("vpnEditHint").textContent=node.active?"Изменения подключения сохранятся отдельной резервной нодой. Рабочий VPN останется прежним; применение — кнопкой «Сделать активной». Переименование не создаёт копию.":"Меняются только указанные параметры резервной ноды. Рабочий VPN не изменится.";
+  document.getElementById("vpn-nodes").firstElementChild.after(card);
+  card.hidden=false;card.scrollIntoView({behavior:"instant",block:"start"});name.focus({preventScroll:true});
+}
+function cancelVpnEdit(){document.getElementById("vpnEditCard").hidden=true;document.getElementById("vpnEditSource").value="";document.getElementById("vpnEditId").value="";document.querySelectorAll('[data-vpn-keep-empty]').forEach(input=>input.value="");vpnEditValues={}}
+async function saveVpnEdit(){
+  const id=document.getElementById("vpnEditId").value,body={name:document.getElementById("vpnEditName").value.trim()},source=document.getElementById("vpnEditSource").value.trim();
+  if(!id||!body.name)return;busy(true);
+  try{
+    const fields={};document.querySelectorAll('#vpnEditCard [data-vpn-field]').forEach(input=>{const key=input.dataset.vpnField,value=input.value;if(input.closest('.field').hidden||(input.dataset.vpnKeepEmpty&&!value)||value===vpnEditValues[key])return;fields[key]=key==="port"?Number(value):value});
+    if(source&&Object.keys(fields).length)throw new Error("Выберите отдельные поля или полную замену подключения.");
+    if(source&&!document.getElementById("vpnEditSource").disabled)body.source=vpnImportSource(source);
+    if(Object.keys(fields).length)body.fields=fields;
+    const result=await api("/api/vpn-nodes/update/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:JSON.stringify(body)});
+    cancelVpnEdit();vpnMessage(result.draft?"Сохранён резервный вариант «"+result.node.name+"». Рабочий VPN не менялся. Проверьте вариант и нажмите «Сделать активной», когда будете готовы.":"Нода сохранена. Рабочий VPN не переключался; новые параметры требуют отдельной проверки.","good");await refreshVpnNodes();
+  }catch(e){vpnMessage("Не удалось сохранить ноду: "+e,"bad")}finally{busy(false)}
+}
 async function selectVpnNode(id){if(!confirm("Сделать VPN-ноду «"+id+"» активной для ВСЕХ правил Xray с тегом vless-reality?\n\nСначала пройдёт проверка соединения и будет создан backup. Затем XKeen/Xray перезапустится; панель не запускает перезапуск nfqws2. При ошибке старый VPN автоматически восстановится."))return;busy(true);vpnMessage("Переключаю общий VPN на "+id+"…");try{const d=await api("/api/vpn-nodes/activate/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:"{}"});await watchRouteJob(d.job_id,"VPN-нода "+id,{post:true,refreshVpn:false});vpnMessage("Общий VPN переключён на "+id+".","good")}catch(e){vpnMessage("Переключение не удалось: "+e,"bad");busy(false)}finally{await refreshVpnNodes()}}
 async function recoverVpnNode(){if(!confirm("Восстановить прежнюю VPN-ноду после прерванного переключения?\n\nПанель вернёт сохранённый outbound и при необходимости перезапустит XKeen/Xray. nfqws2 не перезапускается скриптом."))return;busy(true);vpnMessage("Восстанавливаю прежнюю VPN-ноду…");try{const d=await api("/api/vpn-nodes/recover",{method:"POST",headers:controlHeaders,body:"{}"});await watchRouteJob(d.job_id,"Восстановление VPN",{post:true,refreshVpn:false});vpnMessage("Прежняя VPN-нода восстановлена.","good")}catch(e){vpnMessage("Восстановление не удалось: "+e,"bad");busy(false)}finally{await refreshVpnNodes()}}
 async function deleteVpnNode(id){if(!confirm("Убрать резервную VPN-ноду «"+id+"» в корзину? Активный VPN и маршруты не изменятся."))return;try{await api("/api/vpn-nodes/delete/"+encodeURIComponent(id),{method:"POST",headers:controlHeaders,body:"{}"});vpnMessage("Нода "+id+" убрана в корзину.","good");await refreshVpnNodes()}catch(e){vpnMessage("Не удалось убрать ноду: "+e,"bad")}}

@@ -70,9 +70,10 @@ def sync_current():
 
 
 def update_node(node_id, changes):
-    if (not isinstance(changes, dict) or not changes or set(changes) - {'name', 'source'}
-            or any(not isinstance(value, str) for value in changes.values())):
-        raise ValueError('ожидаются name и/или полный source ноды')
+    if (not isinstance(changes, dict) or not changes or set(changes) - {'name', 'source', 'fields'}
+            or any(not isinstance(value, str) for key, value in changes.items() if key != 'fields')
+            or ('fields' in changes and not isinstance(changes['fields'], dict))):
+        raise ValueError('ожидаются имя, отдельные поля или полный source ноды')
     with jobfiles.COORDINATOR.exclusive(refusals.VPN_STORE):
         with VPN_STORE_LOCK:
             return vpn_manager().update(node_id, **changes)

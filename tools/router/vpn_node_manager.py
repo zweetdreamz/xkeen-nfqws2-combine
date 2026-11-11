@@ -30,7 +30,7 @@ from urllib.parse import urlsplit
 import unicodedata
 
 from kdn.common import lock as project_lock, xkeen, xray_process
-from kdn import vpn_links
+from kdn import vpn_links, vpn_fields
 from kdn.engine import nfqws_process
 
 
@@ -504,12 +504,14 @@ class VpnNodeManager:
         self._save_state(state)
         return {"ok": True, "node": self._public_node(key, state["nodes"][key], state["active"])}
 
-    def update(self, node_id: str, *, name=None, source=None) -> dict:
+    def update(self, node_id: str, *, name=None, source=None, fields=None) -> dict:
         self._require_supported_xkeen()
         if not isinstance(node_id, str) or not NODE_NAME.fullmatch(node_id):
             raise ValueError('некорректный ID VPN-ноды')
-        if name is None and source is None:
+        if name is None and source is None and fields is None:
             raise ValueError('не заданы изменения ноды')
+        if source is not None and fields is not None:
+            raise ValueError('выберите отдельные поля или полную замену подключения')
         with project_lock.ProjectLock(self.lock_dir):
             if self.transaction_file.exists() or self.transaction_file.is_symlink():
                 raise ValueError('сначала восстановите незавершённое переключение VPN')
@@ -531,6 +533,29 @@ class VpnNodeManager:
                     raise ValueError('параметры активной ноды не меняются: сначала выберите резервную')
                 new['outbound'] = safe_normalize_outbound(source)
                 new['health'] = None
+            if fields is not None:
+                new['outbound'] = safe_normalize_outbound(vpn_fields.patch_outbound(new['outbound'], fields))
+                if new['outbound'] != old['outbound']:
+                    new['health'] = None
+            if node_id == state['active'] and new['outbound'] != old['outbound']:
+                # Editing cannot silently replace a working connection. Keep an
+                # explicit reserve variant, then use the existing transactional
+                # activation (probe + snapshot + restart + rollback) separately.
+                if len(state['nodes']) >= MAX_NODES:
+                    raise ValueError('для изменённого варианта освободите место в реестре нод')
+                base = new['name'][:48]
+                for number in range(1, MAX_NODES + 2):
+                    draft_name = base + ' — правка' + (f' {number}' if number > 1 else '')
+                    if all(row['name'].casefold() != draft_name.casefold() for row in state['nodes'].values()):
+                        break
+                draft_id = 'node_' + secrets.token_hex(8)
+                if draft_id in state['nodes']:
+                    raise ValueError('ID резервного варианта уже существует; повторите сохранение')
+                new.update(name=display_name(draft_name), created_utc=utc_now(), health=None)
+                state['nodes'][draft_id] = new
+                self._save_state(state)
+                return self._after_commit({'ok': True, 'draft': True,
+                                          'node': self._public_node(draft_id, new, state['active'])})
             if new == old:
                 return {'ok': True, 'node': self._public_node(node_id, old, state['active'])}
             new['updated_utc'] = utc_now()
