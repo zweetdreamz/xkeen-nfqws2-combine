@@ -250,6 +250,10 @@ pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);bo
 @media(max-width:1100px) and (min-width:761px){.sidebar{width:200px;padding-inline:12px}.page{margin-left:200px;width:calc(100% - 200px);padding-inline:24px}.brand{padding-inline:10px}.brand-name{font-size:16px}.service{padding:16px}.service-head{gap:8px}.service-title{gap:8px}.service-icon{width:30px;height:30px}.mode{gap:4px;padding-inline:3px}.legend{gap:12px}.profile-head{flex-wrap:wrap}.skip-link{left:216px}}
 @media(max-width:760px){.sidebar{display:none}.page{width:100%;margin:0;padding:0 20px 28px}.topbar{height:64px;padding:0;flex-direction:row;align-items:center;gap:8px}.breadcrumb{font-size:13px;font-weight:650;color:var(--text)}.breadcrumb .i,.breadcrumb span:last-child{display:none}.header-tools{gap:12px}.status{font-size:11px}.theme-toggle{width:34px;height:34px;min-height:34px}.mobile-navigation{display:block;margin-top:18px}.mobile-navigation label{display:block;color:var(--faint);font-size:11px;margin-bottom:6px}.mobile-navigation select{width:100%;min-height:44px;padding:10px 12px;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;color:var(--text);font:600 14px system-ui}.page-heading{padding:22px 0}.page-heading h1{font-size:27px}.page-heading p{font-size:13px}.page-heading .eyebrow{display:none}.card{padding:20px;margin-top:16px}.routes-card{padding:0}.services{gap:12px}.service{padding:18px}.service-head{margin-bottom:16px}.service .modes{max-width:none}.mode{min-height:42px;font-size:13px}.legend{grid-template-columns:1fr;gap:6px}.legend>div{line-height:1.6}.warning{padding:12px;font-size:12px}.xkeen-card{gap:14px}.xkeen-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;gap:6px}.xkeen-actions button{padding:10px 6px;gap:5px;font-size:11px}.xkeen-actions .i{width:14px;height:14px}.xkeen-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.xkeen-actions .restart{grid-column:1/-1}.profile-head{flex-wrap:wrap;gap:10px}.profile-head>.tuner-actions{flex:auto}.vpn-node-head{flex-wrap:wrap}.vpn-node-actions button{min-height:40px}.tuner-actions>button,.toolbar>button{min-height:42px}.console-card{padding:18px 0 0}.skip-link{left:12px}.field input,.field select,.field textarea{font-size:16px}.automation-grid,.tuner-grid{gap:16px}footer{font-size:10px}}
 @media(max-width:380px){.page{padding-inline:14px}.card{padding:16px}.routes-card{padding:0}.service{padding:14px}.service-head{gap:8px}.service-title{gap:8px}.service-icon{width:30px;height:30px}.service h3{font-size:14px}.current{font-size:9px;padding-inline:6px}.breadcrumb{font-size:12px}.status{font-size:10px;gap:6px}.header-tools{gap:8px}.xkeen-actions{grid-template-columns:1fr}.dns-options{grid-template-columns:1fr}.console-card{padding:16px 0 0}.notify-enable{font-size:13px}}
+.vpn-node-actions{display:flex;flex-wrap:nowrap;flex:none;gap:6px;margin:0;padding:0;border:0;justify-content:flex-end}
+.vpn-node-actions button{display:inline-flex;align-items:center;justify-content:center;flex:none;width:34px;height:34px;min-height:34px;padding:0;font-size:0;border-radius:8px}
+.vpn-node-actions .i{width:16px;height:16px}.vpn-node-title{flex:1;min-width:0}.vpn-node-head{gap:14px;flex-wrap:nowrap}
+@media(max-width:760px){.vpn-node-head{flex-wrap:wrap}.vpn-node-head>.vpn-node-title{flex-basis:100%}.vpn-node-actions{margin-left:auto}.vpn-node-actions button{width:38px;height:38px;min-height:38px}}
 </style>
 </head>
 <body>
@@ -263,6 +267,7 @@ pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);bo
 <symbol id="i-restart" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></symbol>
 <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.64-6.36"/><path d="M3 4v5h5"/><path d="M12 7.5V12l3 2"/></symbol>
 <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></symbol>
+<symbol id="i-pencil" viewBox="0 0 24 24"><path d="m16 3 5 5-12 12H4v-5zM13 6l5 5"/></symbol>
 <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></symbol>
 <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7.5 9.5l3 2.5-3 2.5"/><path d="M13 15h4"/></symbol>
 <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></symbol>
@@ -425,17 +430,6 @@ pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);bo
     <div class="toolbar"><button id="inspectRoute" class="apply">Проверить маршрут</button><button id="inspectSetup">Подготовить доступ к диагностике</button></div>
     <p class="hint">Подготовка создаёт локальные API/SOCKS и перезапускает Xray с той же нодой. Сами проверки службы не меняют.</p>
     <pre id="inspectRouteResult" role="status" aria-live="polite">Проверок пока нет.</pre>
-  </section>
-  <section class="card"><h2>Ресурсы через Direct / VPN</h2>
-    <p class="hint">Проверки идут с роутера через выбранные пути. Методика TLS/TCP16 основана на dpi-detector; сертификаты HTTPS проверяются.</p>
-    <div class="diagnostic-grid">
-      <div class="field"><label for="inspectResource">Ресурс</label><select id="inspectResource"><option value="youtube">YouTube</option><option value="discord">Discord API</option><option value="telegram">Telegram</option><option value="claude">Claude</option><option value="tcp16">TCP16: ответ 64 КиБ</option></select></div>
-      <div class="field"><label for="inspectPath">Путь</label><select id="inspectPath"><option value="both">Direct и VPN</option><option value="direct">Direct</option><option value="vpn">VPN</option></select></div>
-      <div class="field"><label><input id="inspectExtended" type="checkbox"> TLS1.2 и TLS1.3 (расширенная проверка)</label></div>
-    </div>
-    <button id="inspectResources" class="apply">Проверить ресурс</button>
-    <pre id="inspectResourceResult" role="status" aria-live="polite">Проверок пока нет.</pre>
-    <p class="hint">Direct может обрабатываться текущим nfqws2. HTTP отказ, таймаут или reset сами по себе не доказывают DPI. UDP/QUIC, звук и воспроизведение здесь не проверяются.</p>
   </section>
   <section class="card"><div class="section-head"><svg class="i"><use href="#i-pulse"/></svg><h2>Диагностика Flowseal для роутера</h2></div><p class="hint">Адаптация Run Diagnostics и Run Tests: ничего не применяет, не меняет firewall и не перезапускает Xkeen/nfqws2.</p>
     <div class="toolbar"><button class="diag-start apply" data-diag-kind="health">Проверить роутер</button><button class="diag-start" data-diag-kind="standard">Standard tests</button><button class="diag-start" data-diag-kind="dpi">DPI 16–20 КБ</button><button id="cancelDiagnostic" class="cancel" disabled>Остановить тест</button></div>
@@ -602,6 +596,7 @@ function scheduleAutomationPoll(active){
 }
 async function refresh(){const latest=latestView("status");try{const d=await api("/api/status");if(!latest())return;updateService("discord-tcp",d.discord_tcp_route||"unknown");updateService("discord-voice",d.discord_voice_route||"unknown");updateService("youtube",d.youtube_route||"unknown");updateService("telegram",d.telegram_route||"unknown");const running=d.xkeen_runtime==="running";dot.className="dot "+(running?"ok":"bad");statusText.textContent=running?"XKeen работает":"XKeen остановлен"}catch(e){if(!latest())return;dot.className="dot bad";statusText.textContent="ошибка статуса";log("status: "+e)}}
 function vpnMessage(message,tone=""){const box=document.getElementById("vpnActionStatus");box.className="automation-save-status"+(tone?" "+tone:"");box.textContent=message}
+function vpnIconButton(label,icon,action){const button=document.createElement('button');button.type='button';button.title=label;button.setAttribute('aria-label',label);button.innerHTML='<svg class="i" aria-hidden="true"><use href="#'+icon+'"/></svg>';button.addEventListener('click',action);return button}
 function vpnImportSource(source){
   if(!/^(vless|trojan|hy2|hysteria2):\/\//i.test(source))return source;
   if(typeof window.generateConfigForCore!=="function")throw new Error("Генератор XKeen-UI не загрузился. Обновите страницу.");
@@ -650,15 +645,16 @@ async function refreshVpnNodes(){
       const pingDetails=document.createElement('details');
       if(node.ping&&node.ping.log){const summary=document.createElement('summary'),output=document.createElement('pre');summary.textContent='Подробности пинга';output.textContent=node.ping.log;pingDetails.append(summary,output)}else pingDetails.hidden=true;
       const actions=document.createElement("div");actions.className="vpn-node-actions";
-      const edit=document.createElement("button");edit.textContent="Редактировать";edit.disabled=!!d.recovery_needed;edit.addEventListener("click",()=>editVpnNode(node));actions.append(edit);
-      const check=document.createElement("button");check.textContent="Пинг";check.addEventListener("click",()=>checkVpnNode(node.id));actions.append(check);
-      const diagnose=document.createElement('button');diagnose.textContent='Диагностика';diagnose.addEventListener('click',()=>diagnoseVpnNode(node.id));actions.append(diagnose);
+      const edit=vpnIconButton('Редактировать','i-pencil',()=>editVpnNode(node));edit.disabled=!!d.recovery_needed;actions.append(edit);
+      actions.append(vpnIconButton('Пинг','i-pulse',()=>checkVpnNode(node.id)));
+      actions.append(vpnIconButton('Диагностика','i-terminal',()=>diagnoseVpnNode(node.id)));
       if(!node.active){
-        const activate=document.createElement("button");activate.className="apply";activate.textContent="Сделать активной";
-        activate.disabled=!!d.drift||!!d.warning||!!d.recovery_needed;activate.addEventListener("click",()=>selectVpnNode(node.id));
+        const activate=vpnIconButton('Сделать активной','i-play',()=>selectVpnNode(node.id));activate.className="apply";
+        activate.disabled=!!d.drift||!!d.warning||!!d.recovery_needed;
         actions.append(activate,trashButton("Убрать ноду в корзину",()=>deleteVpnNode(node.id)));
       }
-      card.append(head,meta,ping,pingDetails,health,diagnostics,actions);root.append(card);
+      heading.insertBefore(badge,endpoint);head.append(actions);
+      card.append(head,meta,ping,pingDetails,health,diagnostics);root.append(card);
     });
     if(routeWatch||operationStarting)busy(true);
   }catch(e){if(!latest())return;summary.textContent="Ошибка списка VPN-нод: "+e;root.textContent="";log("VPN-ноды: "+e)}

@@ -133,7 +133,7 @@ reset, HTTP4xx и небольшой ответ сами по себе не до
 | `GET /api/inspection/status` | Последнее ручное задание и его сохранённые результаты |
 | `GET /api/vpn-monitor` | Настройки, одобренные IP, история и свежесть наблюдения рабочей ноды |
 | `POST /api/inspection/check/route` | Проверка контекста TestRoute |
-| `POST /api/inspection/check/resources` | Ручная проверка выбранных Direct/VPN-ресурсов |
+| `POST /api/inspection/check/resources` | Проверка Direct/VPN-ресурсов через API; отдельного блока в панели нет |
 | `POST /api/inspection/check/vpn` | Ручная проверка активной ноды и IP |
 | `POST /api/inspection/setup` | Явная подготовка доступа; отдельный job с возможным рестартом Xray |
 | `POST /api/vpn-monitor/approve` | Одобрение конкретного свежего наблюдения |

@@ -35,8 +35,8 @@
   async function refreshInspection(){
     try{
       const [checks,data]=await Promise.all([api("/api/inspection/status"),api("/api/vpn-monitor")]);
-      showResult("inspectRouteResult",(checks.results||{}).route);showResult("inspectResourceResult",(checks.results||{}).resources);renderMonitor(data);
-      ["inspectRoute","inspectResources","vpnMonitorCheck","inspectSetup"].forEach(id=>el(id).disabled=checks.active);
+      showResult("inspectRouteResult",(checks.results||{}).route);renderMonitor(data);
+      ["inspectRoute","vpnMonitorCheck","inspectSetup"].forEach(id=>el(id).disabled=checks.active);
       return checks;
     }catch(error){el("vpnMonitorSummary").textContent="Ошибка статуса: "+error;return null}
   }
@@ -46,11 +46,10 @@
       const job=await post("/api/inspection/check/"+kind,body),deadline=Date.now()+190000;
       while(Date.now()<deadline){await delay(800);const state=await refreshInspection();if(!state)continue;if(state.job_id!==job.job_id)throw new Error("ID проверки изменился");if(!state.active){if(state.status==="interrupted")throw new Error("Проверка прервалась");return}}
       throw new Error("Превышено время проверки");
-    }catch(error){el(kind==="route"?"inspectRouteResult":kind==="resources"?"inspectResourceResult":"vpnMonitorSummary").textContent="Ошибка: "+error}
+    }catch(error){el(kind==="route"?"inspectRouteResult":"vpnMonitorSummary").textContent="Ошибка: "+error}
     finally{polling=false}
   }
   el("inspectRoute").addEventListener("click",()=>check("route",{domain:el("inspectDomain").value,ip:el("inspectIp").value,inbound:el("inspectInbound").value,network:el("inspectNetwork").value,port:Number(el("inspectPort").value),source:el("inspectSource").value,source_port:Number(el("inspectSourcePort").value)}));
-  el("inspectResources").addEventListener("click",()=>{const path=el("inspectPath").value;check("resources",{targets:[el("inspectResource").value],paths:path==="both"?["direct","vpn"]:[path],extended:el("inspectExtended").checked})});
   el("vpnMonitorCheck").addEventListener("click",()=>check("vpn",{families:families()}));
   el("vpnMonitorApprove").addEventListener("click",async()=>{
     if(!monitor)return;const result=monitor.state.result||{},observed=result.observed||{},approval={families:families(),identity:monitor.identity,observation_id:result.observation_id};

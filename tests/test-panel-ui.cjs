@@ -506,6 +506,10 @@ async function main() {
     await importValidationChecks(browser, errors);
     await pollingChecks(browser, errors);
     await inspectionChecks(browser, errors);
+    const removedPanel=await openPanel(browser,errors);
+    assert.equal(await removedPanel.locator('#inspectResources,#inspectResourceResult').count(),0);
+    assert.equal(await removedPanel.getByRole('heading',{name:'Ресурсы через Direct / VPN',exact:true}).count(),0);
+    await removedPanel.close();
     await vpnCurrentFileViewChecks(browser, errors);
     // Four independent route cards with their current modes.
     let page = await openPanel(browser, errors);
@@ -780,6 +784,18 @@ async function main() {
     await page.locator('button[data-tab="vpn-nodes"]').click();
     await setResponse("/api/vpn-nodes/update/n2",{ok:true,node:{id:"n2",name:"Европа"}});
     await page.evaluate(()=>refreshVpnNodes());
+    const reserveTile=page.locator('#vpnNodesList .vpn-node-card').filter({has:page.getByText('n2',{exact:true})});
+    for(const width of [1280,390]){
+      await page.setViewportSize({width,height:900});
+      const layout=await reserveTile.evaluate(card=>{
+        const actions=card.querySelector('.vpn-node-head .vpn-node-actions'),buttons=[...actions.querySelectorAll('button')];
+        return {count:buttons.length,iconOnly:buttons.every(button=>!button.textContent.trim()&&button.querySelector('svg')&&button.title===button.getAttribute('aria-label')),tops:buttons.map(button=>button.getBoundingClientRect().top),right:actions.getBoundingClientRect().right,cardRight:card.getBoundingClientRect().right};
+      });
+      assert.equal(layout.count,5);assert.equal(layout.iconOnly,true);
+      assert.ok(Math.max(...layout.tops)-Math.min(...layout.tops)<1,'connection icons must remain in one row');
+      assert.ok(layout.right<=layout.cardRight-10,'connection icons must fit inside the tile');
+    }
+    await page.setViewportSize({width:1280,height:900});
     await page.locator('#vpnNodesList .vpn-node-card').filter({has:page.getByText('n2',{exact:true})}).getByRole('button',{name:'Редактировать',exact:true}).click();
     const editBox=await page.locator('#vpnEditCard').boundingBox();
     assert.ok(editBox&&editBox.y>=0&&editBox.y<900,'real edit click must reveal the form in the viewport');
