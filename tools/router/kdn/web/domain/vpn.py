@@ -12,6 +12,7 @@ from kdn.common import timeutil
 from kdn.web.infra import config as cfg
 from kdn.web.infra import jobfiles
 from kdn.web.infra import engine
+from kdn.web.infra import vpn_compatibility
 from kdn.web.domain import route_jobs
 from kdn.web.domain import refusals
 
@@ -19,6 +20,7 @@ from kdn.web.domain import refusals
 VPN_MODULE_LOCK = threading.Lock()
 VPN_STORE_LOCK = threading.RLock()
 VPN_MODULE = None
+VPN_PING_BUSY = threading.Event()
 
 
 def vpn_manager():
@@ -37,7 +39,30 @@ def vpn_manager():
 def nodes_status():
     """Status of the node registry, read under the store lock."""
     with VPN_STORE_LOCK:
-        return vpn_manager().status()
+        return registry_manager().status()
+
+
+def registry_manager():
+    manager = vpn_manager()
+    manager.compatibility_guard = lambda: vpn_compatibility.require_registry_versions(manager)
+    return manager
+
+
+def add_node(name, source, *, auto_name=False):
+    with jobfiles.COORDINATOR.exclusive(refusals.VPN_STORE), VPN_STORE_LOCK:
+        manager = registry_manager()
+        return manager.add(name, source, auto_name=True) if auto_name else manager.add(name, source)
+
+
+def ping_nodes(node_id=None):
+    # Keep the project/coordinator exclusion, but do not hold the in-process
+    # read lock during network I/O: the node list remains responsive.
+    with jobfiles.COORDINATOR.exclusive(refusals.VPN_STORE, family='route'):
+        VPN_PING_BUSY.set()
+        try:
+            return registry_manager().ping_nodes(None if node_id is None else [node_id])
+        finally:
+            VPN_PING_BUSY.clear()
 
 
 def active_identity():
@@ -59,14 +84,14 @@ def remove_node(node_id):
     """Remove a node from the registry, refused while a job starts or a route job runs."""
     with jobfiles.COORDINATOR.exclusive(refusals.VPN_STORE):
         with VPN_STORE_LOCK:
-            return vpn_manager().remove(node_id)
+            return registry_manager().remove(node_id)
 
 
 def sync_current():
     """Take the active outbound into the registry, refused while a job starts or a route job runs."""
     with jobfiles.COORDINATOR.exclusive(refusals.VPN_STORE):
         with VPN_STORE_LOCK:
-            return vpn_manager().sync_current()
+            return registry_manager().sync_current()
 
 
 def update_node(node_id, changes):
@@ -76,7 +101,7 @@ def update_node(node_id, changes):
         raise ValueError('ожидаются имя, отдельные поля или полный source ноды')
     with jobfiles.COORDINATOR.exclusive(refusals.VPN_STORE):
         with VPN_STORE_LOCK:
-            return vpn_manager().update(node_id, **changes)
+            return registry_manager().update(node_id, **changes)
 
 
 def start_vpn_node_job(name):

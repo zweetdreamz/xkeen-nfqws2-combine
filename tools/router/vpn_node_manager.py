@@ -26,11 +26,11 @@ import sys
 import tempfile
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, unquote
 import unicodedata
 
 from kdn.common import lock as project_lock, xkeen, xray_process
-from kdn import vpn_links, vpn_fields
+from kdn import vpn_links, vpn_fields, vpn_diagnostics
 from kdn.engine import nfqws_process
 
 
@@ -101,6 +101,18 @@ def safe_normalize_outbound(source):
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def public_health(value):
+    if not isinstance(value, dict):
+        return None
+    allowed = {'ok','checked_utc','checked_at','latency_ms','latency_kind','total_ms',
+               'startup_ms','http_code','curl_code','target','detail'}
+    result = {key:item for key,item in value.items() if key in allowed
+              and isinstance(item,(str,int,float,bool)) and (not isinstance(item,str) or len(item)<=500)}
+    if isinstance(value.get('log'),str):
+        result['log']=value['log'].encode('utf-8')[:8192].decode('utf-8',errors='ignore')
+    return result
 
 
 def stage(name):
@@ -244,8 +256,12 @@ class VpnNodeManager:
         self.nfqws_conf = Path(nfqws_conf)
         self.xkeen_init = xkeen_init
         self.proc_root = Path(proc_root)
+        self.compatibility_guard = None
 
     def _require_supported_xkeen(self):
+        if self.compatibility_guard is not None:
+            self.compatibility_guard()
+            return
         xkeen.require(self.xkeen)
         self._require_supported_xray()
 
@@ -352,6 +368,7 @@ class VpnNodeManager:
             if normalize_outbound(active['outbound']) != current:
                 active['outbound'] = current
                 active['health'] = None
+                active['ping'] = None
             return state
         _, current = self._current_file()
         current = normalize_outbound(current)
@@ -382,20 +399,14 @@ class VpnNodeManager:
         } else None
         flow = settings.get('flow')
         flow = flow if isinstance(flow, str) and flow in {'xtls-rprx-vision', 'xtls-rprx-vision-udp443'} else None
-        health = node.get('health')
-        if isinstance(health, dict):
-            health = {field: value for field, value in health.items()
-                      if field in {'ok', 'checked_utc', 'checked_at', 'latency_ms', 'latency_kind', 'total_ms', 'http_code', 'target', 'detail'}
-                      and isinstance(value, (str, int, float, bool)) and (not isinstance(value, str) or len(value) <= 500)}
-        else:
-            health = None
+        health = public_health(node.get('health'))
         # Endpoint is operational context; credentials/Reality keys never leave.
         return {"id": key, "name": node.get("name", key), "active": key == active,
                 "protocol": "Hysteria2" if outbound.get("protocol") == "hysteria" else outbound.get("protocol", ""),
                 "endpoint": (f"[{endpoint}]:{port}" if ':' in endpoint else f"{endpoint}:{port}") if valid_endpoint else "не указан",
                 "network": network, "security": security,
                 "flow": flow, "fingerprint": fingerprint, "sni": sni,
-                "health": health, "created_utc": node.get("created_utc", "")}
+                "health": health, "ping": public_health(node.get('ping')), "created_utc": node.get("created_utc", "")}
 
     def status(self) -> dict:
         try:
@@ -488,17 +499,41 @@ class VpnNodeManager:
         atomic_json(self.state_file, state)
 
     @store_mutation
-    def add(self, name: str, source: str) -> dict:
+    def add(self, name: str, source: str, *, auto_name=False) -> dict:
+        outbound = safe_normalize_outbound(source)
+        state = self.load()
+        if auto_name:
+            hint = name if isinstance(name, str) else ''
+            if not hint:
+                try:
+                    if source.lower().startswith(('vless://','trojan://','hy2://','hysteria2://')):
+                        hint = unquote(urlsplit(source).fragment)
+                    else:
+                        original = vpn_links._object(strip_json_comments(source))
+                        hint = original.get('tag', '')
+                except (ValueError, TypeError):
+                    pass
+            if not isinstance(hint, str) or not hint or hint == 'current':
+                address = outbound.get('settings', {}).get('address')
+                hint = address if isinstance(address,str) and address else outbound['protocol']
+            hint = ''.join(char if (unicodedata.category(char)[0] in 'LNM' or
+                           unicodedata.category(char) in {'So', 'Pd'} or char in ' ._()-+') else ' '
+                           for char in str(hint))
+            base = ' '.join(hint.split())[:48] or 'VPN'
+            name = base
+            number = 2
+            existing = {row.get('name', key).casefold() for key, row in state['nodes'].items()}
+            while name.casefold() in existing:
+                name = f'{base} {number}'
+                number += 1
         name = display_name(name)
         if name == 'current':
             raise ValueError('зарезервированное имя ноды')
-        state = self.load()
         if any(display_name(row.get('name', key)).casefold() == name.casefold() for key, row in state['nodes'].items()) or len(state["nodes"]) >= MAX_NODES:
             raise ValueError("нода уже существует или достигнут предел 16 нод")
         key = name if NODE_NAME.fullmatch(name) and name not in state['nodes'] else 'node_' + secrets.token_hex(8)
         if key in state['nodes']:
             raise ValueError('ID ноды уже существует')
-        outbound = safe_normalize_outbound(source)
         state["nodes"][key] = {"name": name, "outbound": outbound,
                                 "created_utc": utc_now(), "health": None}
         self._save_state(state)
@@ -533,10 +568,12 @@ class VpnNodeManager:
                     raise ValueError('параметры активной ноды не меняются: сначала выберите резервную')
                 new['outbound'] = safe_normalize_outbound(source)
                 new['health'] = None
+                new['ping'] = None
             if fields is not None:
                 new['outbound'] = safe_normalize_outbound(vpn_fields.patch_outbound(new['outbound'], fields))
                 if new['outbound'] != old['outbound']:
                     new['health'] = None
+                    new['ping'] = None
             if node_id == state['active'] and new['outbound'] != old['outbound']:
                 # Editing cannot silently replace a working connection. Keep an
                 # explicit reserve variant, then use the existing transactional
@@ -552,6 +589,7 @@ class VpnNodeManager:
                 if draft_id in state['nodes']:
                     raise ValueError('ID резервного варианта уже существует; повторите сохранение')
                 new.update(name=display_name(draft_name), created_utc=utc_now(), health=None)
+                new['ping'] = None
                 state['nodes'][draft_id] = new
                 self._save_state(state)
                 return self._after_commit({'ok': True, 'draft': True,
@@ -588,6 +626,32 @@ class VpnNodeManager:
         return {"ok": True, "health": health}
 
     @store_mutation
+    def ping_nodes(self, node_ids=None):
+        from kdn import vpn_ping
+        state = self.load()
+        if node_ids is None:
+            node_ids = list(state['nodes'])
+        if (not isinstance(node_ids,list) or not node_ids or len(node_ids)>MAX_NODES
+                or any(not isinstance(key,str) or key not in state['nodes'] for key in node_ids)):
+            raise ValueError('нода для пинга не найдена')
+        selected = {key:normalize_outbound(state['nodes'][key]['outbound']) for key in node_ids}
+        stamp = utc_now()
+        measured = vpn_ping.run(selected,self.xray)
+        # An external editor is not governed by our lock. Never publish a stale
+        # measurement or overwrite its newer node/config with our old snapshot.
+        latest = self.load()
+        result = []
+        for key in node_ids:
+            ping = {**measured[key],'checked_utc':stamp,'checked_at':stamp}
+            if key not in latest['nodes'] or normalize_outbound(latest['nodes'][key]['outbound']) != selected[key]:
+                ping = {'ok':False,'detail':'нода изменилась во время пинга; повторите проверку','checked_utc':stamp}
+            else:
+                latest['nodes'][key]['ping'] = ping
+            result.append({'id':key,'ping':public_health(ping)})
+        self._save_state(latest)
+        return {'ok':True,'results':result,**({'ping':result[0]['ping']} if len(result)==1 else {})}
+
+    @store_mutation
     def remove(self, name: str) -> dict:
         state = self.load()
         if name not in state["nodes"]:
@@ -607,7 +671,7 @@ class VpnNodeManager:
     def _probe_config(self, outbound: dict, port: int) -> dict:
         selected = normalize_outbound(outbound)
         selected["tag"] = "probe-vpn"
-        return {"log": {"loglevel": "error"},
+        return {"log": {"loglevel": "warning"},
                 "inbounds": [{"tag": "probe-in", "listen": "127.0.0.1", "port": port,
                               "protocol": "socks", "settings": {"auth": "noauth", "udp": False}}],
                 "outbounds": [selected],
@@ -619,10 +683,38 @@ class VpnNodeManager:
         started = time.monotonic()
         checked_utc = utc_now()
         base = {"checked_utc": checked_utc, "checked_at": checked_utc}
+        events = []
+        capture_ready = False
+
+        def note(phase, message):
+            if len(events) < 32:
+                events.append(f'{time.monotonic() - started:.3f}s [{phase}] {message}')
+
+        def finish(ok, detail='', **fields):
+            if capture_ready:
+                capture.flush()
+                size = os.fstat(capture.fileno()).st_size
+                raw = os.pread(capture.fileno(), 8192, max(0, size - 8192)).decode('utf-8', errors='replace')
+                issues = vpn_diagnostics.xray_issues(raw)
+                for issue in issues:
+                    note('xray', issue)
+                if not ok and not issues:
+                    note('xray', 'Дополнительная причина не определена; сырой вывод скрыт для защиты секретов')
+            note('result', 'OK' if ok else 'FAIL')
+            result = {**base, 'ok': ok, 'total_ms': round((time.monotonic() - started) * 1000),
+                      'log': '\n'.join(events).encode('utf-8')[:8192].decode('utf-8', errors='ignore'), **fields}
+            if detail:
+                result['detail'] = detail
+            return result
+
+        metadata = self._public_node('probe', {'outbound': outbound}, '')
+        protocol = metadata['protocol'] if isinstance(metadata['protocol'], str) and metadata['protocol'] in {'vless', 'trojan', 'Hysteria2'} else 'unknown'
+        note('path', f"{protocol} / {metadata['network']} / {metadata['security']} → тестовые HTTPS-сайты")
+        note('preflight', 'Проверка совместимости XKeen/Xray')
         try:
             self._require_supported_xkeen()
         except ValueError as error:
-            return {**base, 'ok': False, 'detail': str(error)}
+            return finish(False, str(error))
         # curl must not read .curlrc or honour host proxy/NO_PROXY overrides.
         env = {key: value for key, value in os.environ.items()
                if key.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}}
@@ -631,29 +723,41 @@ class VpnNodeManager:
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
             port = reservation.getsockname()[1]
-        with tempfile.TemporaryDirectory(prefix="xkeen-vpn-probe-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xkeen-vpn-probe-") as directory, tempfile.TemporaryFile(mode='w+b') as capture:
+            capture_ready = True
             path = Path(directory) / "probe.json"
             atomic_json(path, self._probe_config(outbound, port))
             try:
+                note('config', 'Xray -test: проверка временной конфигурации')
                 test = subprocess.run([self.xray, "run", "-c", str(path), "-test"],
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                      stdout=capture, stderr=capture,
                                       timeout=12, check=False, env=env)
             except (OSError, subprocess.TimeoutExpired):
-                return {**base, "ok": False, "detail": "изолированный Xray не прошёл проверку"}
+                note('config', 'Таймаут 12 с или ошибка запуска Xray -test')
+                return finish(False, 'изолированный Xray не прошёл проверку')
+            note('config', f'Xray -test: exit={test.returncode}')
             if test.returncode != 0:
-                return {**base, "ok": False, "detail": "конфигурация ноды не принята Xray"}
+                return finish(False, 'конфигурация ноды не принята Xray')
+            capture.seek(0)
+            capture.truncate()
             try:
+                note('startup', 'Запуск отдельного Xray и ожидание SOCKS на loopback; предел 4 с')
                 process = subprocess.Popen([sys.executable, '-m', 'kdn.vpn_probe_child', str(os.getpid()), self.xray, str(path)],
-                                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                           stderr=subprocess.DEVNULL, env=env, start_new_session=True)
+                                           stdin=subprocess.DEVNULL, stdout=capture,
+                                           stderr=capture, env=env, start_new_session=True)
             except OSError:
-                return {**base, "ok": False, "detail": "не удалось запустить тестовый Xray"}
+                return finish(False, 'не удалось запустить тестовый Xray')
             stop = threading.Event()
             exceeded = threading.Event()
+            log_exceeded = threading.Event()
 
             def watch_memory():
                 while not stop.wait(0.1):
                     try:
+                        if os.fstat(capture.fileno()).st_size > 128 * 1024:
+                            log_exceeded.set()
+                            process.kill()
+                            return
                         text = Path("/proc", str(process.pid), "status").read_text()
                         match = re.search(r"^VmRSS:\s+([0-9]+)", text, re.MULTILINE)
                         if match and int(match[1]) > 96 * 1024:
@@ -676,38 +780,61 @@ class VpnNodeManager:
                             break
                     time.sleep(0.1)
                 if not ready:
-                    return {**base, "ok": False, "detail": "тестовый SOCKS Xray не открылся"}
+                    note('startup', f'SOCKS не готов; exit={process.poll()}')
+                    if log_exceeded.is_set():
+                        return finish(False, 'тестовый Xray превысил лимит журнала 128 KiB')
+                    if exceeded.is_set():
+                        return finish(False, 'тестовый Xray превысил лимит памяти 96 MiB')
+                    return finish(False, 'тестовый SOCKS Xray не открылся')
+                note('startup', 'Локальный SOCKS готов; это ещё не подтверждает соединение с VPN-сервером')
                 last_code = 0
                 first_bytes = []
                 for url in PROBE_URLS:
+                    if log_exceeded.is_set():
+                        return finish(False, 'тестовый Xray превысил лимит журнала 128 KiB')
                     if exceeded.is_set() or process.poll() is not None:
-                        return {**base, "ok": False, "detail": "тестовый Xray остановлен или превысил лимит памяти"}
+                        return finish(False, 'тестовый Xray остановлен или превысил лимит памяти')
+                    target = urlsplit(url).hostname
+                    expected = 204 if url.endswith('/generate_204') else 200
+                    note('https', f'{target}: ожидается HTTP {expected}; connect-timeout=4 с, max-time=8 с')
+                    request_started = time.monotonic()
                     try:
                         result = subprocess.run(
                             [self.curl, "--disable", "--silent", "--show-error", "--noproxy", "",
                              "--socks5-hostname", f"127.0.0.1:{port}",
                              "--proto", "=https", "--connect-timeout", "4", "--max-time", "8",
                              "--output", "/dev/null", "--write-out", "%{http_code}|%{time_starttransfer}", url],
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, timeout=10, check=False, env=env)
-                    except (OSError, subprocess.TimeoutExpired):
-                        return {**base, "ok": False, "detail": "таймаут HTTPS через эту ноду"}
+                    except OSError:
+                        note('https', 'Не удалось запустить curl')
+                        return finish(False, 'не удалось запустить HTTPS-пробу')
+                    except subprocess.TimeoutExpired:
+                        note('https', f'{target}: процесс curl не завершился за 10 с')
+                        return finish(False, 'таймаут HTTPS через эту ноду')
+                    note('https', f'{target}: curl={result.returncode} ({vpn_diagnostics.curl_reason(result.returncode)}), запрос={(time.monotonic() - request_started):.3f} с')
+                    if process.poll() is not None:
+                        note('runtime', f'Тестовый Xray завершился: exit={process.poll()}')
+                    for issue in vpn_diagnostics.xray_issues(getattr(result, 'stderr', '')):
+                        note('curl', issue)
+                    if log_exceeded.is_set():
+                        return finish(False, 'тестовый Xray превысил лимит журнала 128 KiB')
                     if exceeded.is_set() or process.poll() is not None:
-                        return {**base, 'ok': False, 'detail': 'тестовый Xray остановлен или превысил лимит памяти'}
+                        return finish(False, 'тестовый Xray остановлен или превысил лимит памяти')
                     text, separator, elapsed = result.stdout.strip().partition('|')
                     last_code = int(text) if re.fullmatch(r"[0-9]{3}", text) else 0
-                    expected = 204 if url.endswith("/generate_204") else 200
+                    note('https', f'{target}: HTTP {last_code:03d}, ожидается {expected}')
                     if result.returncode != 0 or last_code != expected:
-                        return {**base, "ok": False, "http_code": last_code,
-                                "detail": "HTTPS через ноду не вернул ожидаемый ответ"}
+                        return finish(False, f'HTTPS: curl={result.returncode}, HTTP {last_code:03d} вместо {expected}; '+vpn_diagnostics.curl_reason(result.returncode),
+                                      http_code=last_code, curl_code=result.returncode, target=target)
                     if not separator or not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', elapsed):
-                        return {**base, 'ok': False, 'detail': 'curl не вернул время ответа HTTPS'}
+                        return finish(False, 'curl не вернул время ответа HTTPS')
                     first_bytes.append(float(elapsed))
+                    note('https', f'{target}: первый байт={float(elapsed):.3f} с')
                 if exceeded.is_set() or process.poll() is not None:
-                    return {**base, "ok": False, "detail": "тестовый Xray завершился"}
-                return {**base, "ok": True, "latency_ms": round(min(first_bytes) * 1000),
-                        "latency_kind": "https_ttfb", "total_ms": round((time.monotonic() - started) * 1000),
-                        "http_code": last_code, "target": urlsplit(PROBE_URLS[-1]).hostname}
+                    return finish(False, 'тестовый Xray завершился')
+                return finish(True, latency_ms=round(min(first_bytes) * 1000), latency_kind='https_ttfb',
+                              http_code=last_code, curl_code=0, target=urlsplit(PROBE_URLS[-1]).hostname)
             finally:
                 stop.set()
                 watcher.join(timeout=2)
@@ -897,6 +1024,7 @@ class VpnNodeManager:
             raise ValueError("активная нода отсутствует в реестре")
         state["nodes"][active]["outbound"] = normalize_outbound(current)
         state["nodes"][active]["health"] = None
+        state['nodes'][active]['ping'] = None
         self._save_state(state)
         return {"ok": True}
 

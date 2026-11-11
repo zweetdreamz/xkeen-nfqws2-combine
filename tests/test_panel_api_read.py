@@ -9,6 +9,12 @@ import panel_harness
 
 
 class ReadTests(panel_harness.PanelTestCase):
+    def test_ping_activity_is_visible_to_deployment(self):
+        self.read.vpn.VPN_PING_BUSY.set()
+        try:
+            self.assertTrue(self.payload('/api/vpn-nodes/activity')['active'])
+        finally:
+            self.read.vpn.VPN_PING_BUSY.clear()
     modules = ("kdn.web.api.read_routes",)
 
     def setUp(self):
@@ -87,7 +93,7 @@ class ReadTests(panel_harness.PanelTestCase):
                     self.assertEqual((response.status, json.loads(response.body)), (200 if ok else 500, value))
         self.assertEqual({r.pattern for r in self.read.READ_ROUTES if r.heavy}, {"/api/status", "/api/checks/config"})
         self.assertTrue(all(r.method == "GET" for r in self.read.READ_ROUTES))
-        self.assertEqual(len(self.read.READ_ROUTES), 16)
+        self.assertEqual(len(self.read.READ_ROUTES), 17)
 
     def test_domain_wrappers(self):
         cases = [("/api/tuner/sources", self.read.flowseal, "tuner_sources", {"ok": True, "sources": []}, None),

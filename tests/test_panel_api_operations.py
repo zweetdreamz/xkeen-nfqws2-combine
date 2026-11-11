@@ -40,6 +40,9 @@ class OperationRouteTests(panel_harness.PanelTestCase):
                 self.assertEqual(self.post("/api/import/apply").status, 400)
         for body in (None, {}, {"name": 5, "source": "x"}, {"name": "n", "source": "x" * 32769}):
             self.assertEqual(self.post("/api/vpn-nodes/add", body).status, 400)
-        with mock.patch.object(self.api.operations, "start_vpn_add_job", return_value={"ok": True}) as start:
-            self.assertEqual(self.post("/api/vpn-nodes/add", {"name": "node1", "source": "fixture"}).status, 202)
+        with mock.patch.object(self.api.vpn, "add_node", return_value={"ok": True}) as start:
+            self.assertEqual(self.post("/api/vpn-nodes/add", {"name": "node1", "source": "fixture"}).status, 200)
             start.assert_called_once_with("node1", "fixture")
+        with mock.patch.object(self.api.vpn, 'add_node', return_value={'ok':True}) as start:
+            self.assertEqual(self.post('/api/vpn-nodes/add',{'source':'fixture','name_hint':'Link name'}).status,200)
+            start.assert_called_once_with('Link name','fixture',auto_name=True)

@@ -385,7 +385,7 @@ async function importValidationChecks(browser, errors) {
 
 async function vpnCurrentFileViewChecks(browser, errors) {
   const original = await (await fetch(BASE+'/api/vpn-nodes')).json();
-  const current = {id:'current',name:'Current node',active:true,endpoint:'changed.example:9443',protocol:'vless',network:'tcp',security:'reality',health:null};
+  const current = {id:'current',name:'Current node',active:true,endpoint:'changed.example:9443',protocol:'vless',network:'tcp',security:'reality',health:{ok:false,detail:'fixture failure',log:'0.001s [https] curl=97\n<not-html> [xray] WS: сервер отклонил WebSocket Upgrade'}};
   await setMock({path:'/api/vpn-nodes',body:{...original,nodes:[current],drift:false}});
   const page = await openPanel(browser, errors);
   try {
@@ -395,7 +395,11 @@ async function vpnCurrentFileViewChecks(browser, errors) {
     assert.equal(await cards.count(), 1);
     assert.match(await cards.first().textContent(), /В КОНФИГЕ/);
     assert.doesNotMatch(await cards.first().textContent(), /РАСХОЖДЕНИЕ|Принять текущий конфиг/);
-    assert.equal(await cards.first().getByRole('button',{name:'Проверить',exact:true}).isDisabled(),false);
+    assert.equal(await cards.first().getByRole('button',{name:'Пинг',exact:true}).isDisabled(),false);
+    await cards.first().locator('summary').filter({hasText:'Подробности проверки'}).click();
+    assert.match(await cards.first().locator('pre').textContent(),/curl=97/);
+    assert.match(await cards.first().locator('pre').textContent(),/<not-html>/);
+    assert.equal(await cards.first().locator('not-html').count(),0);
     const parsed=await page.evaluate(()=>{
       const encryption='mlkem768x25519plus.native.0rtt.'+'A'.repeat(43);
       const source='vless://6f1c7e0a-6b1a-4c35-9a52-7a3f2b8e9c10@vpn.example:443?'+new URLSearchParams({encryption,flow:'xtls-rprx-vision',fp:'firefox',pbk:'A'.repeat(43),security:'reality',sid:'aabb',sni:'front.example',spx:'%2Fonce','support-x25519mlkem768':'true',type:'tcp'});
@@ -408,6 +412,18 @@ async function vpnCurrentFileViewChecks(browser, errors) {
     assert.equal(parsed.vless.streamSettings.realitySettings.spiderX,'%2Fonce');
     assert.equal(parsed.hy.streamSettings.finalmask.udp[0].settings.password,'fixture-mask');
     assert.equal(parsed.hy.streamSettings.hysteriaSettings.auth,'fixture-auth');
+    assert.equal(await page.locator('#vpnNodeName').count(),0);
+    await page.locator('#vpnNodeSource').fill('vless://6f1c7e0a-6b1a-4c35-9a52-7a3f2b8e9c10@vpn.example:443?security=tls#Imported%20node');
+    const beforeAdd=await stats();
+    const added=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/vpn-nodes/add');
+    await page.locator('#addVpnNode').click();
+    const body=(await added).postDataJSON();
+    assert.equal(body.name_hint,'Imported node');
+    assert.equal('name' in body,false);
+    assert.equal(JSON.parse(body.source).settings.address,'vpn.example');
+    await page.waitForFunction(()=>document.getElementById('vpnActionStatus').textContent.includes('Нода добавлена'));
+    const afterAdd=await stats();
+    assert.equal(afterAdd['GET /api/route/status']?.count||0,beforeAdd['GET /api/route/status']?.count||0);
   } finally {
     await page.close();
     await setMock({path:'/api/vpn-nodes',body:original});
@@ -610,21 +626,15 @@ async function main() {
       ["applyVersion", `/api/profiles/apply/youtube/${versionId}`, (id) => applyVersion("youtube", id)],
       ["applyTunerResult", "/api/tuner/apply", () => applyTunerResult()],
       ["xkeenAction", "/api/xkeen/restart", () => xkeenAction("restart")],
-      ["checkVpnNode", "/api/vpn-nodes/check/current", () => checkVpnNode("current")],
-      ["addVpnNode", "/api/vpn-nodes/add", () => {
-        document.getElementById("vpnNodeName").value="node1";
-        document.getElementById("vpnNodeSource").value="vless://fixture";
-        return addVpnNode();
-      }],
+      ["diagnoseVpnNode", "/api/vpn-nodes/check/current", () => diagnoseVpnNode("current")],
     ];
     const jobId="0123456789abcdef";
     for (const [name, apiPath, operation] of operations) {
       for (const fails of [false, true]) {
-        const kind=name==="xkeenAction"?"xkeen":name==="checkVpnNode"?"vpn-check":name==="addVpnNode"?"vpn-add":"apply-profile";
+        const kind=name==="xkeenAction"?"xkeen":name==="diagnoseVpnNode"?"vpn-check":"apply-profile";
         const queued={ok:true,job_id:jobId,operation:kind,status:"queued",active:true,output:"",service:"youtube"};
         const done={...queued,status:fails?"failed":"completed",active:false,result_ok:!fails,code:fails?1:0,output:fails?"engine failed":"full result output"};
-        if(name==="checkVpnNode")done.health={ok:true,latency_ms:1,http_code:204};
-        if(name==="addVpnNode")done.node={id:"node1",health:null};
+        if(name==="diagnoseVpnNode")done.health={ok:true,latency_ms:1,http_code:204};
         await setMock({method:"POST",path:apiPath,status:202,body:queued});
         await setMock({path:"/api/route/status",sequence:[queued,{...done,output:"short status"}]});
         await setResponse("/api/route/result",done);
@@ -637,9 +647,9 @@ async function main() {
         assert.equal((after["GET /api/route/result"]?.count||0)-(before["GET /api/route/result"]?.count||0),1,`${name}: full result once`);
         assert.ok((after["GET /api/route/status"]?.count||0)>(before["GET /api/route/status"]?.count||0),name);
         assert.equal((after[`POST ${apiPath}`] || { count: 0 }).count - (before[`POST ${apiPath}`] || { count: 0 }).count, 1, name);
-        if(!["checkVpnNode","addVpnNode"].includes(name))assert.ok(statusCalls >= 1, `${name}: route badges not refreshed`);
+        if(name!=="diagnoseVpnNode")assert.ok(statusCalls >= 1, `${name}: route badges not refreshed`);
         const text = await page.textContent("#postApplyStatus");
-        if (fails || ["xkeenAction","checkVpnNode","addVpnNode"].includes(name)) {
+        if (fails || ["xkeenAction","diagnoseVpnNode"].includes(name)) {
           assert.equal(checksCalls, 0, `${name}: post-checks after an error`);
           assert.equal(text, "—", name);
           if(fails)assert.match(await page.textContent("#log"),/engine failed/,name);
@@ -691,18 +701,18 @@ async function main() {
     assert.match(await page.evaluate(()=>{renderTuner({status:"queued",active:true});return document.getElementById("tunerStatus").textContent}),/Запуск задания/);
     await page.evaluate(()=>renderTuner({status:"idle",active:false}));
 
-    // The "check all" loop waits for each full result before the next POST.
+    // All quick pings use one request, not N jobs and repeated result polls.
     await setResponse("/api/vpn-nodes",{ok:true,active:"n1",drift:false,warning:"",canonical_tag:"vless-reality",recovery_needed:false,
       nodes:["n1","n2"].map(id=>({id,name:id,active:id==="n1",protocol:"vless",endpoint:"example:443",network:"tcp",security:"reality",health:null}))});
     const checked={...terminal,operation:"vpn-check",health:{ok:true,latency_ms:1,http_code:204}};
     await setResponse("/api/route/status",checked);
     await setMock({path:"/api/route/result",sequence:[checked,checked]});
     const trace=[];
-    const record=request=>{const url=new URL(request.url());if(request.method()==="POST"&&url.pathname.startsWith("/api/vpn-nodes/check/"))trace.push(url.pathname);if(url.pathname==="/api/route/result")trace.push("result")};
+    const record=request=>{const url=new URL(request.url());if(request.method()==="POST"&&url.pathname.startsWith("/api/vpn-nodes/ping"))trace.push(url.pathname);if(url.pathname==="/api/route/result")trace.push("result")};
     page.on("request",record);
     await page.evaluate(()=>checkAllVpnNodes());
     page.off("request",record);
-    assert.deepEqual(trace,["/api/vpn-nodes/check/n1","result","/api/vpn-nodes/check/n2","result"]);
+    assert.deepEqual(trace,["/api/vpn-nodes/ping"]);
     // Editing never preloads credentials; blank source is omitted, active source is disabled.
     await page.locator('button[data-tab="vpn-nodes"]').click();
     await setResponse("/api/vpn-nodes/update/n2",{ok:true,node:{id:"n2",name:"Европа"}});

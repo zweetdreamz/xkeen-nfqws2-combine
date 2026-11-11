@@ -1,10 +1,11 @@
-"""Accepted (202) operations: validate and enqueue, never execute router commands in HTTP threads."""
+"""Live-changing actions enqueue (202); metadata-only VPN addition returns 200."""
 from kdn.web.api import router
 from kdn.web.infra import config as cfg
 from kdn.web.infra import jobfiles
 from kdn.web.domain import operations
 from kdn.web.domain import refusals
 from kdn.web.domain import validation
+from kdn.web.domain import vpn
 
 
 def post_xkeen(request):
@@ -39,10 +40,15 @@ def post_import_rollback(request):
 
 def post_vpn_add(request):
     body = request.body
-    if (not isinstance(body, dict) or set(body) != {"name", "source"} or not isinstance(body["name"], str)
-            or not isinstance(body["source"], str) or len(body["source"]) > 32768):
-        return router.error_response(400, "ожидаются имя и ссылка/JSON outbound до 32 КиБ")
-    return router.json_response(202, operations.start_vpn_add_job(body["name"], body["source"]))
+    if (not isinstance(body, dict) or set(body) - {'name', 'source', 'name_hint'}
+            or not isinstance(body.get('source'), str) or len(body['source']) > 32768
+            or ('name' in body and not isinstance(body['name'], str))
+            or ('name_hint' in body and not isinstance(body['name_hint'], str))
+            or ('name' in body and 'name_hint' in body)):
+        return router.error_response(400, "ожидается ссылка/JSON outbound до 32 КиБ")
+    if 'name' in body:
+        return router.json_response(200, vpn.add_node(body['name'], body['source']))
+    return router.json_response(200, vpn.add_node(body.get('name_hint', ''), body['source'], auto_name=True))
 
 
 def post_vpn_check(request):

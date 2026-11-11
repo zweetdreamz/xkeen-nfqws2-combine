@@ -1,4 +1,4 @@
-"""Synchronous record operations; router-changing commands belong to job routes."""
+"""Synchronous records and bounded isolated pings; live changes use job routes."""
 from kdn.common import errors
 from kdn.web.api import router
 from kdn.web.domain import automation
@@ -29,6 +29,12 @@ def post_vpn_update(request):
     return router.json_response(200, vpn.update_node(request.params['node_id'], request.body))
 
 
+def post_vpn_ping(request):
+    if request.body is not None and request.body != {}:
+        return router.error_response(400, 'HTTP-пинг не принимает настройки или произвольный URL')
+    return router.json_response(200, vpn.ping_nodes(request.params.get('node_id')))
+
+
 def post_updates_check(request):
     return router.json_response(200, flowseal.check_flowseal_update())
 
@@ -57,6 +63,8 @@ RECORD_ROUTES = (
     router.Route("POST", "/api/vpn-nodes/delete/<node_id>", post_vpn_delete, errors=router.DEFAULT_ERRORS + ((TypeError, 400),)),
     router.Route("POST", "/api/vpn-nodes/sync-current", post_vpn_sync, errors=router.DEFAULT_ERRORS + ((TypeError, 400),)),
     router.Route("POST", "/api/vpn-nodes/update/<node_id>", post_vpn_update, errors=router.DEFAULT_ERRORS + ((TypeError, 400),)),
+    router.Route("POST", "/api/vpn-nodes/ping", post_vpn_ping),
+    router.Route("POST", "/api/vpn-nodes/ping/<node_id>", post_vpn_ping),
     router.Route("POST", "/api/updates/check", post_updates_check, errors=((OSError, 502), (RuntimeError, 502), (ValueError, 502))),
     router.Route("POST", "/api/import/validate", post_import_validate, errors=((ValueError, 400),)),
     router.Route("POST", "/api/automation/save", post_automation_save, errors=((ValueError, 400), (OSError, 400))),

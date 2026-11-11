@@ -81,7 +81,9 @@ FRONTEND_CONTRACT: dict[str, set[str]] = {
     "POST /api/vpn-nodes/recover": {"job_id"},  # :354
     "POST /api/history/rollback/<id>": {"job_id"},  # :386
     "POST /api/vpn-nodes/check/<id>": {"job_id"},
-    "POST /api/vpn-nodes/add": {"job_id"},
+    "POST /api/vpn-nodes/add": {"node"},
+    "POST /api/vpn-nodes/ping/<id>": {"ping"},
+    "POST /api/vpn-nodes/ping": {"results"},
     "POST /api/import/apply": {"job_id"},
     "POST /api/import/clear/<service>": {"job_id"},
     "POST /api/import/rollback": {"job_id"},
@@ -156,6 +158,7 @@ FRONTEND_CONDITIONAL: dict[str, dict[str, str]] = {
         "error": "the profile file is damaged",
     },
     "GET /api/vpn-nodes#nodes[]": {
+        'ping': 'a quick HTTP ping was recorded',
         "flow": "extended connection metadata; null when absent",
         "fingerprint": "extended connection metadata; null when absent",
         "sni": "extended connection metadata; null when absent",

@@ -48,7 +48,8 @@ PAGE_READERS = (
     ("rollbackImport", "d", "GET /api/route/result"),
     ("applyVersion", "d", "GET /api/route/result"),
     ("applyTunerResult", "d", "GET /api/route/result"),
-    ("checkVpnNode", "d", "GET /api/route/result"),
+    ("diagnoseVpnNode", "d", "GET /api/route/result"),
+    ("checkVpnNode", "d", "POST /api/vpn-nodes/ping/<id>"),
     ("postChecksAfter", "d", "GET /api/route/result"),
 )
 JS_METHODS = frozenset({"length", "map", "forEach", "slice", "join", "filter", "some", "includes"})
@@ -172,6 +173,8 @@ SERVED = {
     "POST /api/xkeen/<action>": "/api/xkeen/restart",
     "POST /api/vpn-nodes/check/<id>": "/api/vpn-nodes/check/current",
     "POST /api/vpn-nodes/add": "/api/vpn-nodes/add",
+    'POST /api/vpn-nodes/ping/<id>': '/api/vpn-nodes/ping/current',
+    'POST /api/vpn-nodes/ping': '/api/vpn-nodes/ping',
     "POST /api/import/apply": "/api/import/apply",
     "POST /api/import/clear/<service>": "/api/import/clear/youtube",
     "POST /api/import/rollback": "/api/import/rollback",

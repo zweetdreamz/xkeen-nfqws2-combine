@@ -225,7 +225,7 @@ cur_tmp=""
 deploy_umask="$(umask)"
 
 check_idle() {
-  for endpoint in /api/route/status /api/tuner/status /api/diagnostics/status /api/automation; do
+  for endpoint in /api/vpn-nodes/activity /api/route/status /api/tuner/status /api/diagnostics/status /api/automation; do
     # An unreachable panel does not block: the deploy is what repairs it.
     busy_body="$stage/busy-check.json"
     status="$(curl --max-time 8 -sS -o "$busy_body" -w '%{http_code}' "http://$PANEL$endpoint" 2>/dev/null)" || continue

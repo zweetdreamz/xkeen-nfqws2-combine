@@ -389,7 +389,7 @@ class VpnHandlerTests(panel_harness.PanelTestCase):
             with self.subTest(body=str(body)[:40]):
                 status, answer = self.request("POST", "/api/vpn-nodes/add", body)
                 self.assertEqual((status, answer["ok"]), (400, False))
-                self.assertEqual(answer["error"], "ожидаются имя и ссылка/JSON outbound до 32 КиБ")
+                self.assertEqual(answer["error"], "ожидается ссылка/JSON outbound до 32 КиБ")
         self.assertEqual(self.manager.calls, [])
 
     def test_listing_answers_the_manager_status(self):

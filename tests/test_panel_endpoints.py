@@ -341,9 +341,8 @@ class GetEndpointTests(PanelEndpointCase):
         self.assertNotIn(UUID, json.dumps(payload))
         self.assertElements("GET /api/vpn-nodes#nodes[]", payload["nodes"])
         self.assertIsNone(payload["nodes"][0]["health"])
-        self.assertContract("GET /api/vpn-nodes#nodes[].health", payload["nodes"][1]["health"],
-                            also=("latency_ms", "http_code"))
-        self.assertContract("GET /api/vpn-nodes#nodes[].health", payload["nodes"][2]["health"], also=("detail",))
+        self.assertIsNone(payload['nodes'][1]['health'])
+        self.assertIsNone(payload['nodes'][2]['health'])
 
     def test_updates_before_and_after_a_download(self):
         payload = self.get("/api/updates")
@@ -654,20 +653,30 @@ class PostEndpointTests(PanelEndpointCase):
 
     def test_vpn_node_add_check_delete_and_sync_current(self):
         manager = self.vpn_manager(probes=(GOOD_PROBE, BAD_PROBE))
-        started, added = self.operation("/api/vpn-nodes/add", {"name": "vless_2", "source": json.dumps(vpn_outbound("other.example"))})
-        self.assertContract("POST /api/vpn-nodes/add", started)
-        self.assertContract("GET /api/route/result", added, also=("node",))
+        added = self.post("/api/vpn-nodes/add", {"name": "vless_2", "source": json.dumps(vpn_outbound("other.example"))})
+        self.assertContract("POST /api/vpn-nodes/add", added)
         self.assertContract("GET /api/route/result#node", added["node"])
         self.assertContract("GET /api/vpn-nodes#nodes[]", added["node"])
-        self.assertContract("GET /api/vpn-nodes#nodes[].health", added["node"]["health"], also=("latency_ms", "http_code"))
+        self.assertIsNone(added['node']['health'])
         self.assertEqual((added["node"]["id"], added["node"]["active"]), ("vless_2", False))
         self.assertIn("vless_2", manager.load()["nodes"])
+        from kdn import vpn_ping
+        with mock.patch.object(vpn_ping,'run',side_effect=lambda selected,_binary:{key:{'ok':True,'latency_ms':25,'latency_kind':'http_keepalive','http_code':204} for key in selected}) as ping:
+            answer=self.post('/api/vpn-nodes/ping/vless_2')
+            self.assertContract('POST /api/vpn-nodes/ping/<id>',answer)
+            self.assertEqual(answer['ping']['latency_ms'],25)
+            batch=self.post('/api/vpn-nodes/ping')
+            self.assertContract('POST /api/vpn-nodes/ping',batch)
+            self.assertEqual(len(batch['results']),2)
+            self.assertEqual(ping.call_count,2)
         started, checked = self.operation("/api/vpn-nodes/check/vless_2")
         self.assertContract("POST /api/vpn-nodes/check/<id>", started)
         self.assertContract("GET /api/route/result", checked, also=("health",))
         self.assertEqual(checked["status"], "completed")
-        self.assertContract("GET /api/vpn-nodes#nodes[].health", checked["health"], also=("detail",))
-        self.assertIs(checked["health"]["ok"], False)
+        self.assertIs(checked["health"]["ok"], True)
+        self.assertContract('GET /api/vpn-nodes#nodes[].health',checked['health'],also=('latency_ms','http_code'))
+        _, checked = self.operation('/api/vpn-nodes/check/vless_2')
+        self.assertIs(checked['health']['ok'], False)
         self.assertEqual(self.post("/api/vpn-nodes/sync-current"), {"ok": True})
         self.assertIsNone(manager.load()["nodes"]["current"]["health"])
         self.assertEqual(self.post("/api/vpn-nodes/delete/vless_2"), {"ok": True})

@@ -159,6 +159,10 @@ def get_config_checks(request):
     return router.json_response(200, health.config_health())
 
 
+def get_vpn_ping_activity(request):
+    return router.json_response(200, {'ok':True,'active':vpn.VPN_PING_BUSY.is_set()})
+
+
 READ_ROUTES = tuple(router.Route("GET", path, handler, errors=exceptions, heavy=heavy) for path, handler, exceptions, heavy in (
     ("/", get_page, (), False),
     ("/tools/reset-discord-cache.ps1", get_cache_helper, (), False),
@@ -170,6 +174,7 @@ READ_ROUTES = tuple(router.Route("GET", path, handler, errors=exceptions, heavy=
     ("/api/service-configs", get_service_configs, ((OSError, 500), (ValueError, 500), (RuntimeError, 500)), False),
     ("/api/vpn-nodes", get_vpn_nodes,
      ((OSError, 500), (RuntimeError, 500), (ValueError, 500), (TypeError, 500), (json.JSONDecodeError, 500)), False),
+    ('/api/vpn-nodes/activity',get_vpn_ping_activity,(),False),
     ("/api/imported", get_imported, (), False),
     ("/api/tuner/sources", get_tuner_sources, (), False),
     ("/api/tuner/voice-endpoint", get_voice_endpoint, (), False),

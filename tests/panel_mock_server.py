@@ -85,6 +85,12 @@ STATS_LOCK = threading.Lock()
 def post_answer(path: str) -> tuple[int, dict]:
     if path in POST_RESPONSES:
         return POST_RESPONSES[path]
+    if path == '/api/vpn-nodes/add':
+        return 200, {'ok':True,'node':{'id':'node1','name':'Fixture node','health':None}}
+    if path == '/api/vpn-nodes/ping' or path.startswith('/api/vpn-nodes/ping/'):
+        ping = {'ok':True,'latency_ms':25,'latency_kind':'http_keepalive','http_code':204,'checked_utc':'2026-11-11T00:00:00Z'}
+        keys = [row['id'] for row in RESPONSES['/api/vpn-nodes']['nodes']] if path.endswith('/ping') else [path.rsplit('/',1)[1]]
+        return 200, {'ok':True,'ping':ping,'results':[{'id':key,'ping':ping} for key in keys]}
     if path in ('/api/dns/vless','/api/dns/doh'):return 202,JOB_ANSWER
     if path=='/api/notifications/save':return 200,RESPONSES['/api/notifications']
     if path=='/api/notifications/test':return 202,{'ok':True,'queued':True}
