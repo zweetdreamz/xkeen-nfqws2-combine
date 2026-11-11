@@ -1,29 +1,31 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f8fb" id="themeColor">
+<script>
+try{if(localStorage.getItem('xkeen-theme')==='dark'){document.documentElement.dataset.theme='dark';document.getElementById('themeColor').content='#101419'}}catch{}
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f5bd5'/%3E%3Cpath d='M9 22h9a3.5 3.5 0 0 0 0-7h-4a3.5 3.5 0 0 1 0-7h9' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
 <title>XKeen Control</title>
 <style>
-:root{color-scheme:light dark;
---bg:#f4f5f7;--surface:#fff;--surface-2:#f7f8fa;--sunken:#eef0f4;--line:#e3e6ec;--line-strong:#cfd4dd;
---text:#141a26;--muted:#5f6879;--faint:#8a93a3;
---accent:#4f5bd5;--accent-strong:#3f49b8;--accent-soft:#eceefd;--on-accent:#fff;
---green:#0f8a5f;--green-soft:#e6f5ee;--red:#d1343f;--red-soft:#fdecee;--amber:#a85b00;--amber-soft:#fff4e0;
---direct:#1f6fd1;--zapret:#0f8a5f;--vpn:#7a4fd6;
---shadow:0 1px 2px rgba(16,24,40,.05),0 4px 16px rgba(16,24,40,.05);--ring:0 0 0 3px rgba(79,91,213,.28);
+:root{color-scheme:light;
+--bg:#f6f8fb;--surface:#fff;--surface-2:#f8fafc;--sunken:#f0f3f8;--line:#e5eaf1;--line-strong:#cbd3df;
+--text:#182230;--muted:#5d6b7e;--faint:#606f82;
+--accent:#2563eb;--accent-strong:#1d4ed8;--accent-soft:#eaf1ff;--on-accent:#fff;
+--green:#0d7851;--green-soft:#e6f5ee;--red:#d1343f;--red-soft:#fdecee;--amber:#a85b00;--amber-soft:#fff4e0;
+--direct:#52657d;--zapret:#0d7452;--vpn:#1d4ed8;
+--shadow:0 1px 3px rgba(16,24,40,.035);--ring:0 0 0 3px rgba(37,99,235,.24);
 --radius:16px;--radius-sm:10px;--mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace}
-@media(prefers-color-scheme:dark){:root{
---bg:#0e1116;--surface:#161a21;--surface-2:#1b2029;--sunken:#11151b;--line:#272d38;--line-strong:#363d4a;
---text:#e7eaf0;--muted:#a0a8b7;--faint:#757e8e;
---accent:#8e97ff;--accent-strong:#a9b0ff;--accent-soft:#232848;--on-accent:#0e1116;
+:root[data-theme="dark"]{color-scheme:dark;
+--bg:#101419;--surface:#171d25;--surface-2:#1c242f;--sunken:#10161e;--line:#2a3442;--line-strong:#425168;
+--text:#e8edf5;--muted:#a4b1c3;--faint:#91a1b7;
+--accent:#78a9ff;--accent-strong:#9bbfff;--accent-soft:#1c304d;--on-accent:#101419;
 --green:#3fcf8e;--green-soft:#15291f;--red:#ff6b74;--red-soft:#2e1619;--amber:#f4b740;--amber-soft:#2b2210;
---direct:#5aa4ff;--zapret:#3fcf8e;--vpn:#b294ff;
---shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.25);--ring:0 0 0 3px rgba(142,151,255,.35)}}
+--direct:#acbdd3;--zapret:#49d99f;--vpn:#78a9ff;
+--shadow:none;--ring:0 0 0 3px rgba(120,169,255,.35)}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html{-webkit-text-size-adjust:100%}
@@ -39,7 +41,7 @@ h1{margin:0;font-size:clamp(22px,4vw,28px);line-height:1.15;letter-spacing:-.02e
 .status{display:inline-flex;align-items:center;gap:9px;padding:7px 14px 7px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);box-shadow:var(--shadow);font-size:14px;font-weight:600;white-space:nowrap}
 .dot{position:relative;width:9px;height:9px;border-radius:50%;background:var(--amber);color:var(--amber)}
 .dot.ok{background:var(--green);color:var(--green)}.dot.bad{background:var(--red);color:var(--red)}
-.dot.ok::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid currentColor;opacity:0;animation:pulse 2.4s ease-out infinite}
+.dot.ok::after{content:"";position:absolute;inset:-3px;border-radius:50%;background:var(--green);opacity:.12}
 @keyframes pulse{0%{transform:scale(.6);opacity:.55}100%{transform:scale(1.5);opacity:0}}
 .tabs{position:sticky;top:0;z-index:5;display:flex;gap:4px;margin:0 -4px;padding:6px 4px;overflow-x:auto;scrollbar-width:none;background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:saturate(1.4) blur(10px);-webkit-backdrop-filter:saturate(1.4) blur(10px)}
 .tabs::-webkit-scrollbar{display:none}
@@ -54,7 +56,7 @@ h1{margin:0;font-size:clamp(22px,4vw,28px);line-height:1.15;letter-spacing:-.02e
 button{appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:10px 16px;background:var(--surface);color:var(--text);font:inherit;font-size:14px;font-weight:600;line-height:1.3;cursor:pointer;transition:background .15s,border-color .15s,color .15s,box-shadow .15s,transform .15s}
 button:hover{background:var(--surface-2);border-color:var(--faint)}
 button:active{transform:translateY(1px)}
-button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{outline:none;box-shadow:var(--ring);border-color:var(--accent)}
+button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible{outline:none;box-shadow:var(--ring);border-color:var(--accent)}
 button:disabled{opacity:.5;cursor:not-allowed;transform:none}
 .apply{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}.apply:hover{background:var(--accent-strong);border-color:var(--accent-strong)}
 .cancel,.stop{color:var(--red)}.cancel:hover,.stop:hover{background:var(--red-soft);border-color:var(--red)}
@@ -206,6 +208,48 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
 #notifyMessage:empty{display:none}#notifyMessage:not(:empty){margin-top:12px;font-size:13px}
 @media(max-width:760px){.notify-connection,.notify-event-grid{grid-template-columns:minmax(0,1fr)}.notify-connection{gap:16px}.notify-header{gap:14px}}
 @media(max-width:420px){.notify-topic-row{flex-wrap:wrap}.notify-topic-row input{width:100%}.notify-topic-row button{width:100%}.notify-actions>.notify-link{width:100%;justify-content:center}}
+
+/* Application shell and shared density. */
+.page{width:calc(100% - 232px);max-width:1280px;margin:0 auto 0 232px;padding:0 36px 32px}
+.sidebar{position:fixed;overflow-y:auto;scroll-padding-block:16px;inset:0 auto 0 0;width:232px;display:flex;flex-direction:column;padding:30px 18px 20px;background:var(--surface);border-right:1px solid var(--line);z-index:10}
+.brand{gap:11px;padding:0 12px 32px}.brand-name{font-size:18px;font-weight:750;letter-spacing:-.8px;line-height:1.3}.brand-caption{color:var(--faint);font-size:11px;letter-spacing:.03em;margin-top:2px}
+.logo{width:34px;height:34px;border-radius:10px;background:var(--accent-soft);color:var(--accent);box-shadow:none}.logo .i{width:21px;height:21px}
+.tabs{position:static;display:flex;flex-direction:column;gap:5px;margin:0;padding:0;overflow:visible;background:transparent;backdrop-filter:none}
+.nav-label{padding:18px 12px 8px;color:var(--faint);font-size:10px;font-weight:650;letter-spacing:.12em;text-transform:uppercase}
+.nav-label:first-child{padding-top:0}.tabs .tab{position:relative;justify-content:flex-start;gap:12px;min-height:43px;padding:11px 12px;border:0;border-radius:8px;font-size:13px;font-weight:550;white-space:normal;text-align:left}
+.tabs .tab .i{width:18px;height:18px;stroke-width:1.75}.tabs .tab:hover{background:var(--surface-2);border:0}
+.tabs .tab.active{background:var(--accent-soft);color:var(--accent);box-shadow:none;font-weight:650}.tabs .tab.active::after{content:"";position:absolute;right:10px;width:5px;height:5px;border-radius:50%;background:currentColor}
+.sidebar-foot{margin-top:auto;padding:22px 12px 0;color:var(--muted);font-size:12px;display:flex;align-items:center;gap:10px}.sidebar-foot .i{color:var(--faint)}.sidebar-foot small{display:block;color:var(--faint);font-size:11px}
+.topbar{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px;height:76px;padding:0;border-bottom:1px solid var(--line)}
+.breadcrumb{display:flex;align-items:center;gap:12px;color:var(--faint);font-size:12px}.breadcrumb .i{width:13px;height:13px}.breadcrumb span:last-child{color:var(--muted)}
+.header-tools{display:flex;align-items:center;gap:16px}.status{padding:0;border:0;background:none;box-shadow:none;font-size:12px;font-weight:550;gap:8px}.dot{width:7px;height:7px}
+.theme-toggle{width:36px;height:36px;padding:8px;border-color:var(--line);background:var(--surface);border-radius:9px}.theme-toggle .i{width:17px;height:17px}
+.theme-sun{display:none}:root[data-theme="dark"] .theme-sun{display:block}:root[data-theme="dark"] .theme-moon{display:none}
+.page-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:30px 0 24px}.page-heading h1{font-size:30px;font-weight:680;letter-spacing:-1px;line-height:1.2}.page-heading p{margin:8px 0 0;color:var(--muted);font-size:14px;max-width:64ch}
+.page-heading .eyebrow{margin-bottom:9px;color:var(--accent);font-size:10px;letter-spacing:.12em;text-transform:uppercase;font-weight:700}
+.mobile-navigation{display:none}.skip-link{position:fixed;top:8px;left:248px;transform:translateY(-150%);z-index:30;padding:10px 16px;background:var(--surface);color:var(--accent);border:1px solid var(--accent);border-radius:8px}.skip-link:focus{transform:none}
+.card{border-radius:14px;padding:22px 24px;margin-top:18px;box-shadow:var(--shadow)}.tab-page>.card:first-child{margin-top:0}.card h2{font-size:16px;font-weight:650;letter-spacing:-.25px}.hint{font-size:13px;line-height:1.6}.section-head .i{width:18px;height:18px;color:var(--muted)}
+.routes-card{padding:0;border:0;background:transparent;box-shadow:none}.routes-card>.section-head{margin:0 0 4px}.routes-card>.hint{margin-bottom:18px}
+.services{gap:14px}.service{padding:20px;background:var(--surface);border-radius:13px;box-shadow:var(--shadow)}.service-head{margin-bottom:20px;align-items:flex-start}.service-title{gap:12px;min-width:0}.service-title>div{min-width:0}.service h3{font-size:15px;font-weight:650;line-height:1.3}.service-scope{font-size:12px;margin-top:5px;line-height:1.45}.service-icon{width:36px;height:36px;flex:none;border-radius:10px}.service-icon svg{width:21px;height:21px;fill:currentColor;stroke:none}.service-icon .i{fill:none;stroke:currentColor;stroke-width:1.8}
+.service[data-service^=discord] .service-icon{background:#eeefff;color:#5865f2}.service[data-service=discord-voice] .service-icon{background:#edf6f3;color:#198565}.service[data-service=youtube] .service-icon{background:#fff0ef;color:#eb3326}.service[data-service=telegram] .service-icon{background:#eaf5fe;color:#218dc5}
+:root[data-theme="dark"] .service-icon{background:var(--surface-2)}
+.current{font:600 10px/1.6 system-ui,sans-serif;letter-spacing:.035em;padding:3px 8px;white-space:nowrap;flex:none}.modes{border:0;gap:3px;padding:4px;background:var(--sunken);border-radius:9px}.mode{padding:10px 6px;border-radius:6px;font-size:12px;min-height:38px;gap:6px}.mode::before{width:5px;height:5px;opacity:.6}.mode.active{border-color:var(--line);box-shadow:0 1px 3px #1018280a;font-weight:650}.mode.active::before{box-shadow:none}
+.legend{gap:18px;margin-top:14px;font-size:12px}.legend>div{padding:0;background:none;border:0;border-radius:0}.legend b{display:inline-flex;font-size:12px;margin:0 5px 0 0;gap:6px}.legend b::before{width:5px;height:5px}
+.warning{font-size:12px;line-height:1.6;border-radius:9px;padding:11px 13px}.warning::before{width:16px;height:16px;font-size:11px;margin-top:2px}
+.dns-card .profile-head{margin-bottom:6px}.dns-card .hint{margin-bottom:12px}.dns-options{max-width:640px;border:1px solid var(--line);background:var(--surface-2);border-radius:9px;gap:4px}.dns-option{border-radius:6px;font-size:13px;min-height:42px}.dns-option.selected{box-shadow:var(--shadow);color:var(--accent);outline:1px solid var(--line)}
+.xkeen-card{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px}.xkeen-card .hint{margin:4px 0 0}.xkeen-actions{display:flex;flex-wrap:wrap;gap:8px}.xkeen-actions button{padding:9px 12px;font-size:12px;min-height:38px}.xkeen-actions .i{width:15px;height:15px}
+.field{gap:7px}.tuner-grid,.automation-grid,.diagnostic-grid{gap:18px}.field label{font-size:12px}.field select,.field input,.field textarea{border-radius:8px;min-height:42px}.field input[type=checkbox]{min-height:18px;width:18px;padding:0;accent-color:var(--accent)}.field textarea{line-height:1.6}
+.card>.field+.field,.card>.field+.automation-grid{margin-top:20px}.card>.toolbar{margin-top:18px;margin-bottom:16px}.card>h2+.hint{margin-top:7px}.card>h2+.field{margin-top:20px}.field input:focus,.field select:focus,.field textarea:focus{outline-color:var(--accent)}
+.automation-scenario,.service-config{background:var(--surface-2);border-radius:10px;padding:18px}.automation-scenario h3{font-size:14px}.automation-scenario>label{display:flex;align-items:center;gap:8px;font-size:13px}.automation-scenario input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent)}
+.vpn-node-card{padding:18px;background:var(--surface);border-radius:11px}.vpn-node-card.active{border-color:var(--line);border-left:3px solid var(--green);padding-left:16px}.vpn-node-title>b{font-size:14px}.vpn-node-endpoint{border:0;padding:0;background:none}.vpn-node-tags{gap:6px;margin-top:12px}.vpn-node-tag{font-size:10px;font-weight:550;padding:3px 7px;color:var(--muted)!important;background:var(--sunken)!important;border:0}.vpn-node-tag.protocol{color:var(--accent)!important;background:var(--accent-soft)!important}.vpn-node-health{font-size:12px;margin-top:12px}.vpn-node-actions{padding-top:13px;border-top:1px solid var(--line);margin-top:13px}.vpn-node-actions button{min-height:34px;font-size:12px}.vpn-node-head{align-items:flex-start}
+.profile-head{align-items:flex-start;gap:16px}.profile-head .hint{margin-top:6px;margin-bottom:0}.profile-head>.tuner-actions{flex:none}.tuner-actions{gap:8px}button{border-radius:8px;font-weight:550;font-size:13px;min-height:38px}.clear{font-size:12px}.empty{padding:22px 16px;color:var(--muted);font-size:13px;background:var(--surface-2);border-style:solid;border-color:transparent;border-radius:8px}
+.history-item,.version-item,.check-item,.diagnostic-item,.update-box{border-radius:9px;background:var(--surface-2)}.history-list,.version-list{gap:8px}.history-head>span,.version-head>span,.diagnostic-head>span{font-size:10px}
+pre{font-size:12px;line-height:1.7;border-radius:9px;background:var(--sunken);border-color:var(--line);color:var(--text)}.args{color:var(--text)}.console-card{background:transparent;border:0;border-top:1px solid var(--line);border-radius:0;padding:20px 0 0;margin-top:24px;box-shadow:none}.console-card h2{font-size:13px;color:var(--muted)}.console-card pre{min-height:68px;max-height:220px;background:var(--surface);color:var(--muted);font-size:11px}
+.notify-event-group{background:var(--surface-2);border-radius:9px}.notify-event{font-size:13px}.notify-heading .section-head .i{color:var(--muted)}.notify-link{border-radius:8px}summary{cursor:pointer;color:var(--muted);font-size:13px;padding:8px 0}details[open]>summary{margin-bottom:8px}footer{text-align:left;font-size:11px;margin-top:20px}
+@media(min-width:1600px){.page{margin-left:calc(232px + (100vw - 1512px)/2)}}
+@media(max-width:1100px) and (min-width:761px){.sidebar{width:200px;padding-inline:12px}.page{margin-left:200px;width:calc(100% - 200px);padding-inline:24px}.brand{padding-inline:10px}.brand-name{font-size:16px}.service{padding:16px}.service-head{gap:8px}.service-title{gap:8px}.service-icon{width:30px;height:30px}.mode{gap:4px;padding-inline:3px}.legend{gap:12px}.profile-head{flex-wrap:wrap}.skip-link{left:216px}}
+@media(max-width:760px){.sidebar{display:none}.page{width:100%;margin:0;padding:0 20px 28px}.topbar{height:64px;padding:0;flex-direction:row;align-items:center;gap:8px}.breadcrumb{font-size:13px;font-weight:650;color:var(--text)}.breadcrumb .i,.breadcrumb span:last-child{display:none}.header-tools{gap:12px}.status{font-size:11px}.theme-toggle{width:34px;height:34px;min-height:34px}.mobile-navigation{display:block;margin-top:18px}.mobile-navigation label{display:block;color:var(--faint);font-size:11px;margin-bottom:6px}.mobile-navigation select{width:100%;min-height:44px;padding:10px 12px;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;color:var(--text);font:600 14px system-ui}.page-heading{padding:22px 0}.page-heading h1{font-size:27px}.page-heading p{font-size:13px}.page-heading .eyebrow{display:none}.card{padding:20px;margin-top:16px}.routes-card{padding:0}.services{gap:12px}.service{padding:18px}.service-head{margin-bottom:16px}.service .modes{max-width:none}.mode{min-height:42px;font-size:13px}.legend{grid-template-columns:1fr;gap:6px}.legend>div{line-height:1.6}.warning{padding:12px;font-size:12px}.xkeen-card{gap:14px}.xkeen-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;gap:6px}.xkeen-actions button{padding:10px 6px;gap:5px;font-size:11px}.xkeen-actions .i{width:14px;height:14px}.xkeen-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.xkeen-actions .restart{grid-column:1/-1}.profile-head{flex-wrap:wrap;gap:10px}.profile-head>.tuner-actions{flex:auto}.vpn-node-head{flex-wrap:wrap}.vpn-node-actions button{min-height:40px}.tuner-actions>button,.toolbar>button{min-height:42px}.console-card{padding:18px 0 0}.skip-link{left:12px}.field input,.field select,.field textarea{font-size:16px}.automation-grid,.tuner-grid{gap:16px}footer{font-size:10px}}
+@media(max-width:380px){.page{padding-inline:14px}.card{padding:16px}.routes-card{padding:0}.service{padding:14px}.service-head{gap:8px}.service-title{gap:8px}.service-icon{width:30px;height:30px}.service h3{font-size:14px}.current{font-size:9px;padding-inline:6px}.breadcrumb{font-size:12px}.status{font-size:10px;gap:6px}.header-tools{gap:8px}.xkeen-actions{grid-template-columns:1fr}.dns-options{grid-template-columns:1fr}.console-card{padding:16px 0 0}.notify-enable{font-size:13px}}
 </style>
 </head>
 <body>
@@ -224,29 +268,97 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
 <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></symbol>
 <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></symbol>
 <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24">
+  <circle cx="12" cy="12" r="4" />
+  <path d="M12 2v2" />
+  <path d="M12 20v2" />
+  <path d="m4.93 4.93 1.41 1.41" />
+  <path d="m17.66 17.66 1.41 1.41" />
+  <path d="M2 12h2" />
+  <path d="M20 12h2" />
+  <path d="m6.34 17.66-1.41 1.41" />
+  <path d="m19.07 4.93-1.41 1.41" />
+</symbol>
+<symbol id="i-moon" viewBox="0 0 24 24">
+  <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />
+</symbol>
+<symbol id="i-globe" viewBox="0 0 24 24">
+  <circle cx="12" cy="12" r="10" />
+  <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+  <path d="M2 12h20" />
+</symbol>
+<symbol id="i-shield" viewBox="0 0 24 24">
+  <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+</symbol>
+<symbol id="i-sliders-horizontal" viewBox="0 0 24 24">
+  <path d="M10 5H3" />
+  <path d="M12 19H3" />
+  <path d="M14 3v4" />
+  <path d="M16 17v4" />
+  <path d="M21 12h-9" />
+  <path d="M21 19h-5" />
+  <path d="M21 5h-7" />
+  <path d="M8 10v4" />
+  <path d="M8 12H3" />
+</symbol>
+<symbol id="i-bell" viewBox="0 0 24 24">
+  <path d="M10.268 21a2 2 0 0 0 3.464 0" />
+  <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
+</symbol>
+<symbol id="i-clock-3" viewBox="0 0 24 24">
+  <circle cx="12" cy="12" r="10" />
+  <path d="M12 6v6h4" />
+</symbol>
+<symbol id="i-headphones" viewBox="0 0 24 24">
+  <path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3" />
+</symbol>
+<symbol id="i-chevron-right" viewBox="0 0 24 24">
+  <path d="m9 18 6-6-6-6" />
+</symbol>
+<symbol id="i-discord" viewBox="0 0 24 24"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></symbol>
+<symbol id="i-youtube" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></symbol>
+<symbol id="i-telegram" viewBox="0 0 24 24"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></symbol>
 </svg>
+<a class="skip-link" href="#pageTitle">Перейти к содержимому</a>
 <main class="page">
-<header><div class="brand"><div class="logo"><svg class="i"><use href="#i-route"/></svg></div><div><h1>XKeen Control</h1><div class="subtitle">Маршруты сервисов и профили nfqws2</div></div></div><div class="status" role="status" aria-live="polite"><span id="dot" class="dot"></span><span id="statusText">проверка…</span></div></header>
-<nav class="tabs" aria-label="Разделы"><button class="tab active" data-tab="control"><svg class="i"><use href="#i-route"/></svg>Управление</button><button class="tab" data-tab="vpn-nodes"><svg class="i"><use href="#i-route"/></svg>VPN-ноды</button><button class="tab" data-tab="diagnostics"><svg class="i"><use href="#i-pulse"/></svg>Диагностика</button><button class="tab" data-tab="autotune"><svg class="i"><use href="#i-spark"/></svg>Автоподбор</button><button class="tab" data-tab="automation"><svg class="i"><use href="#i-history"/></svg>Расписание</button><button class="tab" data-tab="notifications"><svg class="i"><use href="#i-history"/></svg>Уведомления</button><button class="tab" data-tab="import"><svg class="i"><use href="#i-upload"/></svg>Импорт профиля</button></nav>
+<aside class="sidebar" aria-label="Панель управления">
+  <div class="brand"><div class="logo"><svg class="i" aria-hidden="true"><use href="#i-route"/></svg></div><div><div class="brand-name">XKeen<span style="font-weight:400"> Control</span></div><div class="brand-caption">Xray + nfqws2</div></div></div>
+  <nav class="tabs" aria-label="Разделы" role="tablist" aria-orientation="vertical">
+    <div class="nav-label" role="presentation">Сеть</div>
+    <button id="tab-control" class="tab active" data-tab="control" role="tab" aria-selected="true" aria-controls="control"><svg class="i" aria-hidden="true"><use href="#i-route"/></svg>Управление</button>
+    <button id="tab-vpn-nodes" class="tab" data-tab="vpn-nodes" role="tab" aria-selected="false" aria-controls="vpn-nodes" tabindex="-1"><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg>VPN-ноды</button>
+    <button id="tab-diagnostics" class="tab" data-tab="diagnostics" role="tab" aria-selected="false" aria-controls="diagnostics" tabindex="-1"><svg class="i" aria-hidden="true"><use href="#i-pulse"/></svg>Диагностика</button>
+    <div class="nav-label" role="presentation">Автоматизация</div>
+    <button id="tab-autotune" class="tab" data-tab="autotune" role="tab" aria-selected="false" aria-controls="autotune" tabindex="-1"><svg class="i" aria-hidden="true"><use href="#i-sliders-horizontal"/></svg>Автоподбор</button>
+    <button id="tab-automation" class="tab" data-tab="automation" role="tab" aria-selected="false" aria-controls="automation" tabindex="-1"><svg class="i" aria-hidden="true"><use href="#i-clock-3"/></svg>Расписание</button>
+    <div class="nav-label" role="presentation">Настройки</div>
+    <button id="tab-notifications" class="tab" data-tab="notifications" role="tab" aria-selected="false" aria-controls="notifications" tabindex="-1"><svg class="i" aria-hidden="true"><use href="#i-bell"/></svg>Уведомления</button>
+    <button id="tab-import" class="tab" data-tab="import" role="tab" aria-selected="false" aria-controls="import" tabindex="-1"><svg class="i" aria-hidden="true"><use href="#i-layers"/></svg>Импорт профиля</button>
+  </nav>
+  <div class="sidebar-foot"><svg class="i" aria-hidden="true"><use href="#i-globe"/></svg><div>Локальная панель<small>XKeen + nfqws2</small></div></div>
+</aside>
+<header class="topbar"><div class="breadcrumb"><span>XKeen Control</span><svg class="i" aria-hidden="true"><use href="#i-chevron-right"/></svg><span id="breadcrumbSection">Управление</span></div><div class="header-tools"><div class="status" role="status" aria-live="polite"><span id="dot" class="dot"></span><span id="statusText">проверка…</span></div><button id="themeToggle" class="theme-toggle" data-ui-control aria-label="Включить тёмную тему" title="Включить тёмную тему"><svg class="i theme-moon" aria-hidden="true"><use href="#i-moon"/></svg><svg class="i theme-sun" aria-hidden="true"><use href="#i-sun"/></svg></button></div></header>
+<div class="mobile-navigation"><label for="mobileSection">Раздел панели</label><select id="mobileSection"><option value="control">Управление</option><option value="vpn-nodes">VPN-ноды</option><option value="diagnostics">Диагностика</option><option value="autotune">Автоподбор</option><option value="automation">Расписание</option><option value="notifications">Уведомления</option><option value="import">Импорт профиля</option></select></div>
+<div class="page-heading"><div><div class="eyebrow" id="pageCategory">Сеть</div><h1 id="pageTitle" tabindex="-1">Управление сетью</h1><p id="pageDescription">Выберите, как подключаются ваши сервисы.</p></div></div>
 
-<div id="control" class="tab-page active">
-  <section class="card"><div class="section-head"><svg class="i"><use href="#i-power"/></svg><h2>XKeen</h2></div><p class="hint">Запуск и остановка proxy-клиента.</p><div class="xkeen-actions"><button class="start" data-action="start"><svg class="i"><use href="#i-play"/></svg>Включить</button><button class="stop" data-action="stop"><svg class="i"><use href="#i-stop"/></svg>Выключить</button><button class="restart" data-action="restart"><svg class="i"><use href="#i-restart"/></svg>Перезапустить</button></div></section>
-  <section class="card"><div class="section-head"><svg class="i"><use href="#i-route"/></svg><h2>Маршруты сервисов</h2></div><p class="hint">Меняется только выбранный сервис; режимы остальных сохраняются.</p><div class="services">
-    <article class="service" data-service="discord-tcp"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">D</span><div><h3>Discord TCP</h3><div class="service-scope">Сайт, API, CDN, QUIC</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
-    <article class="service" data-service="discord-voice"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">V</span><div><h3>Discord Voice</h3><div class="service-scope">Голос и STUN по UDP</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
-    <article class="service" data-service="youtube"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">Y</span><div><h3>YouTube</h3><div class="service-scope">Сайт, видео, QUIC</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
-    <article class="service" data-service="telegram"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true">T</span><div><h3>Telegram</h3><div class="service-scope">Сайт, CDN и MTProto · звонки только через VPN</div></div></div><span class="current">—</span></div><div class="modes"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="vpn">VPN</button><button class="mode" data-mode="ws" title="MTProto через WebSocket-ретранслятор на роутере (как Telegram Web)">WS</button><button class="mode" data-mode="unmanaged" title="Убрать правила проекта; Telegram идёт по вашим правилам XKeen">Выкл</button></div></article>
-  </div><div class="legend"><div><b>Direct</b>Напрямую через WAN, без nfqws2.</div><div><b>Zapret</b>Через WAN с обработкой nfqws2.</div><div><b>VPN</b>Через одну общую активную ноду Xray.</div></div><div class="warning">Смена маршрута выполняет полный транзакционный apply и перезапускает службы, включая Xkeen.</div><div id="routeProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="routeStage">Подготовка</b><span id="routePercent">0%</span></div><div class="bar"><span id="routeBar"></span></div></div></section>
-  <section class="card"><div class="profile-head"><h2>DNS домашней сети</h2><button id="refreshDnsMode">Обновить</button></div>
+<div id="control" class="tab-page active" role="tabpanel" aria-labelledby="tab-control">
+  <section class="card routes-card"><div class="section-head"><svg class="i"><use href="#i-route"/></svg><h2>Маршруты сервисов</h2></div><p class="hint">Меняется только выбранный сервис; режимы остальных сохраняются.</p><div class="services">
+    <article class="service" data-service="discord-tcp"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-discord"/></svg></span><div><h3 id="service-discord-tcp">Discord TCP</h3><div class="service-scope">Сайт, API, CDN, QUIC</div></div></div><span class="current">—</span></div><div class="modes" role="group" aria-labelledby="service-discord-tcp"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
+    <article class="service" data-service="discord-voice"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><use href="#i-headphones"/></svg></span><div><h3 id="service-discord-voice">Discord Voice</h3><div class="service-scope">Голос и STUN по UDP</div></div></div><span class="current">—</span></div><div class="modes" role="group" aria-labelledby="service-discord-voice"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
+    <article class="service" data-service="youtube"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-youtube"/></svg></span><div><h3 id="service-youtube">YouTube</h3><div class="service-scope">Сайт, видео, QUIC</div></div></div><span class="current">—</span></div><div class="modes" role="group" aria-labelledby="service-youtube"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="zapret">Zapret</button><button class="mode" data-mode="vpn">VPN</button></div></article>
+    <article class="service" data-service="telegram"><div class="service-head"><div class="service-title"><span class="service-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-telegram"/></svg></span><div><h3 id="service-telegram">Telegram</h3><div class="service-scope">Сайт, CDN и MTProto · звонки только через VPN</div></div></div><span class="current">—</span></div><div class="modes" role="group" aria-labelledby="service-telegram"><button class="mode" data-mode="direct">Direct</button><button class="mode" data-mode="vpn">VPN</button><button class="mode" data-mode="ws" title="MTProto через WebSocket-ретранслятор на роутере (как Telegram Web)">WS</button><button class="mode" data-mode="unmanaged" title="Убрать правила проекта; Telegram идёт по вашим правилам XKeen">Выкл</button></div></article>
+  </div><div class="legend"><div><b>Direct</b>Напрямую через WAN, без nfqws2.</div><div><b>Zapret</b>Через WAN с обработкой nfqws2.</div><div><b>VPN</b>Через одну общую активную ноду Xray.</div></div><div class="warning">Смена маршрута перезапустит XKeen и nfqws2. Соединение может ненадолго прерваться.</div><div id="routeProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="routeStage">Подготовка</b><span id="routePercent">0%</span></div><div class="bar"><span id="routeBar"></span></div></div></section>
+  <section class="card dns-card"><div class="profile-head"><h2>DNS домашней сети</h2><button id="refreshDnsMode">Обновить</button></div>
     <div id="dnsModeStatus" class="hint" role="status">Загрузка…</div>
     <div class="dns-options"><button class="dns-option" data-dns-mode="vless" disabled>DNS over VLESS</button><button class="dns-option" data-dns-mode="doh" disabled>DoH на роутере</button></div>
   </section>
+  <section class="card xkeen-card"><div><div class="section-head"><svg class="i"><use href="#i-power"/></svg><h2>XKeen</h2></div><p class="hint">Запуск и остановка proxy-клиента.</p></div><div class="xkeen-actions"><button class="start" data-action="start"><svg class="i"><use href="#i-play"/></svg>Включить</button><button class="stop" data-action="stop"><svg class="i"><use href="#i-stop"/></svg>Выключить</button><button class="restart" data-action="restart"><svg class="i"><use href="#i-restart"/></svg>Перезапустить</button></div></section>
   __SERVICE_CONFIG_SECTION__
   <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-history"/></svg><h2>История и откат</h2></div><div class="hint">Записи можно убрать в корзину; снимки отката при этом сохраняются.</div></div><button id="refreshHistory" class="clear">Обновить</button></div><div id="history" class="history-list" tabindex="0" aria-label="Прокручиваемая история операций"><div class="empty">История пуста.</div></div></section>
 </div>
 
-<div id="vpn-nodes" class="tab-page">
-  <section class="card"><div class="profile-head"><div><h2>VPN-ноды Xray</h2><p class="hint">Одна активная нода для всех правил с тегом <code>vless-reality</code>: маршруты панели и остальные правила Xray переключаются вместе.</p></div><div class="tuner-actions"><button id="recoverVpnNode" class="rollback vpn-recover" hidden>Восстановить прошлую ноду</button><button id="refreshVpnNodes" class="clear">Обновить</button></div></div>
+<div id="vpn-nodes" class="tab-page" role="tabpanel" aria-labelledby="tab-vpn-nodes">
+  <section class="card"><div class="profile-head"><div><h2>VPN-ноды Xray</h2><p class="hint">Все сервисы в режиме VPN используют одну активную ноду. Переключение применяется ко всем VPN-правилам Xray.</p></div><div class="tuner-actions"><button id="recoverVpnNode" class="rollback vpn-recover" hidden>Восстановить прошлую ноду</button><button id="checkAllVpnNodes">Пинг всех нод</button><button id="refreshVpnNodes" class="clear">Обновить</button></div></div>
     <div id="vpnSummary" class="hint">Загрузка нод…</div><div id="vpnNodesList" class="vpn-node-list"></div>
     <div id="vpnActionStatus" class="automation-save-status" role="status" aria-live="polite"></div>
     <div id="vpnProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="vpnStage">Подготовка</b><span id="vpnPercent">0%</span></div><div class="bar"><span id="vpnBar"></span></div></div>
@@ -254,7 +366,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
   </section>
   <section class="card"><h2>Добавить VPN-ноду</h2><p class="hint">VLESS, Trojan и Hysteria2: ссылка или один JSON outbound Xray. Hysteria2 с Salamander поддерживается в ссылках; port-hopping задаётся через JSON. Добавление не запускает проверку соединения. Секреты сохраняются на роутере с правами 0600 и не возвращаются в список.</p>
     <div class="field"><label for="vpnNodeSource">VLESS / Trojan / Hysteria2 ссылка или JSON outbound</label><textarea id="vpnNodeSource" rows="6" placeholder="vless://… / trojan://… / hy2://… или { &quot;protocol&quot;: &quot;hysteria&quot;, … }" spellcheck="false" autocomplete="off"></textarea></div>
-    <div class="tuner-actions"><button id="addVpnNode" class="apply">Добавить</button><button id="checkAllVpnNodes">Пинг всех нод</button></div>
+    <div class="tuner-actions"><button id="addVpnNode" class="apply">Добавить</button></div>
   </section>
   <section class="card" id="vpnMonitorCard"><h2>Контроль активной VPN-ноды и IP</h2>
     <p class="hint">Проверяется работающий Xray и выбранная вами нода. Новый IP требует вашего одобрения. Контроль сообщает результат и сохраняет историю.</p>
@@ -298,7 +410,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
   </section>
 </div>
 
-<div id="diagnostics" class="tab-page">
+<div id="diagnostics" class="tab-page" role="tabpanel" aria-labelledby="tab-diagnostics">
   <section class="card"><h2>Проверить маршрут Xray</h2>
     <p class="hint">Решение работающего Xray по введённому контексту. Домен и фактический IP можно задать вместе. Доступность ресурса проверяется отдельно.</p>
     <div class="diagnostic-grid">
@@ -335,14 +447,14 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
   <section class="card"><h2>Кэш Discord на Windows</h2><p class="hint">Роутер не имеет доступа к файлам компьютера. Helper закрывает Discord и переименовывает Cache, Code Cache и GPUCache в резервные каталоги — ничего безвозвратно не удаляется.</p><a class="download" href="/tools/reset-discord-cache.ps1" download><svg class="i"><use href="#i-download"/></svg>Скачать Windows-helper</a></section>
 </div>
 
-<div id="autotune" class="tab-page">
+<div id="autotune" class="tab-page" role="tabpanel" aria-labelledby="tab-autotune">
   <section class="card"><div class="profile-head"><div><h2>Обновления Flowseal</h2><div class="hint">Новые стратегии скачиваются для следующего подбора. Рабочие профили остаются прежними.</div></div><button id="checkUpdates">Проверить обновление</button></div><div id="updateInfo" class="update-box"><div class="empty">Обновления ещё не проверялись.</div></div></section>
   <section class="card">
     <div class="section-head"><svg class="i"><use href="#i-spark"/></svg><h2>Автоподбор стратегий</h2></div>
     <p class="hint">Актуальные general*.bat временно проверяются на роутере. Меняется только проверяемый профиль; остальные TCP/QUIC/UDP-профили сохраняются. Ручной и плановый режимы используют одинаковые пробы: Discord HTTPS + Gateway WebSocket, YouTube HTTPS + транспорт + QUIC. Voice требует подтверждения звука.</p>
     <div class="tuner-grid">
       <div class="field"><label for="tunerService">Сервис</label><select id="tunerService"><option value="youtube">YouTube</option><option value="discord-tcp">Discord TCP</option><option value="discord-voice">Discord Voice</option></select></div>
-      <div class="field"><label for="tunerSource">BAT-файл Flowseal</label><select id="tunerSource"><option value="">Все файлы и встроенный профиль</option></select><div id="tunerSourceHint" class="field-hint">Выберите файл, чтобы проверить только его конфиг. Список появится после «Проверить обновление».</div></div>
+      <div class="field"><label for="tunerSource">BAT-файл Flowseal</label><select id="tunerSource"><option value="">Все файлы + профиль</option></select><div id="tunerSourceHint" class="field-hint">Выберите файл, чтобы проверить только его конфиг. Список появится после «Проверить обновление».</div></div>
       <div class="field"><label for="tunerMix">Глубина перебора</label><select id="tunerMix"><option value="safe">Safe — по одному параметру</option><option value="extended">Extended — плюс сочетания</option><option value="off">Только прямой перевод BAT</option></select></div>
       <div class="field"><label for="tunerMax">Максимум кандидатов</label><input id="tunerMax" type="number" min="1" max="64" value="32"></div>
       <div class="field" id="clientIpField" hidden><label for="tunerClientIp">LAN IPv4 компьютера с Discord</label><input id="tunerClientIp" inputmode="decimal" placeholder="192.168.2.60"></div>
@@ -368,7 +480,7 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
   </section>
 </div>
 
-<div id="notifications" class="tab-page">
+<div id="notifications" class="tab-page" role="tabpanel" aria-labelledby="tab-notifications">
   <section class="card notify-card">
     <div class="notify-header">
       <div class="notify-heading"><h2>Уведомления</h2><span class="notify-server">ntfy.sh</span></div>
@@ -387,13 +499,13 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
     <div class="notify-statusline"><div id="notifyDelivery" class="hint"></div><button id="notifyRefresh" class="clear">Обновить</button></div>
   </section>
 </div>
-<div id="automation" class="tab-page">
+<div id="automation" class="tab-page" role="tabpanel" aria-labelledby="tab-automation">
   <section class="card"><div class="section-head"><svg class="i"><use href="#i-history"/></svg><h2>Автоматическая проверка</h2></div>
     <div class="field"><label class="auto-toggle"><input id="autoEnabled" type="checkbox"><span>Включить расписание</span></label></div>
     <div class="field"><label for="autoTimes">Время запуска (Москва)</label><input id="autoTimes" placeholder="03:00, 15:00"></div>
     <div class="automation-grid">
-      <div class="automation-scenario" data-auto-service="youtube"><h3>YouTube</h3><label><input class="auto-service-enabled" type="checkbox"> Проверять по расписанию</label><div class="field"><label>Сценарий перебора</label><select class="auto-mix"><option value="off">Прямой перевод BAT</option><option value="safe">Safe</option><option value="extended">Extended</option></select></div><div class="field"><label>Максимум кандидатов</label><input class="auto-max" type="number" min="1" max="64" value="32"></div><div class="field"><label>BAT-файл</label><select class="auto-source"><option value="">Все файлы и встроенный профиль</option></select></div></div>
-      <div class="automation-scenario" data-auto-service="discord-tcp"><h3>Discord TCP</h3><label><input class="auto-service-enabled" type="checkbox"> Проверять по расписанию</label><div class="field"><label>Сценарий перебора</label><select class="auto-mix"><option value="off">Прямой перевод BAT</option><option value="safe">Safe</option><option value="extended">Extended</option></select></div><div class="field"><label>Максимум кандидатов</label><input class="auto-max" type="number" min="1" max="64" value="32"></div><div class="field"><label>BAT-файл</label><select class="auto-source"><option value="">Все файлы и встроенный профиль</option></select></div></div>
+      <div class="automation-scenario" data-auto-service="youtube"><h3>YouTube</h3><label><input class="auto-service-enabled" type="checkbox"> Проверять по расписанию</label><div class="field"><label for="auto-mix-youtube">Сценарий перебора</label><select id="auto-mix-youtube" class="auto-mix"><option value="off">Прямой перевод BAT</option><option value="safe">Safe</option><option value="extended">Extended</option></select></div><div class="field"><label for="auto-max-youtube">Максимум кандидатов</label><input id="auto-max-youtube" class="auto-max" type="number" min="1" max="64" value="32"></div><div class="field"><label for="auto-source-youtube">BAT-файл</label><select id="auto-source-youtube" class="auto-source"><option value="">Все файлы + профиль</option></select></div></div>
+      <div class="automation-scenario" data-auto-service="discord-tcp"><h3>Discord TCP</h3><label><input class="auto-service-enabled" type="checkbox"> Проверять по расписанию</label><div class="field"><label for="auto-mix-discord-tcp">Сценарий перебора</label><select id="auto-mix-discord-tcp" class="auto-mix"><option value="off">Прямой перевод BAT</option><option value="safe">Safe</option><option value="extended">Extended</option></select></div><div class="field"><label for="auto-max-discord-tcp">Максимум кандидатов</label><input id="auto-max-discord-tcp" class="auto-max" type="number" min="1" max="64" value="32"></div><div class="field"><label for="auto-source-discord-tcp">BAT-файл</label><select id="auto-source-discord-tcp" class="auto-source"><option value="">Все файлы + профиль</option></select></div></div>
     </div>
     <div class="tuner-actions"><button id="saveAutomation" class="apply">Сохранить расписание</button><button id="cancelAutomation" class="cancel" disabled>Остановить текущий запуск</button></div>
     <div id="automationSaveStatus" class="automation-save-status" role="status" aria-live="polite"></div>
@@ -401,15 +513,15 @@ footer{margin-top:28px;color:var(--faint);font-size:12px;text-align:center}
   <section class="card"><div class="profile-head"><div><h2>Последний запуск</h2><div id="automationSummary" class="hint">Данные загружаются…</div></div><span id="automationNext" class="current"></span></div><pre id="automationEvents">Запусков пока не было.</pre></section>
 </div>
 
-<div id="import" class="tab-page">
-  <section class="card"><div class="section-head"><svg class="i"><use href="#i-upload"/></svg><h2>Отчёт Windows-тюнера</h2></div><p class="hint">Выберите JSON-отчёт с найденным кандидатом. Сначала он проверяется, применение доступно только для сервиса в режиме Zapret.</p><div class="upload"><input id="reportFile" type="file" accept="application/json,.json"><button id="validate">Проверить</button></div>
+<div id="import" class="tab-page" role="tabpanel" aria-labelledby="tab-import">
+  <section class="card"><div class="section-head"><svg class="i"><use href="#i-upload"/></svg><h2>Отчёт Windows-тюнера</h2></div><p class="hint">Выберите JSON-отчёт с найденным кандидатом. Сначала он проверяется, применение доступно только для сервиса в режиме Zapret.</p><div class="upload"><input id="reportFile" aria-label="JSON-отчёт Windows-тюнера" type="file" accept="application/json,.json"><button id="validate">Проверить</button></div>
     <div id="candidate" class="candidate"><div class="meta"><div><b>Сервис</b><span id="candidateService"></span></div><div><b>ID кандидата</b><span id="candidateId"></span></div><div><b>BAT-источник</b><span id="candidateSource"></span></div><div><b>Семейство</b><span id="candidateFamily"></span></div></div><pre id="candidateArgs" class="args"></pre><p class="warning">Применение создаёт отдельный snapshot, меняет только nfqws2 и перезапускает только nfqws2. Xkeen не останавливается и не перезапускается.</p><button id="applyImport" class="apply" disabled>Применить профиль nfqws2</button></div>
   </section>
   <section class="card"><div class="profile-head"><div><div class="section-head"><svg class="i"><use href="#i-layers"/></svg><h2>Постоянные профили</h2></div><div class="hint">Они сохраняются при следующих обычных apply.</div></div><button id="rollbackImport" class="rollback">Откатить последнее изменение</button></div><div id="profiles" class="profiles"></div></section>
   <section class="card"><div class="profile-head"><div><h2>Версии профилей по дате</h2><div class="hint">Старые версии можно убрать в корзину; активная защищена.</div></div><button id="refreshVersions" class="clear">Обновить</button></div><div id="profileVersions" class="version-list" tabindex="0" aria-label="Прокручиваемые версии профилей"><div class="empty">Сохранённых версий пока нет.</div></div></section>
 </div>
 
-<section class="card"><div class="console-head"><div class="section-head"><svg class="i"><use href="#i-terminal"/></svg><h2>Журнал</h2></div><button class="clear" id="clear">Очистить</button></div><pre id="log" aria-live="polite"></pre></section>
+<section class="card console-card"><div class="console-head"><div class="section-head"><svg class="i"><use href="#i-terminal"/></svg><h2>Журнал</h2></div><button class="clear" id="clear">Очистить</button></div><pre id="log" aria-live="polite"></pre></section>
 <footer>XKeen + nfqws2 · локальная панель, доступна только из LAN</footer>
 </main>
 <script src="/assets/browser-diagnostics.js"></script>
@@ -423,11 +535,11 @@ let validatedImport=null,importGeneration=0,controlsBusy=false,tunerPoll=null,tu
 function stamp(){return new Date().toLocaleTimeString("ru-RU",{hour12:false})}
 function log(text,replace=false){const line="["+stamp()+"] "+text;logEl.textContent=replace?line:(logEl.textContent?logEl.textContent+"\n"+line:line);logEl.scrollTop=logEl.scrollHeight}
 let tunerRunning=false,diagnosticRunning=false;
-function busy(value){value=!!value||!!routeWatch||operationStarting;controlsBusy=value;document.querySelectorAll("button:not(.tab)").forEach(b=>b.disabled=value);if(!value){tunerControls(tunerRunning);diagnosticControls(diagnosticRunning);if(dnsModeState)renderDnsMode(dnsModeState);else document.querySelectorAll("[data-dns-mode]").forEach(b=>b.disabled=true)}syncImportControls()}
+function busy(value){value=!!value||!!routeWatch||operationStarting;controlsBusy=value;document.querySelectorAll("button:not(.tab):not([data-ui-control])").forEach(b=>b.disabled=value);if(!value){tunerControls(tunerRunning);diagnosticControls(diagnosticRunning);if(dnsModeState)renderDnsMode(dnsModeState);else document.querySelectorAll("[data-dns-mode]").forEach(b=>b.disabled=true)}syncImportControls()}
 // Success first, then plain words for known harmless lines, then the raw output.
 function resultText(title,output){const out=output||"",notes=[];if(/no usable IPv6 WAN route/.test(out))notes.push("Предупреждение IPv6 безвредно: у провайдера нет IPv6-маршрута, nfqws2 работает по IPv4.");if(/seccomp: Invalid argument/.test(out))notes.push("Строка seccomp безвредна: ядро Keenetic его не поддерживает, nfqws2 продолжает работу.");return "Готово: "+title+(notes.length?"\n"+notes.join("\n"):"")+(out?"\n\nПолный вывод:\n"+out:"")}
 function modeForUi(value){return value==="vless"?"vpn":value}
-function updateService(service,value){const box=document.querySelector('[data-service="'+service+'"]');box.querySelector(".current").textContent=label[value]||value;box.querySelectorAll(".mode").forEach(b=>b.classList.toggle("active",b.dataset.mode===modeForUi(value)))}
+function updateService(service,value){const box=document.querySelector('[data-service="'+service+'"]');box.querySelector(".current").textContent=label[value]||value;box.querySelectorAll(".mode").forEach(b=>{const active=b.dataset.mode===modeForUi(value);b.classList.toggle("active",active);b.setAttribute("aria-pressed",String(active))})}
 function fmtDate(value){if(!value)return "—";const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString("ru-RU",{hour12:false})}
 function vpnHealthText(health){
   if(!health)return "Проверка не запускалась";
@@ -794,14 +906,14 @@ function renderUpdate(d){const root=document.getElementById("updateInfo");root.t
 async function refreshUpdates(){if(!tabVisible("autotune"))return;const latest=latestView("updates");try{const d=await api("/api/updates");if(!latest())return;renderUpdate(d)}catch(e){if(!latest())return;document.getElementById("updateInfo").textContent="Ошибка: "+e}}
 async function checkUpdates(){const button=document.getElementById("checkUpdates");button.disabled=true;button.textContent="Проверяю и скачиваю…";try{const d=await api("/api/updates/check",{method:"POST",headers:controlHeaders,body:"{}"});renderUpdate(d);log(d.status==="up_to_date"?"Flowseal: актуально":"Flowseal: скачаны новые стратегии ("+d.source_count+" файлов)");await refreshTunerSources()}catch(e){renderUpdate({status:"error",error:String(e)});log("ошибка обновления Flowseal: "+e)}finally{button.disabled=false;button.textContent="Проверить обновление"}}
 let automationLoaded=false,automationPoll=null;
-function renderAutomationSources(){document.querySelectorAll(".automation-scenario").forEach(box=>{const select=box.querySelector(".auto-source"),previous=select.value,service=box.dataset.autoService;select.textContent="";const all=document.createElement("option");all.value="";all.textContent="Все файлы и встроенный профиль";select.append(all);tunerSourceList.filter(item=>(item.services||[]).includes(service)).forEach(item=>{const option=document.createElement("option");option.value=item.name;option.textContent=item.name;select.append(option)});if(previous&&!Array.from(select.options).some(option=>option.value===previous)){const missing=document.createElement("option");missing.value=previous;missing.textContent=previous+" — не в текущем наборе";select.append(missing)}select.value=previous})}
+function renderAutomationSources(){document.querySelectorAll(".automation-scenario").forEach(box=>{const select=box.querySelector(".auto-source"),previous=select.value,service=box.dataset.autoService;select.textContent="";const all=document.createElement("option");all.value="";all.textContent="Все файлы + профиль";select.append(all);tunerSourceList.filter(item=>(item.services||[]).includes(service)).forEach(item=>{const option=document.createElement("option");option.value=item.name;option.textContent=item.name;select.append(option)});if(previous&&!Array.from(select.options).some(option=>option.value===previous)){const missing=document.createElement("option");missing.value=previous;missing.textContent=previous+" — не в текущем наборе";select.append(missing)}select.value=previous})}
 function renderAutomation(d,forceForm=false){const c=d.config,s=d.state||{};if(!automationLoaded||forceForm){document.getElementById("autoEnabled").checked=c.enabled;document.getElementById("autoTimes").value=c.times.join(", ");document.querySelectorAll(".automation-scenario").forEach(box=>{const scenario=c.services[box.dataset.autoService];box.querySelector(".auto-service-enabled").checked=scenario.enabled;box.querySelector(".auto-mix").value=scenario.mix_level;box.querySelector(".auto-max").value=scenario.max_candidates;const select=box.querySelector(".auto-source");if(scenario.source_file&&!Array.from(select.options).some(option=>option.value===scenario.source_file)){const missing=document.createElement("option");missing.value=scenario.source_file;missing.textContent=scenario.source_file+" — текущий выбор";select.append(missing)}select.value=scenario.source_file});automationLoaded=true}document.getElementById("cancelAutomation").disabled=!d.active;document.getElementById("saveAutomation").disabled=!!d.active||!!routeWatch||operationStarting;document.getElementById("automationSummary").textContent=(c.enabled?"Включено":"Выключено")+" · "+(s.status||"idle")+(s.current_service?" · "+(serviceLabel[s.current_service]||s.current_service):"")+(s.phase?" · "+s.phase:"")+(s.error?" · "+s.error:"");document.getElementById("automationNext").textContent=d.next_run?"Следующий: "+new Date(d.next_run).toLocaleString("ru-RU",{timeZone:"Europe/Moscow",hour12:false}):"Нет запланированных запусков";document.getElementById("automationEvents").textContent=(s.events||[]).map(x=>"["+x.at+"] "+x.message).join("\n")||"Запусков пока не было.";scheduleAutomationPoll(!!d.active)}
 function automationSaveMessage(message,tone=""){const box=document.getElementById("automationSaveStatus");box.className="automation-save-status"+(tone?" "+tone:"");box.textContent=message}
 async function refreshAutomation(forceForm=false){if(!tabVisible("automation"))return;const latest=latestView("automation");try{const d=await api("/api/automation");if(!latest())return;if(!automationLoaded)automationSaveMessage("");renderAutomation(d,forceForm)}catch(e){if(!latest())return;document.getElementById("automationSummary").textContent="Ошибка: "+e;automationSaveMessage("Не удалось прочитать расписание: "+e,"bad")}}
 async function saveAutomation(){const services={};document.querySelectorAll(".automation-scenario").forEach(box=>{services[box.dataset.autoService]={enabled:box.querySelector(".auto-service-enabled").checked,mix_level:box.querySelector(".auto-mix").value,max_candidates:Number(box.querySelector(".auto-max").value),source_file:box.querySelector(".auto-source").value}});const config={version:1,enabled:document.getElementById("autoEnabled").checked,times:document.getElementById("autoTimes").value.split(/[;,\s]+/).filter(Boolean),services};if(config.enabled&&!confirm("Включить проверку по расписанию с автоматическим применением найденного профиля?\n\nПодбор временно перезапускает nfqws2; при ошибке новый профиль будет откатан. Xkeen не перезапускается.")){automationSaveMessage("Включение отменено; прежние настройки не изменены.");return}const button=document.getElementById("saveAutomation");button.disabled=true;button.textContent="Сохраняю…";automationSaveMessage("Сохраняю настройки на роутере…");try{const d=await api("/api/automation/save",{method:"POST",headers:controlHeaders,body:JSON.stringify(config)});renderAutomation(d,true);const message=d.config.enabled?"Сохранено и включено. Следующая проверка: "+(d.next_run?new Date(d.next_run).toLocaleString("ru-RU",{timeZone:"Europe/Moscow",hour12:false}):"уточняется")+" (Москва).":"Сохранено. Расписание выключено.";automationSaveMessage(message,"good");log(message)}catch(e){automationSaveMessage("Не удалось сохранить расписание: "+e,"bad");log("ошибка расписания: "+e)}finally{button.textContent="Сохранить расписание";button.disabled=false}}
 async function cancelAutomation(){try{await api("/api/automation/cancel",{method:"POST",headers:controlHeaders,body:"{}"});log("остановка ночного задания запрошена");await refreshAutomation()}catch(e){log("ошибка остановки задания: "+e)}}
 let tunerSourceList=[];
-function renderTunerSources(){const select=document.getElementById("tunerSource"),service=document.getElementById("tunerService").value,previous=select.value;select.textContent="";const all=document.createElement("option");all.value="";all.textContent="Все файлы и встроенный профиль";select.append(all);tunerSourceList.forEach(item=>{const option=document.createElement("option"),supported=(item.services||[]).includes(service);option.value=item.name;option.textContent=item.name+(supported?"":" — нет профиля для "+serviceLabel[service]);option.disabled=!supported;select.append(option)});const keep=tunerSourceList.find(item=>item.name===previous&&(item.services||[]).includes(service));select.value=keep?previous:""}
+function renderTunerSources(){const select=document.getElementById("tunerSource"),service=document.getElementById("tunerService").value,previous=select.value;select.textContent="";const all=document.createElement("option");all.value="";all.textContent="Все файлы + профиль";select.append(all);tunerSourceList.forEach(item=>{const option=document.createElement("option"),supported=(item.services||[]).includes(service);option.value=item.name;option.textContent=item.name+(supported?"":" — нет профиля для "+serviceLabel[service]);option.disabled=!supported;select.append(option)});const keep=tunerSourceList.find(item=>item.name===previous&&(item.services||[]).includes(service));select.value=keep?previous:""}
 async function refreshTunerSources(){if(!tabVisible("autotune")&&!tabVisible("automation"))return;const latest=latestView("sources");const hint=document.getElementById("tunerSourceHint");try{const d=await api("/api/tuner/sources");if(!latest())return;tunerSourceList=d.sources||[];renderTunerSources();renderAutomationSources();hint.textContent=d.status==="ready"?"Только выбранный файл, без встроенного профиля: сначала профили файла, затем (Safe/Extended) вариации их параметров. Commit "+d.commit.slice(0,12)+".":d.status==="error"?"Список файлов недоступен: "+d.error:"Список файлов появится после «Проверить обновление»."}catch(e){if(!latest())return;hint.textContent="Список файлов недоступен: "+e}}
 function tunerServiceChanged(){const voice=document.getElementById("tunerService").value==="discord-voice";document.getElementById("clientIpField").hidden=!voice;document.getElementById("voiceAutoField").hidden=!voice;renderTunerSources()}
 let voiceEndpoint=null;
@@ -858,12 +970,44 @@ async function applyTunerResult(){
   finally{progress.hidden=true;status.setAttribute("aria-busy","false");busy(false);await refresh();await refreshProfiles();await refreshVersions();await refreshTuner()}
   if(done)await postChecksAfter(done)
 }
-document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{
-  if(b.classList.contains("active"))return;
-  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===b));
-  document.querySelectorAll(".tab-page").forEach(x=>x.classList.toggle("active",x.id===b.dataset.tab));
-  suspendBackgroundPolls();refreshActiveTab();
-}));
+const sectionInfo={
+  control:["Управление сетью","Выберите, как подключаются ваши сервисы.","Сеть"],
+  "vpn-nodes":["VPN-ноды","Подключения, активная нода и контроль доступности.","Сеть"],
+  diagnostics:["Диагностика","Проверьте маршруты и найдите причину неполадок.","Сеть"],
+  autotune:["Автоподбор","Подберите рабочую стратегию для ваших сервисов.","Автоматизация"],
+  automation:["Расписание","Регулярная проверка и подбор стратегий в удобное время.","Автоматизация"],
+  notifications:["Уведомления","Узнавайте об изменениях, которые требуют внимания.","Настройки"],
+  import:["Импорт профиля","Добавляйте проверенные стратегии и управляйте их версиями.","Настройки"]
+};
+function syncNavigation(id){
+  const info=sectionInfo[id];if(!info)return;
+  document.querySelectorAll(".tab").forEach(tab=>{const selected=tab.dataset.tab===id;tab.classList.toggle("active",selected);tab.setAttribute("aria-selected",String(selected));tab.tabIndex=selected?0:-1});
+  document.querySelectorAll(".tab-page").forEach(panel=>panel.classList.toggle("active",panel.id===id));
+  document.getElementById("pageTitle").textContent=info[0];document.getElementById("pageDescription").textContent=info[1];document.getElementById("pageCategory").textContent=info[2];
+  document.getElementById("breadcrumbSection").textContent=id==="control"?"Управление":info[0];document.getElementById("mobileSection").value=id;
+}
+function selectSection(id){
+  if(!sectionInfo[id]||document.querySelector(".tab.active")?.dataset.tab===id)return;
+  syncNavigation(id);suspendBackgroundPolls();refreshActiveTab();
+}
+document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>selectSection(b.dataset.tab)));
+document.querySelector(".tabs").addEventListener("keydown",event=>{
+  if(!event.target.matches(".tab"))return;
+  const tabs=[...document.querySelectorAll(".tab")],index=tabs.indexOf(event.target);
+  const next=event.key==="Home"?0:event.key==="End"?tabs.length-1:["ArrowDown","ArrowRight"].includes(event.key)?(index+1)%tabs.length:["ArrowUp","ArrowLeft"].includes(event.key)?(index+tabs.length-1)%tabs.length:null;
+  if(next===null)return;event.preventDefault();tabs[next].focus();
+});
+document.getElementById("mobileSection").addEventListener("change",event=>document.getElementById("tab-"+event.target.value).click());
+function syncThemeButton(){
+  const dark=document.documentElement.dataset.theme==="dark",button=document.getElementById("themeToggle");
+  const label=dark?"Включить светлую тему":"Включить тёмную тему";button.setAttribute("aria-label",label);button.title=label;
+  document.getElementById("themeColor").content=dark?"#101419":"#f6f8fb";
+}
+document.getElementById("themeToggle").addEventListener("click",()=>{
+  const theme=document.documentElement.dataset.theme==="dark"?"light":"dark";document.documentElement.dataset.theme=theme;
+  try{localStorage.setItem("xkeen-theme",theme)}catch{}syncThemeButton();
+});
+syncThemeButton();
 document.addEventListener("visibilitychange",()=>{
   suspendBackgroundPolls();
   if(!document.hidden){if(!tabVisible("control"))refresh();if(!tabVisible("autotune"))refreshTuner();refreshActiveTab()}

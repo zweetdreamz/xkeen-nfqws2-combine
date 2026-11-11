@@ -430,6 +430,68 @@ async function vpnCurrentFileViewChecks(browser, errors) {
   }
 }
 
+async function navigationAndThemeChecks(browser, errors) {
+  const page = await openPanel(browser, errors);
+  assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
+  await page.getByRole('button', { name: 'Включить тёмную тему' }).click();
+  assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById('statusText').textContent === 'XKeen работает');
+  assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+  await page.getByRole('button', { name: 'Включить светлую тему' }).click();
+  await page.getByRole('tab', { name: 'Управление', exact: true }).focus();
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.tab), 'vpn-nodes');
+  await page.keyboard.press('Enter');
+  assert.equal(await page.getByRole('tab', { name: 'VPN-ноды', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#pageTitle').textContent(), 'VPN-ноды');
+  await page.getByRole('tab', { name: 'Управление', exact: true }).click();
+  assert.equal(await page.locator('[data-service="youtube"] .mode[data-mode="vpn"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('[data-service="youtube"] .mode[data-mode="direct"]').getAttribute('aria-pressed'), 'false');
+  await page.evaluate(() => busy(true));
+  assert.equal(await page.locator('#themeToggle').isEnabled(), true);
+  await page.getByRole('button', { name: 'Включить тёмную тему' }).click();
+  await page.evaluate(() => busy(false));
+  await page.setViewportSize({width:390,height:844});
+  for (const tab of ['vpn-nodes', 'diagnostics']) {
+    await page.locator('#mobileSection').selectOption('control');
+    await page.waitForFunction(() => pendingReads.size === 0);
+    await setMock({reset_stats:true});
+    await page.locator('#mobileSection').selectOption(tab);
+    await waitForCall('/api/vpn-monitor', 1);
+    await waitForCall('/api/inspection/status', 1);
+  }
+  for (const width of [1440, 1024, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const tab of ['control', 'vpn-nodes', 'diagnostics', 'autotune', 'automation', 'notifications', 'import']) {
+      if (width <= 760) {
+        await page.locator('#mobileSection').selectOption(tab);
+      } else {
+        await page.locator(`.tab[data-tab="${tab}"]`).click();
+      }
+      assert.equal(await page.locator(`#${tab}`).isVisible(), true);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${tab} overflows at ${width}px`);
+    }
+  }
+  for (const viewport of [{width:1024,height:500}, {width:844,height:390}]) {
+    await page.setViewportSize(viewport);
+    await page.locator('.tab[data-tab="control"]').click();
+    await page.locator('.tab[data-tab="import"]').click({timeout:3000});
+    const box = await page.locator('.tab[data-tab="import"]').boundingBox();
+    assert.ok(box.y >= -1 && box.y + box.height <= viewport.height + 1, 'navigation must scroll on short screens (1px rounding tolerance)');
+  }
+  await page.close();
+  const restricted = await browser.newPage();
+  restricted.on('pageerror', error => errors.push(String(error)));
+  await restricted.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('Blocked', 'SecurityError'); } });
+  });
+  await restricted.goto(`${BASE}/`);
+  await restricted.getByRole('button', { name: 'Включить тёмную тему' }).click();
+  assert.equal(await restricted.locator('html').getAttribute('data-theme'), 'dark');
+  await restricted.close();
+}
+
 async function main() {
   setTimeout(()=>{console.error("panel UI test timeout");process.exit(1)},120000).unref();
   const server = await startServer();
@@ -440,6 +502,7 @@ async function main() {
   const browser = await playwright.chromium.launch(launchOptions);
   const errors = [];
   try {
+    await navigationAndThemeChecks(browser, errors);
     await importValidationChecks(browser, errors);
     await pollingChecks(browser, errors);
     await inspectionChecks(browser, errors);

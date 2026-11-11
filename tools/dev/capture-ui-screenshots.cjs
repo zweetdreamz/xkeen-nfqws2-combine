@@ -9,7 +9,9 @@ const {chromium} = require('playwright');
 
 async function main() {
   const root = path.resolve(__dirname, '../..');
-  const output = path.join(root, 'docs/images');
+  const output = process.env.KDN_SCREENSHOT_OUTPUT || path.join(root, 'docs/images');
+  const width = Number(process.env.KDN_SCREENSHOT_WIDTH || 1440);
+  const theme = process.env.KDN_SCREENSHOT_THEME === 'dark' ? 'dark' : 'light';
   const source = await fs.readFile(path.join(root, 'tools/router/kdn/web/assets/index.html'), 'utf8');
   const inline = [...source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)]
     .map(match => match[1]).find(code => code.includes('function updateService'));
@@ -23,7 +25,7 @@ async function main() {
     args: ['--disable-background-networking', '--disable-component-update', '--no-proxy-server'],
   });
   try {
-    const context = await browser.newContext({viewport: {width: 1440, height: 1400}, locale: 'ru-RU', timezoneId: 'Europe/Moscow', colorScheme:'dark', reducedMotion:'reduce', serviceWorkers: 'block'});
+    const context = await browser.newContext({viewport: {width, height: 2200}, locale: 'ru-RU', timezoneId: 'Europe/Moscow', colorScheme:theme, reducedMotion:'reduce', serviceWorkers: 'block'});
     // This is an offline UI render, not a connection to the router or ntfy.
     await context.route('**/*', route => route.abort());
     const page = await context.newPage();
@@ -31,14 +33,16 @@ async function main() {
     page.on('pageerror', error => errors.push(error.message));
     await page.setContent(html);
     await page.addScriptTag({content: script});
-    await page.evaluate(() => {
+    await page.evaluate(async theme => {
+      document.documentElement.dataset.theme = theme;
+      syncThemeButton();
       window.fetch = async () => { throw new Error('Network disabled in screenshot renderer'); };
       document.getElementById('dot').className = 'dot ok';
       document.getElementById('statusText').textContent = 'XKeen работает';
       const note = document.createElement('div');
       note.textContent = 'Демонстрация интерфейса · приватные данные скрыты';
-      note.style = 'color:var(--faint);font-size:12px;text-align:right;margin-bottom:12px';
-      document.querySelector('.tabs').after(note);
+      note.style = 'color:var(--faint);font-size:11px;margin:-8px 0 18px';
+      document.querySelector('.page-heading').after(note);
       for (const [service, mode] of Object.entries({'discord-tcp':'zapret', 'discord-voice':'zapret', youtube:'zapret', telegram:'vpn'})) updateService(service, mode);
       renderDnsMode({supported:true, interface:'Home', mode:'vless'});
       renderAutomation({active:false, config:{enabled:true, times:['03:00', '15:00'], services:Object.fromEntries(['youtube','discord-tcp'].map(id => [id,{enabled:true,mix_level:'safe',max_candidates:32,source_file:''}]))}, state:{status:'idle'}, next_run:null}, true);
@@ -51,17 +55,21 @@ async function main() {
       ]}, true);
       document.getElementById('notifyTopic').value = '████████ · скрыто';
       document.getElementById('notifyToken').placeholder = 'Скрыто';
-      document.getElementById('vpnSummary').textContent = 'Активна: Основная · 3 ноды. Все VPN-правила используют тег vless-reality.';
-      const list = document.getElementById('vpnNodesList');
-      for (const [name, protocol, network, security, active] of [
-        ['Основная','VLESS','TCP','REALITY',true], ['Резервная','TROJAN','TCP','TLS',false], ['Мобильная','HYSTERIA2','UDP','TLS',false],
-      ]) {
-        const card = document.createElement('article'); card.className = 'vpn-node-card' + (active?' active':'');
-        // Constants only: no real endpoint, SNI, UUID, password or key is read.
-        card.innerHTML = `<div class="vpn-node-head"><div class="vpn-node-title"><b>${name}</b><code class="vpn-node-endpoint">████████:████</code></div><span class="${active?'good':'current'}">${active?'АКТИВНА':'РЕЗЕРВ'}</span></div><div class="vpn-node-meta vpn-node-tags"><span class="vpn-node-tag protocol">${protocol}</span><span class="vpn-node-tag transport">${network}</span><span class="vpn-node-tag security">${security}</span><span class="vpn-node-tag sni">SNI скрыт</span></div><div class="vpn-node-health good">Демонстрационный результат · соединение работает · 85 мс · HTTP 200</div><div class="vpn-node-actions"><button>Редактировать</button><button>Проверить</button>${active?'':'<button class="apply">Сделать активной</button>'}</div>`;
-        list.append(card);
-      }
-    });
+      const nodes = [
+        {id:'primary',name:'Основная',protocol:'vless',network:'tcp',security:'reality',active:true},
+        {id:'backup',name:'Резервная',protocol:'trojan',network:'tcp',security:'tls',active:false},
+        {id:'mobile',name:'Мобильная',protocol:'hysteria2',network:'udp',security:'tls',active:false},
+      ].map(node => ({...node,endpoint:'████████:████',sni:'Скрыт',
+        ping:{ok:true,latency_ms:85,http_code:204},health:null}));
+      window.fetch = async url => {
+        if (url !== '/api/vpn-nodes') throw new Error('Network disabled in screenshot renderer');
+        return {ok:true,json:async()=>({ok:true,nodes,active:'primary',canonical_tag:'vless-reality',recovery_needed:false})};
+      };
+      syncNavigation('vpn-nodes');
+      await refreshVpnNodes();
+      window.fetch = async () => { throw new Error('Network disabled in screenshot renderer'); };
+      syncNavigation('control');
+    }, theme);
     await fs.mkdir(output, {recursive:true});
     for (const [tab, filename, endSelector] of [
       ['control','control.png','#control > section:nth-of-type(3)'],
@@ -69,16 +77,19 @@ async function main() {
       ['automation','schedule.png','#automation > section:last-child'],
       ['notifications','notifications.png','#notifications > section:first-child'],
     ]) {
-      await page.evaluate(id => {
-        document.querySelectorAll('.tab-page').forEach(el => el.classList.toggle('active',el.id===id));
-        document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active',el.dataset.tab===id));
-      }, tab);
+      await page.evaluate(id => syncNavigation(id), tab);
       const box = await page.locator(endSelector).boundingBox();
       if (!box) throw new Error('Missing screenshot boundary: '+endSelector);
-      await page.screenshot({path:path.join(output,filename), animations:'disabled', clip:{x:0,y:0,width:1440,height:Math.ceil(box.y+box.height+22)}});
+      const height = Math.ceil(box.y+box.height+22);
+      await page.evaluate(async height => {
+        document.querySelector('.sidebar').style.height = `${height}px`;
+        window.scrollTo(0, 0);
+        await new Promise(requestAnimationFrame);
+      }, height);
+      await page.screenshot({path:path.join(output,filename), animations:'disabled', clip:{x:0,y:0,width,height}});
     }
     if (errors.length) throw new Error(errors.join('\n'));
-    console.log('Saved 4 offline screenshots with demonstration data to docs/images');
+    console.log(`Saved 4 offline screenshots (${theme}, ${width}px) to ${output}`);
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error.message); process.exitCode=1; });
