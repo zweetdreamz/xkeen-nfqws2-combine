@@ -228,8 +228,23 @@ def read_domains_file(path: Path | None) -> list[str]:
     return domains
 
 
+def create_tls_context() -> ssl.SSLContext:
+    """Verified TLS with upstream's compact X25519 ClientHello profile.
+
+    Flowseal/tg-ws-proxy v1.11.4, proxy/utils.py: avoid the large hybrid
+    key share that can trigger DPI. Older router OpenSSL builds may lack
+    X25519; retain their verified default context rather than stop the relay.
+    """
+    context = ssl.create_default_context()
+    try:
+        context.set_ecdh_curve("X25519")
+    except (AttributeError, ValueError, ssl.SSLError, NotImplementedError):
+        log("TLS: X25519 unavailable; using verified OpenSSL defaults")
+    return context
+
+
 def fetch_cf_domains(url: str = CF_DOMAINS_URL, timeout: float = 20.0) -> list[str]:
-    with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310 - fixed https URL
+    with urllib.request.urlopen(url, timeout=timeout, context=create_tls_context()) as response:  # noqa: S310 - fixed https URL
         text = response.read(65536).decode("utf-8", "replace")
     domains = []
     for line in text.splitlines():
@@ -351,7 +366,7 @@ class Relay:
         self.use_tls = use_tls
         self.address_override = address_override  # tests only
         self.fallback_port = fallback_port
-        self.ssl_context = ssl.create_default_context() if use_tls else None
+        self.ssl_context = create_tls_context() if use_tls else None
         self.cf_enabled = cf_enabled
         self.cf_domains = list(cf_domains if cf_domains is not None else CF_DEFAULT_DOMAINS)
         self.cf_active: dict[int, str] = {}

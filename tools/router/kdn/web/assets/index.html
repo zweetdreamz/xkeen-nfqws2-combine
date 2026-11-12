@@ -411,13 +411,14 @@ pre{background:var(--log-bg);color:var(--log-text);padding:16px 18px;line-height
       <div class="field"><label for="vpnMonitorFamily">Контролируемые адреса</label><select id="vpnMonitorFamily"><option value="both">IPv4 и IPv6</option><option value="ipv4">Только IPv4</option><option value="ipv6">Только IPv6</option></select></div>
       <div class="field"><label for="vpnMonitorInterval">Интервал, минуты</label><input id="vpnMonitorInterval" type="number" min="1" max="1440" value="5"></div>
       <div class="field"><label class="setting-switch"><span class="setting-copy"><strong id="vpnMonitorEnabledLabel">Регулярный контроль</strong><small>Проверять доступность и выходной IP</small></span><span class="switch-control"><input id="vpnMonitorEnabled" aria-labelledby="vpnMonitorEnabledLabel" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span></span></label></div>
+      <div class="field"><label class="setting-switch"><span class="setting-copy"><strong id="vpnMonitorDnsFallbackLabel">Резервный DNS</strong><small>После трёх отказов VPN: VLESS → DoH, без автоматического возврата</small></span><span class="switch-control"><input id="vpnMonitorDnsFallback" aria-labelledby="vpnMonitorDnsFallbackLabel" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span></span></label></div>
       <div class="field"><label for="vpnExpected4">Разрешённые IPv4 (через запятую)</label><input id="vpnExpected4" autocomplete="off" placeholder="Утверждаются вручную"></div>
       <div class="field"><label for="vpnExpected6">Разрешённые IPv6 (через запятую)</label><input id="vpnExpected6" autocomplete="off" placeholder="Утверждаются вручную"></div>
     </div>
     <div class="toolbar"><button id="vpnMonitorCheck" class="apply">Проверить текущую ноду</button><button id="vpnMonitorApprove">Одобрить наблюдаемый IP</button><button id="vpnMonitorSave">Сохранить контроль и IP</button><button id="vpnMonitorReload">Обновить форму</button></div>
     <div id="vpnMonitorSummary" role="status" aria-live="polite" class="hint">Контроль выключен до настройки и одобрения IP.</div>
     <pre id="vpnMonitorResult">Наблюдений пока нет.</pre><details><summary>История изменений</summary><pre id="vpnMonitorHistory">Событий пока нет.</pre></details>
-    <p class="hint">Ноды и IP не переключаются автоматически. Недоступная family остаётся непроверенной. Монитор не закрепляет адрес у VPN-провайдера и не блокирует трафик.</p>
+    <p class="hint">После трёх подтверждённых отказов VPN DNS over VLESS автоматически сменится на DoH. Недоступность диагностики и отдельной IP family не запускает переход. Нода не переключается; возврат DNS на VLESS — вручную.</p>
   </section>
   <section id="vpnEditCard" class="card" hidden aria-labelledby="vpnEditTitle"><h2 id="vpnEditTitle">Редактировать ноду</h2>
     <p class="hint">Меняются только отредактированные поля. Секреты не загружаются в браузер: пустые дополнительные поля сохраняют прежние значения. Проверка и переключение запускаются отдельно.</p>
@@ -840,7 +841,7 @@ function renderNotifications(d,force=false){
     document.getElementById("notifyClearToken").checked=false;
     const root=document.getElementById("notifyEvents");root.textContent="";
     for(const [vpn,title] of [[false,"Zapret и расписание"],[true,"VPN"]]){
-      const choices=(d.choices||[]).filter(item=>(item.id.startsWith("vpn-")||item.id==="inspection-unavailable")===vpn);
+      const choices=(d.choices||[]).filter(item=>(item.id.startsWith("vpn-")||item.id.startsWith('dns-')||item.id==="inspection-unavailable")===vpn);
       if(!choices.length)continue;
       const group=document.createElement("fieldset");group.className="notify-event-group";
       const legend=document.createElement("legend");legend.textContent=title;group.append(legend);

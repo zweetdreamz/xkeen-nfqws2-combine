@@ -21,7 +21,7 @@
     el("vpnMonitorSummary").textContent=(data.config.enabled?"Контроль включён":"Контроль выключен")+" · "+(identity.node_id||"нода не подтверждена")+" · "+(statuses[data.verdict]||data.verdict)+(data.detail?" · "+data.detail:"");
     if(!dirty){
       formIdentity=data.identity;
-      el("vpnMonitorEnabled").checked=data.config.enabled;el("vpnMonitorInterval").value=data.config.interval_minutes;
+      el("vpnMonitorEnabled").checked=data.config.enabled;el("vpnMonitorInterval").value=data.config.interval_minutes;el('vpnMonitorDnsFallback').checked=!!data.config.dns_fallback_enabled;
       el("vpnMonitorFamily").value=data.config.families.length===2?"both":data.config.families[0];
       el("vpnExpected4").value=(expected.ipv4||[]).join(", ");el("vpnExpected6").value=(expected.ipv6||[]).join(", ");
     }
@@ -59,7 +59,7 @@
   el("vpnMonitorSave").addEventListener("click",async()=>{
     const ips=id=>el(id).value.split(",").map(x=>x.trim()).filter(Boolean);
     if(!monitor)return;
-    const body={identity:formIdentity,changes:{enabled:el("vpnMonitorEnabled").checked,interval_minutes:Number(el("vpnMonitorInterval").value),families:families(),expected:{ipv4:ips("vpnExpected4"),ipv6:ips("vpnExpected6")}}};
+    const body={identity:formIdentity,changes:{enabled:el("vpnMonitorEnabled").checked,interval_minutes:Number(el("vpnMonitorInterval").value),dns_fallback_enabled:el('vpnMonitorDnsFallback').checked,families:families(),expected:{ipv4:ips("vpnExpected4"),ipv6:ips("vpnExpected6")}}};
     if(!confirm("Сохранить вручную указанные разрешённые IP и настройки контроля текущей ноды?"))return;
     try{await post("/api/vpn-monitor/save",body);dirty=false;await refreshInspection()}catch(error){el("vpnMonitorSummary").textContent="Ошибка сохранения: "+error}
   });

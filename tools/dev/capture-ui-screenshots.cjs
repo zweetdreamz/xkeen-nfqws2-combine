@@ -45,20 +45,30 @@ async function main() {
       document.querySelector('.page-heading').after(note);
       for (const [service, mode] of Object.entries({'discord-tcp':'zapret', 'discord-voice':'zapret', youtube:'zapret', telegram:'vpn'})) updateService(service, mode);
       renderDnsMode({supported:true, interface:'Home', mode:'vless'});
-      renderAutomation({active:false, config:{enabled:true, times:['03:00', '15:00'], services:Object.fromEntries(['youtube','discord-tcp'].map(id => [id,{enabled:true,mix_level:'safe',max_candidates:32,source_file:''}]))}, state:{status:'idle'}, next_run:null}, true);
+      renderAutomation({active:false, config:{enabled:true, times:['03:00', '15:00'], services:Object.fromEntries(['youtube','discord-tcp'].map(id => [id,{enabled:true,mix_level:'safe',max_candidates:32,source_file:''}]))}, state:{status:'idle'}, next_run:'2026-11-13T00:00:00Z'}, true);
       document.getElementById('automationSummary').textContent = 'Включено · ожидание запуска';
-      renderNotifications({enabled:true, topic:'', events:['youtube-updated','discord-updated','vpn-down','vpn-recovered'], pending:0, choices:[
-        {id:'youtube-updated',title:'YouTube: профиль обновлён'}, {id:'discord-updated',title:'Discord: профиль обновлён'},
-        {id:'night-error',title:'Ночная проверка: ошибка'}, {id:'restored',title:'Профиль восстановлен'},
-        {id:'vpn-down',title:'VPN: проверка не проходит'}, {id:'vpn-ip',title:'VPN: изменился выходной IP'},
+      renderNotifications({enabled:true, topic:'', events:['youtube-applied','discord-tcp-applied','vpn-check-failed','vpn-recovered','dns-fallback','dns-fallback-failed'], pending:0, choices:[
+        {id:'youtube-applied',title:'YouTube: профиль обновлён'}, {id:'discord-tcp-applied',title:'Discord: профиль обновлён'},
+        {id:'night-failed',title:'Ночная проверка: ошибка'}, {id:'rolled-back',title:'Профиль восстановлен'},
+        {id:'night-not-found',title:'Zapret: профиль не найден'}, {id:'recovery-failed',title:'Не завершено восстановление'},
+        {id:'vpn-check-failed',title:'VPN: проверка не проходит'}, {id:'vpn-ip-changed',title:'VPN: изменился выходной IP'},
         {id:'vpn-recovered',title:'VPN снова работает'}, {id:'inspection-unavailable',title:'Контроль VPN недоступен'},
+        {id:'dns-fallback',title:'DNS переключён на DoH'}, {id:'dns-fallback-failed',title:'Не удалось переключить DNS'},
       ]}, true);
       document.getElementById('notifyTopic').value = '████████ · скрыто';
       document.getElementById('notifyToken').placeholder = 'Скрыто';
+      document.getElementById('vpnMonitorEnabled').checked = true;
+      document.getElementById('vpnMonitorInterval').value = '5';
+      document.getElementById('vpnMonitorFamily').value = 'ipv4';
+      document.getElementById('vpnMonitorDnsFallback').checked = true;
+      document.getElementById('vpnExpected4').value = '████████ · скрыто';
+      document.getElementById('vpnMonitorSummary').textContent = 'Контроль включён · Основная · IP совпадает, HTTPS доступен';
+      document.getElementById('vpnMonitorResult').textContent = 'Демонстрационный результат\nIPv4: скрыт\nHTTPS canary: OK\nИнтервал: 5 минут\nРезервный DNS: включён, текущий режим не изменялся';
+      document.getElementById('vpnMonitorHistory').textContent = 'Демонстрация интерфейса · история пользователя не загружается';
       const nodes = [
         {id:'primary',name:'Основная',protocol:'vless',network:'tcp',security:'reality',active:true},
         {id:'backup',name:'Резервная',protocol:'trojan',network:'tcp',security:'tls',active:false},
-        {id:'mobile',name:'Мобильная',protocol:'hysteria2',network:'udp',security:'tls',active:false},
+        {id:'mobile',name:'Мобильная',protocol:'Hysteria2',network:'hysteria',security:'tls',active:false},
       ].map(node => ({...node,endpoint:'████████:████',sni:'Скрыт',
         ping:{ok:true,latency_ms:69,http_code:204,checked_utc:'2026-11-12T10:12:00Z',log:'HTTP HEAD: 204\nConnection reused: yes'},
         health:{ok:true,latency_ms:622,latency_kind:'https_ttfb',total_ms:4300,http_code:200,checked_utc:'2026-11-12T10:13:00Z',log:'HTTPS: OK\nTLS: OK\nHTTP: 200'}}));
@@ -94,10 +104,10 @@ async function main() {
     ];
     if (process.env.KDN_SCREENSHOT_EXTRA === '1') captures.push(['autotune','autotune.png','#autotune > section:nth-of-type(3)']);
     for (const [tab, filename, endSelector] of captures) {
-      await page.evaluate(id => syncNavigation(id), tab);
+      await page.evaluate(id => {syncNavigation(id);window.scrollTo(0,0)}, tab);
       const box = await page.locator(endSelector).boundingBox();
       if (!box) throw new Error('Missing screenshot boundary: '+endSelector);
-      const height = Math.ceil(box.y+box.height+22);
+      const height = Math.ceil(box.y+box.height+12);
       await page.evaluate(async height => {
         document.querySelector('.sidebar').style.height = `${height}px`;
         window.scrollTo(0, 0);
@@ -107,6 +117,9 @@ async function main() {
       if (tab === 'vpn-nodes' && process.env.KDN_SCREENSHOT_EXTRA === '1') {
         await page.locator('.vpn-node-card').first().screenshot({path:path.join(output,'vpn-checks.png'),animations:'disabled'});
       }
+      if (tab === 'vpn-nodes') {
+        await page.locator('#vpnMonitorCard').screenshot({path:path.join(output,'vpn-monitor.png'),animations:'disabled'});
+      }
       if (tab === 'autotune') {
         await page.locator('#autotune > section:nth-of-type(3)').screenshot({path:path.join(output,'tuner-result.png'),animations:'disabled'});
         await page.locator('#tunerLogDetails').evaluate(el => { el.open = true; });
@@ -114,7 +127,7 @@ async function main() {
       }
     }
     if (errors.length) throw new Error(errors.join('\n'));
-    console.log(`Saved ${captures.length} offline screens (${theme}, ${width}px) to ${output}`);
+    console.log(`Saved offline UI screens including VPN/DNS monitor (${theme}, ${width}px) to ${output}`);
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error.message); process.exitCode=1; });

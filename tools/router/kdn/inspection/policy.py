@@ -1,6 +1,8 @@
 """Pure monitor policy. Observation never modifies approved IPs or active nodes."""
 import copy
 import ipaddress
+import hashlib
+import json
 import re
 import time
 
@@ -9,7 +11,7 @@ FAMILIES = ('ipv4', 'ipv6')
 
 
 def defaults():
-    return {'version': 1, 'enabled': False, 'interval_minutes': 5, 'families': list(FAMILIES), 'nodes': {}}
+    return {'version': 1, 'enabled': False, 'interval_minutes': 5, 'families': list(FAMILIES), 'nodes': {}, 'dns_fallback_enabled': False}
 
 
 def _families(value):
@@ -39,9 +41,11 @@ def _expected(value):
 
 
 def validate_monitor_config(value):
+    if isinstance(value,dict) and set(value)==set(defaults())-{'dns_fallback_enabled'}:
+        value={**value,'dns_fallback_enabled':False}
     if not isinstance(value, dict) or set(value) != set(defaults()) or value.get('version') != 1:
         raise ValueError('повреждён конфиг мониторинга')
-    if type(value['enabled']) is not bool or type(value['interval_minutes']) is not int or not 1 <= value['interval_minutes'] <= 1440:
+    if type(value['enabled']) is not bool or type(value['dns_fallback_enabled']) is not bool or type(value['interval_minutes']) is not int or not 1 <= value['interval_minutes'] <= 1440:
         raise ValueError('интервал 1..1440 минут, enabled — boolean')
     _families(value['families'])
     if not isinstance(value['nodes'], dict) or len(value['nodes']) > 16:
@@ -69,16 +73,18 @@ def prune_removed_nodes(config, registry_ids):
 
 def configure(config, identity, changes):
     result = validate_monitor_config(config)
-    if not isinstance(changes, dict) or set(changes) - {'enabled', 'interval_minutes', 'families', 'expected'}:
+    if not isinstance(changes, dict) or set(changes) - {'enabled', 'interval_minutes', 'families', 'expected', 'dns_fallback_enabled'}:
         raise ValueError('неизвестные настройки мониторинга')
-    for key in ('enabled', 'interval_minutes', 'families'):
+    for key in ('enabled', 'interval_minutes', 'families', 'dns_fallback_enabled'):
         if key in changes:
             result[key] = copy.deepcopy(changes[key])
     if 'expected' in changes:
         result['nodes'][identity['node_id']] = {'source_digest': identity['source_digest'],
                                               'expected': _expected(changes['expected'])}
     result = validate_monitor_config(result)
-    if result['enabled'] and any(not expected(result, identity).get(family) for family in result['families']):
+    enabling = (not config['enabled'] or result['families'] != config['families']
+                or (result['dns_fallback_enabled'] and not config.get('dns_fallback_enabled',False)))
+    if result['enabled'] and enabling and any(not expected(result, identity).get(family) for family in result['families']):
         raise ValueError('сначала явно одобрите IP активной ноды для всех выбранных family')
     return result
 
@@ -118,9 +124,27 @@ def verdict(config, identity, result):
     return 'healthy'
 
 
+def dns_outage(result, classification):
+    observed=result.get('observed')
+    return (result.get('kind')=='vpn' and result.get('status')=='completed'
+            and classification in ('partial','unreachable')
+            and result.get('connectivity')=='unconfirmed'
+            and isinstance(observed,dict) and 'ipv4' in observed
+            and not any(observed.values()))
+
+
 def record_observation(state, result, classification):
     state = copy.deepcopy(state)
     previous = state.get('result', {})
+    scope = hashlib.sha256(json.dumps([result.get('node_id'),result.get('source_digest'),result.get('runtime_identity'),result.get('families')],sort_keys=True).encode()).hexdigest()
+    observation = result.get('observation_id') or str(result.get('checked_at', ''))
+    # A failed canary alone or IPv6-only trouble does not prove the VPN is down.
+    failed = dns_outage(result,classification)
+    old_count = state.get('failure_streak',0) if state.get('failure_scope') == scope else 0
+    duplicate = state.get('failure_scope') == scope and state.get('failure_observation') == observation
+    count = old_count if failed and duplicate else min(1000,old_count+1) if failed else 0
+    incident = (state.get('failure_incident') if old_count else hashlib.sha256((scope+observation).encode()).hexdigest()[:32]) if count else ''
+    state.update(failure_streak=count,failure_scope=scope,failure_observation=observation,failure_incident=incident)
     signature = lambda r: (r.get('node_id'), r.get('source_digest'), r.get('observed'))
     history = state.get('history', [])[-100:]
     if classification != state.get('verdict') or signature(previous) != signature(result):

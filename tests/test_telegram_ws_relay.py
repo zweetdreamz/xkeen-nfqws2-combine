@@ -56,6 +56,42 @@ def mark_permitted() -> bool:
     return True
 
 
+class TLSContextTests(unittest.TestCase):
+    def test_compact_profile_preserves_certificate_verification(self):
+        context = RELAY.create_tls_context()
+        self.assertTrue(context.check_hostname)
+        self.assertEqual(context.verify_mode, RELAY.ssl.CERT_REQUIRED)
+
+    def test_requests_x25519(self):
+        context = mock.Mock()
+        with mock.patch.object(RELAY.ssl, "create_default_context", return_value=context):
+            self.assertIs(RELAY.create_tls_context(), context)
+        context.set_ecdh_curve.assert_called_once_with("X25519")
+
+    def test_unsupported_curve_keeps_default_context(self):
+        for error in (ValueError("unsupported"), RELAY.ssl.SSLError("unsupported"),
+                      NotImplementedError(), AttributeError()):
+            context = mock.Mock()
+            context.check_hostname = True
+            context.verify_mode = RELAY.ssl.CERT_REQUIRED
+            context.set_ecdh_curve.side_effect = error
+            with self.subTest(error=type(error).__name__), captured_log() as lines:
+                with mock.patch.object(RELAY.ssl, "create_default_context", return_value=context):
+                    self.assertIs(RELAY.create_tls_context(), context)
+                self.assertIn("X25519 unavailable", lines[0])
+            self.assertTrue(context.check_hostname)
+            self.assertEqual(context.verify_mode, RELAY.ssl.CERT_REQUIRED)
+
+    def test_domain_refresh_uses_same_tls_profile(self):
+        context = object()
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b"example.org\n"
+        with mock.patch.object(RELAY, "create_tls_context", return_value=context), \
+                mock.patch.object(RELAY.urllib.request, "urlopen", return_value=response) as request:
+            self.assertEqual(RELAY.fetch_cf_domains(), ["example.org"])
+        self.assertIs(request.call_args.kwargs["context"], context)
+
+
 class MarkRecordingSocket(socket.socket):
     """Records every socket the relay makes and the SO_MARK set on it.
 

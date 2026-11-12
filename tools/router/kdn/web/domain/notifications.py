@@ -23,6 +23,8 @@ TEXT = {
     'vpn-ip-changed': ('VPN: изменился выходной IP', 'Адрес не совпадает с одобренным. Новый IP не принят, нода не переключалась.', 5),
     'inspection-unavailable': ('Контроль VPN недоступен', 'Три проверки подряд не выполнены. Проверьте диагностический доступ и состояние панели.', 4),
     'vpn-recovered': ('VPN снова работает', 'Одобренный IP и HTTPS через выбранную ноду подтверждены.', 3),
+    'dns-fallback': ('DNS переключён на DoH', 'После трёх подтверждённых отказов VPN DNS Home переведён с VLESS на DoH. Автоматического возврата на VLESS нет.', 4),
+    'dns-fallback-failed': ('Не удалось переключить DNS', 'Автоматический переход на DoH не завершён. Проверьте состояние DNS в панели; VPN-нода не переключалась.', 5),
 }
 _NOTIFICATION_LOCK = threading.RLock()
 
@@ -115,8 +117,12 @@ def derive(state, auto, monitor, now):
     """Observe committed summaries only; no raw error/config/IP enters a message."""
     auto_key = [auto.get('last_slot'), auto.get('finished_utc'), auto.get('status')]
     monitor_key = monitor.get('last_attempt', 0)
+    result=monitor.get('result',{})
+    if not isinstance(result,dict):
+        raise ValueError('invalid monitor observation')
+    monitor_scope=hashlib.sha256(json.dumps([result.get('node_id'),result.get('source_digest'),result.get('runtime_identity')],sort_keys=True).encode()).hexdigest()
     if not state.get('seeded'):
-        state.update(seeded=True, auto_key=auto_key, monitor_key=monitor_key)
+        state.update(seeded=True, auto_key=auto_key, monitor_key=monitor_key, monitor_scope=monitor_scope)
         _event(state, 'initial', 'test', now)
         return
     if auto_key != state.get('auto_key') and auto.get('status') in ('completed', 'error', 'recovered', 'recovery-failed', 'cancelled'):
@@ -135,6 +141,8 @@ def derive(state, auto, monitor, now):
             _event(state, prefix+'notfound', 'night-not-found', now)
     if monitor_key and monitor_key != state.get('monitor_key'):
         state['monitor_key'] = monitor_key
+        if state.get('monitor_scope') != monitor_scope:
+            state.update(monitor_scope=monitor_scope,alert='',fail_kind='',failures=0)
         verdict = monitor.get('verdict')
         old = state.get('alert')
         if verdict == 'healthy':
@@ -152,6 +160,11 @@ def derive(state, auto, monitor, now):
             if state['failures'] >= 3 and old != kind:
                 _event(state, str(monitor_key)+kind, kind, now)
                 state['alert'] = kind
+    fallback=monitor.get('dns_fallback',{})
+    dns_key=[fallback.get('incident'),fallback.get('status'),fallback.get('at')]
+    if fallback.get('status') in ('completed','error') and dns_key != state.get('dns_key'):
+        state['dns_key']=dns_key
+        _event(state,json.dumps(dns_key),'dns-fallback' if fallback['status']=='completed' else 'dns-fallback-failed',now)
 
 
 def _publish(topic, row, token=''):

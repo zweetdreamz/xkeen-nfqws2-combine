@@ -36,6 +36,12 @@ def start_dns_switch(mode):
         return _launch('dns-mode', mode, 'dns', mode)
 
 
+def start_dns_fallback_job():
+    with jobfiles.COORDINATOR.exclusive(refusals.ROUTE_CHANGE, family='route'):
+        engine.require_supported_target()
+        return _launch('dns-fallback','doh','dns','doh')
+
+
 def start_inspection_setup():
     with jobfiles.COORDINATOR.exclusive(refusals.ROUTE_CHANGE, family='route'):
         engine.require_supported_target()

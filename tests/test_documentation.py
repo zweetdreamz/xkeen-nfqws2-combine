@@ -14,7 +14,7 @@ DOC_TREE = (
 )
 DOC_ASSETS = (
     'images/control.png', 'images/notifications.png',
-    'images/schedule.png', 'images/vpn-nodes.png',
+    'images/schedule.png', 'images/vpn-nodes.png', 'images/vpn-monitor.png',
 )
 CURRENT_DOCS = ('README.md', 'tools/router/README.md', 'tools/windows/README.md',
                 'tools/dat-reader/README.md') + tuple('docs/' + name for name in DOC_TREE)

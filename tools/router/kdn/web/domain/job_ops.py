@@ -14,7 +14,7 @@ from kdn.web.domain import tuner_jobs
 from kdn.web.domain import vpn
 
 
-OPERATIONS = ("xkeen", "apply-profile", "import-clear", "import-rollback", "vpn-add", "vpn-check", "inspection-setup", "dns-mode")
+OPERATIONS = ("xkeen", "apply-profile", "import-clear", "import-rollback", "vpn-add", "vpn-check", "inspection-setup", "dns-mode", "dns-fallback")
 RECONCILE_INTERVAL = 30
 
 
@@ -35,6 +35,8 @@ def _validate(operation, subject, target):
         engine.xkeen_command(subject)
     elif operation == 'dns-mode' and subject not in ('vless', 'doh'):
         raise ValueError('DNS mode: vless or doh')
+    elif operation == 'dns-fallback' and subject != 'doh':
+        raise ValueError('automatic DNS fallback only supports DoH')
     elif operation == "apply-profile" and subject not in {"import", "tuner", "version"}:
         raise ValueError("неподдерживаемый режим применения")
     elif operation == "import-clear" and subject not in cfg.SERVICES:
@@ -52,6 +54,9 @@ def _checked(job_id, payload):
 
 
 def _execute(job_id, operation, subject):
+    if operation == 'dns-fallback':
+        from kdn.web.domain import vpn_monitor
+        return vpn_monitor.run_dns_fallback_job()
     if operation == 'dns-mode':
         return engine.set_dns_mode(subject)
     if operation == 'inspection-setup':
