@@ -20,7 +20,7 @@ from kdn.web.api import security
 from kdn.web.infra import config as cfg
 
 
-QUIET_POLLS = frozenset({"/api/route/status", "/api/tuner/status", "/api/diagnostics/status", "/api/automation"})
+QUIET_POLLS = frozenset({"/api/metrics", "/api/status/fast", "/api/route/status", "/api/tuner/status", "/api/diagnostics/status", "/api/automation"})
 HEAVY_SLOTS = threading.BoundedSemaphore(cfg.HEAVY_GET_SLOTS)
 
 

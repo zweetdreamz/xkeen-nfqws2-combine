@@ -395,14 +395,14 @@ pre{background:var(--log-bg);color:var(--log-text);padding:16px 18px;line-height
 </div>
 
 <div id="vpn-nodes" class="tab-page" role="tabpanel" aria-labelledby="tab-vpn-nodes">
-  <section class="card"><div class="profile-head"><div><h2>VPN-ноды Xray</h2><p class="hint">Все VPN-правила Xray используют одну общую активную ноду.</p></div><div class="tuner-actions"><button id="recoverVpnNode" class="rollback vpn-recover" hidden>Восстановить прошлую ноду</button><button id="checkAllVpnNodes">Пинг всех нод</button><button id="refreshVpnNodes" class="clear">Обновить</button></div></div>
+  <section class="card"><div class="profile-head"><div><h2>VPN-ноды Xray</h2><p class="hint">Все VPN-правила Xray используют одну общую активную ноду.</p></div><div class="tuner-actions"><button id="recoverVpnNode" class="rollback vpn-recover" hidden>Восстановить прошлую ноду</button><button id="checkAllVpnNodes" class="primary" aria-label="Проверить все ноды" title="Проверить все ноды"><svg class="i" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span hidden>Проверить все ноды</span></button><button id="refreshVpnNodes" class="clear" aria-label="Обновить список нод" title="Обновить список нод"><svg class="i" aria-hidden="true" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div>
     <div id="vpnSummary" class="hint">Загрузка нод…</div><div id="vpnNodesList" class="vpn-node-list"></div>
     <div id="vpnActionStatus" class="automation-save-status" role="status" aria-live="polite"></div>
     <div id="vpnProgress" class="route-progress" role="status" aria-live="polite"><div class="route-progress-head"><b id="vpnStage">Подготовка</b><span id="vpnPercent">0%</span></div><div class="bar"><span id="vpnBar"></span></div></div>
     <p class="route-notice"><svg class="i" aria-hidden="true"><use href="#i-restart"/></svg><span>Пинг и диагностика не меняют активную ноду. Пинг не проверяет работу приложений. При переключении ноды XKeen/Xray перезапускается.</span></p>
   </section>
-  <section class="card"><h2>Добавить VPN-ноду</h2><p class="hint">VLESS, Trojan и Hysteria2: ссылка или один JSON outbound Xray. Hysteria2 с Salamander поддерживается в ссылках; port-hopping задаётся через JSON. Добавление не запускает проверку соединения. Секреты сохраняются на роутере с правами 0600 и не возвращаются в список.</p>
-    <div class="field"><label for="vpnNodeSource">VLESS / Trojan / Hysteria2 ссылка или JSON outbound</label><textarea id="vpnNodeSource" rows="6" placeholder="vless://… / trojan://… / hy2://… или { &quot;protocol&quot;: &quot;hysteria&quot;, … }" spellcheck="false" autocomplete="off"></textarea></div>
+  <section class="card"><h2>Добавить VPN-ноду</h2><p class="hint">VLESS, Trojan, Hysteria2 и WireGuard: ссылка или один JSON outbound Xray. Добавление не запускает проверку соединения. Секреты сохраняются на роутере с правами 0600 и не возвращаются в список.</p>
+    <div class="field"><label for="vpnNodeSource">Ссылка подключения или JSON outbound</label><textarea id="vpnNodeSource" rows="6" placeholder="vless://… / trojan://… / hy2://… / wireguard://… или JSON outbound" spellcheck="false" autocomplete="off"></textarea></div>
     <div class="tuner-actions"><button id="addVpnNode" class="apply">Добавить</button></div>
   </section>
   <section class="card" id="vpnMonitorCard"><h2>Контроль активной VPN-ноды и IP</h2>
@@ -661,7 +661,7 @@ function scheduleAutomationPoll(active){
   if(!active||!tabVisible("automation")){if(automationPoll){clearTimeout(automationPoll);automationPoll=null}return}
   if(!automationPoll)automationPoll=setTimeout(()=>{automationPoll=null;if(tabVisible("automation"))refreshAutomation()},3000);
 }
-async function refresh(){const latest=latestView("status");try{const d=await api("/api/status");if(!latest())return;updateService("discord-tcp",d.discord_tcp_route||"unknown");updateService("discord-voice",d.discord_voice_route||"unknown");updateService("youtube",d.youtube_route||"unknown");updateService("telegram",d.telegram_route||"unknown");const running=d.xkeen_runtime==="running";dot.className="dot "+(running?"ok":"bad");statusText.textContent=running?"XKeen работает":"XKeen остановлен"}catch(e){if(!latest())return;dot.className="dot bad";statusText.textContent="ошибка статуса";log("status: "+e)}}
+async function refresh(){const latest=latestView("status");try{const d=await api("/api/status/fast");if(!latest())return;updateService("discord-tcp",d.discord_tcp_route||"unknown");updateService("discord-voice",d.discord_voice_route||"unknown");updateService("youtube",d.youtube_route||"unknown");updateService("telegram",d.telegram_route||"unknown");const running=d.xkeen_runtime==="running";dot.className="dot "+(running?"ok":"bad");statusText.textContent=running?"Xray запущен":d.xkeen_runtime==="unknown"?"статус неизвестен":"Xray остановлен";statusText.title="Быстрый статус процесса, не проверка VPN или согласованности конфигов"}catch(e){if(!latest())return;dot.className="dot bad";statusText.textContent="ошибка статуса";log("status: "+e)}}
 function vpnMessage(message,tone=""){const box=document.getElementById("vpnActionStatus");box.className="automation-save-status"+(tone?" "+tone:"");box.textContent=message}
 function vpnIconButton(label,icon,action){const button=document.createElement('button');button.type='button';button.title=label;button.setAttribute('aria-label',label);button.innerHTML='<svg class="i" aria-hidden="true"><use href="#'+icon+'"/></svg>';button.addEventListener('click',action);return button}
 function vpnImportSource(source){
@@ -721,7 +721,7 @@ async function refreshVpnNodes(){
 }
 async function diagnoseVpnNode(id){busy(true);vpnMessage('Расширенная диагностика '+id+'…');try{const d=await operation('/api/vpn-nodes/check/'+encodeURIComponent(id),'Диагностика VPN-ноды '+id);vpnMessage(d.health.ok?'Диагностика пройдена.':'Диагностика: '+d.health.detail,d.health.ok?'good':'bad');if(d.health.log)log('Диагностика VPN-ноды '+id+'\n'+d.health.log);await refreshVpnNodes()}catch(e){vpnMessage('Ошибка диагностики: '+e,'bad')}finally{busy(false)}}
 async function checkVpnNode(id){busy(true);vpnMessage('HTTP-пинг '+id+'…');try{const d=await api('/api/vpn-nodes/ping/'+encodeURIComponent(id),{method:'POST',headers:controlHeaders,body:'{}'});vpnMessage(vpnPingText(d.ping),d.ping.ok?'good':'bad');await refreshVpnNodes()}catch(e){vpnMessage('Ошибка пинга: '+e,'bad')}finally{busy(false)}}
-async function checkAllVpnNodes(){busy(true);vpnMessage('HTTP-пинг всех нод одним тестовым Xray…');try{const d=await api('/api/vpn-nodes/ping',{method:'POST',headers:controlHeaders,body:'{}'});const ok=d.results.filter(row=>row.ping.ok).length;vpnMessage('HTTP-пинг: ответили '+ok+' из '+d.results.length,ok===d.results.length?'good':'bad');await refreshVpnNodes()}catch(e){vpnMessage('Ошибка пинга нод: '+e,'bad')}finally{busy(false)}}
+async function checkAllVpnNodes(){const button=document.getElementById('checkAllVpnNodes');if(button.disabled)return;const label=button.querySelector('span');busy(true);button.setAttribute('aria-busy','true');label.textContent='Проверка…';vpnMessage('HTTP-пинг всех нод одним тестовым Xray…');try{const d=await api('/api/vpn-nodes/ping',{method:'POST',headers:controlHeaders,body:'{}'});const ok=d.results.filter(row=>row.ping.ok).length;vpnMessage(d.results.length?'HTTP-пинг: ответили '+ok+' из '+d.results.length:'Нет нод для проверки.',ok===d.results.length?'good':'bad');await refreshVpnNodes()}catch(e){vpnMessage('Ошибка пинга нод: '+e,'bad')}finally{button.removeAttribute('aria-busy');label.textContent='Проверить все ноды';busy(false)}}
 async function addVpnNode(){const raw=document.getElementById('vpnNodeSource').value.trim();if(!raw){vpnMessage('Вставьте ссылку или JSON outbound.','bad');return}busy(true);vpnMessage('Добавляю ноду…');try{const source=vpnImportSource(raw),body={source};if(/^(vless|trojan|hy2|hysteria2):\/\//i.test(raw)){const url=new URL(raw);body.name_hint=url.hash?decodeURIComponent(url.hash.slice(1)):url.hostname}await api('/api/vpn-nodes/add',{method:'POST',headers:controlHeaders,body:JSON.stringify(body)});document.getElementById('vpnNodeSource').value='';vpnMessage('Нода добавлена. Пинг и диагностика запускаются отдельно.','good');await refreshVpnNodes()}catch(e){vpnMessage('Не удалось добавить ноду: '+e,'bad')}finally{busy(false)}}
 let vpnEditValues={};
 function editVpnNode(node){
@@ -891,7 +891,13 @@ function renderDnsMode(d){
 }
 async function refreshDnsMode(){
  if(!tabVisible("control"))return;const latest=latestView("dns-mode");
- try{const d=await api("/api/dns");if(latest())renderDnsMode(d)}
+ // A saved display is not an authority for writes: keep controls disabled
+ // until the live router response has been received.
+ if(!dnsModeState){
+  document.querySelectorAll("[data-dns-mode]").forEach(b=>b.disabled=true);
+  try{const cached=JSON.parse(sessionStorage.getItem("kdn-dns-display")||"null");if(cached&&["vless","doh"].includes(cached.mode))document.getElementById("dnsModeStatus").textContent=(cached.mode==="vless"?"DNS over VLESS":"DoH на роутере")+" · прошлый результат от "+new Date(cached.at).toLocaleTimeString()+", проверяется…"}catch{}
+ }
+ try{const d=await api("/api/dns");if(latest()){renderDnsMode(d);try{if(d.supported)sessionStorage.setItem("kdn-dns-display",JSON.stringify({mode:d.mode,at:Date.now()}));else sessionStorage.removeItem("kdn-dns-display")}catch{}}}
  catch(e){if(latest()){dnsModeState=null;document.querySelectorAll("[data-dns-mode]").forEach(b=>b.disabled=true);document.getElementById("dnsModeStatus").textContent="DNS: "+e;document.getElementById("dnsModeStatus").className="bad"}}
 }
 async function switchDnsMode(mode){
@@ -1116,5 +1122,22 @@ document.querySelectorAll("#automation input,#automation select").forEach(contro
 document.querySelectorAll(".diag-start").forEach(b=>b.addEventListener("click",()=>startDiagnostic(b.dataset.diagKind)));document.getElementById("cancelDiagnostic").addEventListener("click",cancelDiagnostic);
 // Job discovery remains global: route locks and running jobs must not depend on
 // which tab was opened. Heavy lists are loaded only for the visible section.
+// Lightweight counters are independent of expensive service/config status reads.
+const serviceBadge=document.getElementById("statusText").parentElement;
+const healthSummary=document.createElement("div");healthSummary.className="health-summary";
+serviceBadge.before(healthSummary);healthSummary.append(serviceBadge);
+const resourceMetrics=document.createElement("div");resourceMetrics.className="resource-metrics";
+resourceMetrics.textContent="ОЗУ — · CPU —";healthSummary.append(resourceMetrics);
+const metricsStyle=document.createElement("style");metricsStyle.textContent=".health-summary{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.resource-metrics{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}";document.head.append(metricsStyle);
+let metricsTimer=null,metricsBusy=false;
+async function refreshMetrics(){
+  if(document.hidden||metricsBusy)return;
+  metricsBusy=true;const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),4000);
+  try{const response=await fetch("/api/metrics",{cache:"no-store",signal:controller.signal});if(!response.ok)throw Error("metrics");const d=await response.json(),m=d.memory,c=d.cpu_percent;resourceMetrics.textContent="ОЗУ "+(m?m.used_mib+"/"+m.total_mib+" МБ":"—")+" · CPU "+(Number.isFinite(c)?Math.round(c)+"%":"—");resourceMetrics.title="Общая загрузка всех ядер; ОЗУ без доступного файлового кэша. Обновление каждые 2 с."}
+  catch(e){resourceMetrics.textContent="ОЗУ — · CPU —";resourceMetrics.title="Метрики недоступны"}
+  finally{clearTimeout(timeout);metricsBusy=false;if(!document.hidden)metricsTimer=setTimeout(refreshMetrics,2000)}
+}
+document.addEventListener("visibilitychange",()=>{clearTimeout(metricsTimer);if(!document.hidden)refreshMetrics()});
+refreshMetrics();
 log("панель готова",true);tunerServiceChanged();refreshActiveTab();refreshTuner();refreshDiagnostic();resumeRouteJob();
 </script><script src="/assets/inspection.js"></script></body></html>

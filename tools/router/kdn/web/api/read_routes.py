@@ -12,6 +12,7 @@ from kdn.web.infra import readcache
 from kdn.web.infra import toolmods
 from kdn.web.domain import flowseal
 from kdn.web.domain import health
+from kdn.web.domain import metrics
 from kdn.web.domain import history
 from kdn.web.domain import profiles
 from kdn.web.domain import tuner_jobs
@@ -122,6 +123,31 @@ def get_service_configs(request):
     return router.json_response(200, profiles.current_service_configs())
 
 
+def get_fast_status(request):
+    """Advisory display only: no engine/version commands or apply validation."""
+    running = False
+    known = True
+    try:
+        processes = list(Path('/proc').glob('[0-9]*'))
+        if not processes:
+            known = False
+        for process in processes:
+            try:
+                if (process / 'comm').read_text().strip() == 'xray':
+                    running = True
+                    break
+            except (OSError, UnicodeError):
+                continue
+    except OSError:
+        known = False
+    routes = engine.current_routes_fast()
+    payload = {'ok': True, 'advisory': True,
+               'xkeen_runtime': ('running' if running else 'stopped') if known else 'unknown'}
+    payload.update({key: routes.get(service, 'unknown')
+                    for service, key in engine.STATUS_ROUTE_KEYS.items()})
+    return router.json_response(200, payload)
+
+
 def get_vpn_nodes(request):
     return router.json_response(200, vpn.nodes_status())
 
@@ -163,7 +189,12 @@ def get_vpn_ping_activity(request):
     return router.json_response(200, {'ok':True,'active':vpn.VPN_PING_BUSY.is_set()})
 
 
+def get_metrics(request):
+    return router.json_response(200, metrics.snapshot())
+
+
 READ_ROUTES = tuple(router.Route("GET", path, handler, errors=exceptions, heavy=heavy) for path, handler, exceptions, heavy in (
+    ("/api/metrics", get_metrics, (), False),
     ("/", get_page, (), False),
     ("/tools/reset-discord-cache.ps1", get_cache_helper, (), False),
     ("/assets/browser-diagnostics.js", get_browser_script, (), False),
@@ -171,6 +202,7 @@ READ_ROUTES = tuple(router.Route("GET", path, handler, errors=exceptions, heavy=
     ("/assets/xkeen-ui-generator.js", get_vpn_generator_script, (), False),
     ("/api/diagnostics/targets", get_diagnostic_targets, (), False),
     ("/api/status", get_status, (), True),
+    ("/api/status/fast", get_fast_status, (), False),
     ("/api/service-configs", get_service_configs, ((OSError, 500), (ValueError, 500), (RuntimeError, 500)), False),
     ("/api/vpn-nodes", get_vpn_nodes,
      ((OSError, 500), (RuntimeError, 500), (ValueError, 500), (TypeError, 500), (json.JSONDecodeError, 500)), False),

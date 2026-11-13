@@ -3,6 +3,7 @@ import copy
 import ipaddress
 import re
 import uuid
+from kdn import vpn_wireguard
 
 
 FIELDS = frozenset({'address', 'port', 'sni', 'fingerprint', 'alpn', 'flow',
@@ -53,6 +54,19 @@ def patch_outbound(outbound, changes):
     result = copy.deepcopy(outbound)
     settings, stream = result['settings'], result['streamSettings']
     protocol, security, network = result['protocol'], stream.get('security'), stream.get('network', 'tcp')
+    if protocol == 'wireguard':
+        if set(changes) - {'address', 'port'}:
+            raise ValueError('WireGuard: ключи и прочие параметры меняются ссылкой или JSON')
+        peers = settings.get('peers', [])
+        if len(peers) != 1:
+            raise ValueError('WireGuard: для редактирования нужен один peer')
+        host, port = vpn_wireguard.endpoint(peers[0]['endpoint'])
+        host = _host(changes['address']) if 'address' in changes else host
+        port = changes.get('port', port)
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise ValueError('WireGuard: некорректный порт')
+        peers[0]['endpoint'] = f'[{host}]:{port}' if ':' in host else f'{host}:{port}'
+        return result
     server, auth = settings, settings
     # Keep legacy single-server Xray JSON intact instead of writing ineffective
     # flat fields alongside vnext/servers. Multi-server edits are ambiguous.

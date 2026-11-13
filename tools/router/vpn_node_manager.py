@@ -30,12 +30,12 @@ from urllib.parse import urlsplit, unquote
 import unicodedata
 
 from kdn.common import lock as project_lock, xkeen, xray_process
-from kdn import vpn_links, vpn_fields, vpn_diagnostics
+from kdn import vpn_links, vpn_fields, vpn_diagnostics, vpn_wireguard
 from kdn.engine import nfqws_process
 
 
 ACTIVE_TAG = "vless-reality"
-SUPPORTED_PROTOCOLS = frozenset({"vless", "trojan", "hysteria"})
+SUPPORTED_PROTOCOLS = frozenset({"vless", "trojan", "hysteria", "wireguard"})
 NODE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,31}\Z")
 MAX_NODES = 16
 MAX_NODE_BYTES = 32 * 1024
@@ -193,7 +193,9 @@ def atomic_restore(source: Path, target: Path, mode=None) -> None:
 def normalize_outbound(source: str | dict) -> dict:
     if isinstance(source, str):
         source = source.strip()
-        if source.lower().startswith(("vless://", "trojan://", "hysteria2://", "hy2://")):
+        if source.lower().startswith(('wireguard://', 'wg://')):
+            outbound = vpn_wireguard.parse(source, ACTIVE_TAG)
+        elif source.lower().startswith(("vless://", "trojan://", "hysteria2://", "hy2://")):
             outbound = vpn_links.parse_link(source, ACTIVE_TAG)
         else:
             try:
@@ -203,7 +205,10 @@ def normalize_outbound(source: str | dict) -> dict:
     else:
         outbound = copy.deepcopy(source)
     if not isinstance(outbound, dict) or outbound.get("protocol") not in SUPPORTED_PROTOCOLS:
-        raise ValueError("поддерживается один outbound VLESS, Trojan или Hysteria2 (protocol=hysteria)")
+        raise ValueError("поддерживается один outbound VLESS, Trojan, Hysteria2 или WireGuard")
+    if outbound['protocol'] == 'wireguard':
+        vpn_wireguard.validate(outbound.get('settings', {}))
+        outbound.setdefault('streamSettings', {})
     if not isinstance(outbound.get("settings"), dict) or not isinstance(outbound.get("streamSettings"), dict):
         raise ValueError("в outbound обязательны settings и streamSettings")
     hysteria_options = outbound["streamSettings"].get("hysteriaSettings")
@@ -381,13 +386,17 @@ class VpnNodeManager:
         settings = outbound.get("settings", {})
         endpoint = settings.get("address", "")
         port = settings.get("port", "")
+        if outbound.get('protocol') == 'wireguard':
+            endpoint, port = vpn_wireguard.endpoint(settings['peers'][0]['endpoint'])
         valid_endpoint = (isinstance(endpoint, str) and len(endpoint) <= 253
                           and re.fullmatch(r'[A-Za-z0-9_.:-]+', endpoint)
                           and type(port) is int and 1 <= port <= 65535)
         stream = outbound.get('streamSettings', {})
         network = stream.get('network', 'tcp')
+        if outbound.get('protocol') == 'wireguard':
+            network = 'udp'
         security = stream.get('security', 'none')
-        network = network if isinstance(network, str) and network in {'tcp', 'raw', 'ws', 'grpc', 'xhttp', 'splithttp', 'httpupgrade', 'hysteria', 'kcp', 'quic'} else 'unknown'
+        network = network if isinstance(network, str) and network in {'udp', 'tcp', 'raw', 'ws', 'grpc', 'xhttp', 'splithttp', 'httpupgrade', 'hysteria', 'kcp', 'quic'} else 'unknown'
         security = security if isinstance(security, str) and security in {'none', 'tls', 'reality'} else 'unknown'
         tls = stream.get('realitySettings' if security == 'reality' else 'tlsSettings', {}) if security in {'tls', 'reality'} else {}
         tls = tls if isinstance(tls, dict) else {}
@@ -506,7 +515,7 @@ class VpnNodeManager:
             hint = name if isinstance(name, str) else ''
             if not hint:
                 try:
-                    if source.lower().startswith(('vless://','trojan://','hy2://','hysteria2://')):
+                    if source.lower().startswith(('vless://','trojan://','hy2://','hysteria2://','wireguard://','wg://')):
                         hint = unquote(urlsplit(source).fragment)
                     else:
                         original = vpn_links._object(strip_json_comments(source))
@@ -708,7 +717,7 @@ class VpnNodeManager:
             return result
 
         metadata = self._public_node('probe', {'outbound': outbound}, '')
-        protocol = metadata['protocol'] if isinstance(metadata['protocol'], str) and metadata['protocol'] in {'vless', 'trojan', 'Hysteria2'} else 'unknown'
+        protocol = metadata['protocol'] if isinstance(metadata['protocol'], str) and metadata['protocol'] in {'vless', 'trojan', 'Hysteria2', 'wireguard'} else 'unknown'
         note('path', f"{protocol} / {metadata['network']} / {metadata['security']} → тестовые HTTPS-сайты")
         note('preflight', 'Проверка совместимости XKeen/Xray')
         try:

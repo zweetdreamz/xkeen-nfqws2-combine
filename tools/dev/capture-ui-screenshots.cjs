@@ -38,7 +38,9 @@ async function main() {
       syncThemeButton();
       window.fetch = async () => { throw new Error('Network disabled in screenshot renderer'); };
       document.getElementById('dot').className = 'dot ok';
-      document.getElementById('statusText').textContent = 'XKeen работает';
+      document.getElementById('statusText').textContent = 'Xray запущен';
+      clearTimeout(metricsTimer);
+      document.querySelector('.resource-metrics').textContent = 'ОЗУ 156/512 МБ · CPU 9%';
       const note = document.createElement('div');
       note.textContent = 'Демонстрация интерфейса · приватные данные скрыты';
       note.style = 'color:var(--faint);font-size:11px;margin:-8px 0 18px';
